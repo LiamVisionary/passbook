@@ -1,0 +1,4 @@
+# Rust build output and generated Tauri scaffolding: reproducible from source,
+# and target/ is hundreds of megabytes.
+src-tauri/target/
+src-tauri/gen/

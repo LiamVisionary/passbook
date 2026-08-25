@@ -1,0 +1,13 @@
+{
+  "name": "passbook-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "PassBook — the credentials this machine shares",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

@@ -1,0 +1,20 @@
+[package]
+name = "passbook-app"
+version = "1.0.0"
+description = "PassBook — the credentials this machine shares, and who may use them"
+authors = ["Rizzma Inc."]
+edition = "2021"
+rust-version = "1.77"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["macos-private-api"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+codegen-units = 1
+lto = true
+strip = true

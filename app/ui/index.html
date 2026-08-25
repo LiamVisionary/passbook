@@ -1,0 +1,779 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>PassBook</title>
+<style>
+  /* macOS Settings is the reference, not a web dashboard: a source list on the
+     left, grouped inset rows on the right, one accent colour, and no border
+     that the platform would not draw itself. */
+  :root {
+    color-scheme: light dark;
+    --bg: #ececee;
+    --sidebar: rgba(246,246,248,0.7);
+    --card: #ffffff;
+    --line: rgba(0,0,0,0.08);
+    --ink1: #1d1d1f;
+    --ink2: #55555a;
+    --ink3: #8e8e93;
+    --accent: #c8860d;
+    --accent-ink: #ffffff;
+    --sel: rgba(0,0,0,0.075);
+    --good: #1a7f37;
+    --warn: #b3261e;
+    --radius: 10px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1e1e20;
+      --sidebar: rgba(38,38,42,0.6);
+      --card: #2a2a2e;
+      --line: rgba(255,255,255,0.09);
+      --ink1: #f5f5f7;
+      --ink2: #b0b0b8;
+      --ink3: #7e7e86;
+      --accent: #e2a83c;
+      --accent-ink: #1d1d1f;
+      --sel: rgba(255,255,255,0.09);
+      --good: #5fd07d;
+      --warn: #ff7b70;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    display: flex; background: var(--bg); color: var(--ink1);
+    font: 13px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ── source list ─────────────────────────────────────────────────────── */
+  nav {
+    width: 208px; flex: 0 0 208px; background: var(--sidebar);
+    backdrop-filter: saturate(180%) blur(20px);
+    border-right: 1px solid var(--line);
+    padding: 38px 10px 12px; -webkit-app-region: drag;
+    display: flex; flex-direction: column; gap: 1px;
+  }
+  nav h1 {
+    font-size: 12px; font-weight: 600; letter-spacing: -0.01em;
+    color: var(--ink3); padding: 6px 10px 10px; text-transform: uppercase;
+  }
+  nav button {
+    -webkit-app-region: no-drag; display: flex; align-items: center; gap: 8px;
+    width: 100%; text-align: left; padding: 6px 10px; border: 0; border-radius: 7px;
+    background: transparent; color: var(--ink1); font: inherit; cursor: default;
+  }
+  nav button:hover { background: var(--sel); }
+  nav button[aria-current="true"] { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  nav .dot {
+    margin-left: auto; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--accent); flex: 0 0 7px;
+  }
+  nav button[aria-current="true"] .dot { background: var(--accent-ink); }
+
+  /* ── content ─────────────────────────────────────────────────────────── */
+  main { flex: 1; overflow-y: auto; padding: 38px 28px 32px; -webkit-app-region: drag; }
+  main > * { -webkit-app-region: no-drag; }
+  h2 { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; }
+  .lede { color: var(--ink2); margin: 3px 0 20px; max-width: 62ch; }
+
+  .group { background: var(--card); border-radius: var(--radius); overflow: hidden; margin-bottom: 18px; }
+  .group h3 {
+    font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--ink3); padding: 12px 14px 6px; background: transparent;
+  }
+  .row { display: flex; align-items: center; gap: 12px; padding: 10px 14px; }
+  .row + .row { border-top: 1px solid var(--line); }
+  .row .grow { flex: 1; min-width: 0; }
+  .mono { font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .sub { color: var(--ink3); font-size: 11.5px; margin-top: 1px; }
+  .note { color: var(--ink3); font-size: 11.5px; line-height: 1.5; padding: 10px 14px 13px; }
+
+  .seg { display: inline-flex; background: var(--sel); border-radius: 7px; padding: 2px; gap: 2px; }
+  .seg button {
+    border: 0; background: transparent; color: var(--ink2); font: inherit; font-size: 12px;
+    padding: 3px 10px; border-radius: 5px; cursor: default; white-space: nowrap;
+  }
+  .seg button[aria-pressed="true"] { background: var(--card); color: var(--ink1); font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,0.12); }
+
+  button.act {
+    border: 1px solid var(--line); background: var(--card); color: var(--ink1);
+    font: inherit; font-size: 12px; padding: 4px 12px; border-radius: 6px; cursor: default;
+  }
+  button.act:hover { background: var(--sel); }
+  button.act.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  button.act:disabled { opacity: .45; }
+
+  .tag { font-size: 11px; color: var(--ink3); white-space: nowrap; }
+  .tag.on { color: var(--good); font-weight: 600; }
+  .tag.off { color: var(--warn); font-weight: 600; }
+
+  input { font: inherit; padding: 5px 9px; border-radius: 6px; border: 1px solid var(--line);
+          background: var(--bg); color: var(--ink1); min-width: 0; }
+  .add { display: flex; gap: 6px; padding: 10px 14px; border-top: 1px solid var(--line); }
+  .add input:first-of-type { width: 190px; }
+  .add input:last-of-type { flex: 1; }
+
+  .banner { background: var(--accent); color: var(--accent-ink); border-radius: var(--radius);
+            padding: 12px 14px; margin-bottom: 18px; }
+  .banner b { font-weight: 700; }
+  .banner .acts { display: flex; gap: 6px; margin-top: 9px; }
+  .banner button {
+    border: 1px solid rgba(0,0,0,.25); background: rgba(255,255,255,.9); color: #1d1d1f;
+    font: inherit; font-size: 12px; font-weight: 600; padding: 4px 12px; border-radius: 6px; cursor: default;
+  }
+  .empty { color: var(--ink3); padding: 14px; font-size: 12.5px; }
+
+  /* Add sits at the TOP of the list: on a store with hundreds of keys, an add
+     row at the bottom is a scroll away and may as well not exist. */
+  .addrow { display: grid; grid-template-columns: minmax(0,0.8fr) minmax(0,1fr) auto;
+            gap: 6px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  .keyrow { padding: 9px 14px; }
+  .keyrow + .keyrow { border-top: 1px solid var(--line); }
+  .keyrow .head { display: flex; align-items: center; gap: 8px; }
+  .keyrow .head .mono { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .keyrow .val {
+    width: 100%; margin-top: 6px; font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+    padding: 4px 8px; border-radius: 5px; border: 1px solid var(--line);
+    background: var(--bg); color: var(--ink2);
+  }
+  .keyrow .val:focus { color: var(--ink1); outline: none; border-color: var(--accent); }
+  .keyrow .val.masked { -webkit-text-security: disc; }
+  .icon {
+    border: 1px solid transparent; background: transparent; color: var(--ink3);
+    font: inherit; font-size: 12px; padding: 3px 7px; border-radius: 5px; cursor: default;
+  }
+  .icon:hover { background: var(--sel); color: var(--ink1); }
+  .icon.on { color: var(--accent); font-weight: 600; }
+  .hist { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 8px; }
+  .hist .ev { display: flex; gap: 10px; align-items: baseline; padding: 3px 0; }
+  .hist .ev .when { color: var(--ink3); font-size: 11px; white-space: nowrap; width: 118px; flex: 0 0 118px; }
+  .hist .ev .who { flex: 1; min-width: 0; font-size: 11.5px; overflow-wrap: anywhere; }
+  .hist .ev .op { color: var(--ink3); font-size: 11px; }
+  .hist .proof {
+    font: 10px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--ink3); overflow-wrap: anywhere; padding: 0 0 4px 128px;
+  }
+  .hist .foot { color: var(--ink3); font-size: 11px; padding-top: 6px; }
+  .icon.danger:hover { color: var(--warn); }
+
+  /* A store can hold hundreds of keys, so find-as-you-type is the primary way
+     in, not a convenience bolted to the side. */
+  .grouphead { display: flex; align-items: center; gap: 10px; padding: 10px 14px 8px; }
+  .grouphead h3 { padding: 0; flex: 1; }
+  .search {
+    font: inherit; font-size: 12px; width: 210px; padding: 4px 9px;
+    border-radius: 6px; border: 1px solid var(--line);
+    background: var(--bg); color: var(--ink1);
+  }
+  .search:focus { outline: none; border-color: var(--accent); }
+  .err { color: var(--warn); }
+</style>
+
+<nav id="nav"></nav>
+<main id="main"><p class="empty">Reading this machine…</p></main>
+
+<script>
+(() => {
+  const invoke = window.__TAURI__?.core?.invoke;
+  const nav = document.getElementById("nav");
+  const main = document.getElementById("main");
+  const esc = (v) => String(v ?? "").replace(/[&<>"]/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+
+  const MODE = {
+    always: ["Always", "Handed over without interrupting you."],
+    ask:    ["Ask me", "The request waits until you answer it."],
+    window: ["In hours", "Allowed inside a schedule, refused outside it."],
+    never:  ["Never", "Always refused."],
+  };
+  const PAGES = [
+    ["keys", "Keys"], ["vault", "Vault"], ["access", "Access"], ["machines", "Machines"],
+    ["broker", "Broker"], ["record", "Record"],
+  ];
+
+  let state = null, page = "keys", busy = false, notice = "";
+  // The vault answers a different question from `state` — not "what is in the
+  // store" but "may anything read it right now" — so it is fetched separately
+  // and is allowed to be missing on an older CLI without blanking the window.
+  let vault = null;
+  let vaultForm = { profile: "", label: "" };
+  // Which row is mid-edit. The background refresh must not wipe a half-typed
+  // value out from under someone, so polling pauses while this is set.
+  let revealed = {};    // key -> true once its value has been fetched and shown
+  let values = {};      // key -> value, held only while revealed
+  let confirming = null;
+  let query = "";
+  let history = {};   // key -> rows, fetched only when someone opens it
+
+  async function call(name, args = {}) {
+    busy = true; paint();
+    try { const next = await invoke(name, args); notice = ""; state = next; }
+    catch (e) { notice = String(e); }
+    finally { busy = false; paint(); }
+  }
+
+  /** Vault commands answer with vault state, not store state. */
+  async function callVault(name, args = {}) {
+    busy = true; paint();
+    try { vault = await invoke(name, args); notice = ""; }
+    catch (e) { notice = String(e); }
+    finally { busy = false; paint(); }
+  }
+
+  async function refreshVault() {
+    try { vault = await invoke("vault_state"); }
+    catch { vault = null; }
+  }
+
+  const pwd = (id) => (document.getElementById(id)?.value ?? "");
+  function humanTime(seconds) {
+    if (!seconds) return "";
+    if (seconds < 90) return `${seconds}s`;
+    if (seconds < 5400) return `${Math.round(seconds / 60)} min`;
+    return `${Math.round(seconds / 3600)}h`;
+  }
+
+  const APP = "hivemind-content-studio";
+
+  /** Keys the current search matches. Case-insensitive substring, because a
+   *  person hunting OPENAI_API_KEY types "openai", not a prefix. */
+  function shownKeys() {
+    const all = state?.store?.keys || [];
+    const q = query.trim().toLowerCase();
+    return q ? all.filter((k) => k.toLowerCase().includes(q)) : all;
+  }
+
+  function searchField(id) {
+    return `<input class="search" id="${id}" type="search" placeholder="Search keys"
+      value="${esc(query)}" spellcheck="false" autocapitalize="off" />`;
+  }
+
+  function ago(iso) {
+    const then = Date.parse(iso);
+    if (!Number.isFinite(then)) return "";
+    const s = Math.max(0, Math.round((Date.now() - then) / 1000));
+    if (s < 60) return "just now";
+    if (s < 3600) return `${Math.round(s / 60)}m ago`;
+    if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+    return `${Math.round(s / 86400)}d ago`;
+  }
+
+  function usedLine(k) {
+    const u = (state.usage || {})[k];
+    // No entry means never read — say that, rather than printing a zero that
+    // looks like measured data.
+    if (!u || !u.last) return "Never used.";
+    const times = u.count === 1 ? "once" : `${u.count} times`;
+    return `Last used ${ago(u.last)} by ${esc(u.last_app || "something")} · ${times}`;
+  }
+
+  function historyBlock(k) {
+    const rows = history[k];
+    if (rows === "loading") return `<div class="hist"><div class="foot">Reading the record…</div></div>`;
+    if (!rows.length) return `<div class="hist"><div class="foot">Nothing recorded for this key yet.</div></div>`;
+    return `<div class="hist">
+      ${rows.slice().reverse().map((r) => `
+        <div class="ev">
+          <span class="when">${esc(ago(r.at))}</span>
+          <span class="who">${esc(r.app || "unknown")}${r.reason ? ` — ${esc(r.reason)}` : ""}</span>
+          <span class="op">${esc(r.op)}${r.granted === false ? " · denied" : ""}</span>
+        </div>
+        <div class="proof">${esc(r.proof || "")}</div>`).join("")}
+      <div class="foot">Each line is hash-chained to the one before it. A row that
+      was edited, removed or reordered breaks every proof after it.</div>
+    </div>`;
+  }
+
+  function countLabel(shown, all) {
+    return query.trim() && shown !== all ? `${shown} of ${all}` : `${all} stored`;
+  }
+  const modeOf = (key) => {
+    const a = (state?.access?.apps || {})[APP] || {};
+    return ((a.keys || {})[key] || {}).mode || (a.default || {}).mode || state?.access?.default_mode || "always";
+  };
+
+  function paintNav() {
+    const pending = (state?.broker?.pending || []).length;
+    nav.innerHTML = `<h1>PassBook</h1>` + PAGES.map(([id, label]) => `
+      <button data-page="${id}" aria-current="${page === id}">
+        ${label}${id === "access" && pending ? '<span class="dot"></span>' : ""}
+      </button>`).join("");
+    nav.querySelectorAll("[data-page]").forEach((b) =>
+      b.onclick = () => { page = b.dataset.page; paint(); });
+  }
+
+  // Mirrors the HivemindOS agent-env card: name and actions on one line, the
+  // value on its own line underneath — masked until revealed, editable in
+  // place, saved on blur.
+  function keyRow(k) {
+    const shown = revealed[k];
+    const pending = confirming === k;
+    return `<div class="keyrow">
+      <div class="head">
+        <span class="mono">${esc(k)}</span>
+        ${pending ? `
+          <span class="sub">Remove it? Another app may be using it.</span>
+          <button class="act primary" data-rmgo="${esc(k)}" ${busy ? "disabled" : ""}>Remove</button>
+          <button class="act" data-cancel="1">Cancel</button>
+        ` : `
+          <button class="icon ${shown ? "on" : ""}" data-reveal="${esc(k)}"
+            title="${shown ? "Hide value" : "Reveal value"}">${shown ? "Hide" : "Reveal"}</button>
+          <button class="icon" data-copy="${esc(k)}" title="Copy value">Copy</button>
+          <button class="icon ${history[k] ? "on" : ""}" data-hist="${esc(k)}"
+            title="Who has used this key">History</button>
+          <button class="icon danger" data-remove="${esc(k)}" title="Remove">Remove</button>
+        `}
+      </div>
+      <input class="val ${shown ? "" : "masked"}" data-val="${esc(k)}"
+        value="${esc(shown ? (values[k] ?? "") : "••••••••••••")}"
+        ${shown ? "" : "readonly"} spellcheck="false" autocapitalize="off"
+        placeholder="${shown ? "empty" : ""}" />
+      <div class="sub">${usedLine(k)}</div>
+      ${history[k] ? historyBlock(k) : ""}
+    </div>`;
+  }
+
+  function keysPage() {
+    const s = state.store || {};
+    const seal = state.sealing || {};
+    const keys = shownKeys();
+    return `
+      <h2>Keys</h2>
+      <p class="lede">One store, shared by every app on this Mac. Paste a key once and
+      they all have it. Reveal shows a value and records that you looked.</p>
+      <div class="group">
+        <div class="grouphead">
+          <h3>${countLabel(keys.length, (s.keys || []).length)} · workspace ${esc(s.workspace || "main")}</h3>
+          ${searchField("q-keys")}
+        </div>
+        <div class="addrow">
+          <input id="k" placeholder="KEY_NAME" spellcheck="false" autocapitalize="off" />
+          <input id="v" type="password" placeholder="value" />
+          <button class="act primary" id="addgo" ${busy ? "disabled" : ""}>Add</button>
+        </div>
+        ${keys.map((k) => keyRow(k)).join("")
+          || `<div class="empty">${query.trim()
+                ? `Nothing matches “${esc(query)}”.` : "No keys yet."}</div>`}
+        <p class="note">${esc(s.path || "")}${s.writes_to && s.writes_to !== s.path
+          ? `<br>New keys are written to this workspace: ${esc(s.writes_to)}` : ""}</p>
+      </div>
+      ${encryptionPanel(seal)}`;
+  }
+
+  /** Encryption at rest, with the way to fix it in the same box.
+   *
+   *  This panel used to state the problem and stop there, which left the only
+   *  actionable thing in the window as a red badge. Whatever it reports now, it
+   *  also carries the next step: seal it, sign in to it, or set it up.
+   */
+  function encryptionPanel(seal) {
+    const v = vault;
+    const sealed = v?.fully_sealed ?? seal.fully_sealed;
+    const readable = (v?.plaintext?.length ?? 0) + (v?.legacy_v1?.length ?? 0);
+    const detail = v?.detail || seal.detail || "";
+
+    let action = "";
+    if (!v?.supported) {
+      action = `<p class="note">This machine has no vault runtime yet.
+        Run <code>passbook install</code> to add one.</p>`;
+    } else if (!v.profiles?.length) {
+      action = `
+        <p class="note">Encrypting the store needs a profile to hold the key —
+        a name and a password that opens it.</p>
+        <div class="addrow">
+          <input id="vp-label" placeholder="Profile name" spellcheck="false" />
+          <input id="vp-pw" type="password" placeholder="New vault password" />
+          <button class="act primary" id="vp-create" ${busy ? "disabled" : ""}>Create profile</button>
+        </div>`;
+    } else if (!sealed) {
+      action = `
+        <p class="note">${readable} value${readable === 1 ? "" : "s"}
+        ${readable === 1 ? "is" : "are"} still readable by anything running as you.
+        Sealing encrypts ${readable === 1 ? "it" : "them"} under your profile;
+        nothing can read ${readable === 1 ? "it" : "them"} again until you sign in.</p>
+        <div class="addrow">
+          <input id="seal-pw" type="password" placeholder="Vault password" />
+          <button class="act primary" id="seal-go" ${busy ? "disabled" : ""}>Seal the store</button>
+        </div>`;
+    } else if (!v.unlocked) {
+      action = `
+        <p class="note">Everything is encrypted and the vault is shut, so apps on
+        this machine currently have no credentials. Sign in to give them some.</p>
+        <div class="addrow">
+          <input id="si-pw2" type="password" placeholder="Vault password" />
+          <button class="act primary" id="si-go2" ${busy ? "disabled" : ""}>Sign in</button>
+        </div>`;
+    } else {
+      action = `<p class="note">Signed in as ${esc(profileLabel(v.signed_in_profile))}${
+        v.expires_in ? `, for another ${humanTime(v.expires_in)}` : ""}.
+        <button class="act" data-signout>Lock now</button></p>`;
+    }
+
+    return `
+      <div class="group">
+        <h3>Encryption at rest</h3>
+        <div class="row"><div class="grow">${esc(detail)}</div>
+          <span class="tag ${sealed ? "on" : "off"}">${sealed ? "Encrypted" : "Readable"}</span></div>
+        ${action}
+        <p class="note">Sealing protects the store on a stolen laptop, a backup, a
+        synced home folder, or a copy that ends up in a repo. While you are signed
+        in, code running as you can still ask the broker for a key — that is what
+        Access rules are for.</p>
+      </div>`;
+  }
+
+  function profileLabel(id) {
+    return (vault?.profiles || []).find((p) => p.id === id)?.label || id || "this machine";
+  }
+
+  function vaultPage() {
+    const v = vault;
+    if (!v) return `<h2>Vault</h2><p class="lede">Reading the vault…</p>`;
+    if (!v.supported) {
+      return `<h2>Vault</h2>
+        <p class="lede">This machine has no vault runtime yet.</p>
+        <div class="group"><p class="note">Run <code>passbook install</code> to add one,
+        then reopen this window.</p></div>`;
+    }
+
+    const openState = v.unlocked
+      ? `<div class="row"><div class="grow"><strong>Open</strong> —
+           signed in as ${esc(profileLabel(v.signed_in_profile))} by ${esc(v.factor || "password")}${
+             v.expires_in ? `, ${humanTime(v.expires_in)} left` : ""}.</div>
+         <button class="act" data-signout ${busy ? "disabled" : ""}>Lock</button></div>`
+      : `<div class="row"><div class="grow"><strong>Locked</strong> —
+           ${v.fully_sealed
+             ? "apps on this machine have no credentials right now."
+             : "though the store is not sealed, so values are readable anyway."}</div>
+         <span class="tag off">Locked</span></div>`;
+
+    const signIn = v.unlocked || !v.profiles.length ? "" : `
+      <div class="group">
+        <h3>Sign in</h3>
+        ${v.profiles.length > 1 ? `
+          <select id="si-profile">
+            ${v.profiles.map((p) => `<option value="${esc(p.id)}"${
+              p.id === (vaultForm.profile || v.active) ? " selected" : ""}>${esc(p.label)}</option>`).join("")}
+          </select>` : ""}
+        <div class="addrow">
+          <input id="si-pw" type="password" placeholder="Vault password" />
+          <button class="act primary" id="si-go" ${busy ? "disabled" : ""}>Sign in</button>
+        </div>
+        ${!v.running ? `<p class="note">The broker is not running; signing in starts it.</p>` : ""}
+      </div>`;
+
+    const profiles = `
+      <div class="group">
+        <h3>Profiles</h3>
+        ${v.profiles.length ? v.profiles.map((p) => `
+          <div class="row">
+            <div class="grow">
+              <strong>${esc(p.label)}</strong>${p.active ? " · active" : ""}
+              <div class="note">${p.factors.map((f) => esc(f.kind)).join(", ") || "no factors"}</div>
+            </div>
+            ${p.active ? "" : `<button class="act" data-use="${esc(p.label)}">Use</button>`}
+          </div>`).join("")
+          : `<div class="empty">No profiles yet.</div>`}
+        <div class="addrow">
+          <input id="np-label" placeholder="New profile name" spellcheck="false" />
+          <input id="np-pw" type="password" placeholder="Vault password" />
+          <button class="act" id="np-create" ${busy ? "disabled" : ""}>Add profile</button>
+        </div>
+        <p class="note">A profile is a sign-in and the key it holds. Passwords work
+        on every machine; a passkey can be enrolled from HivemindOS or Hivemind
+        Content Studio and works the same way here.</p>
+      </div>`;
+
+    const encryption = `
+      <div class="group">
+        <h3>The store</h3>
+        <div class="row"><div class="grow">${esc(v.detail || "")}</div>
+          <span class="tag ${v.fully_sealed ? "on" : "off"}">${v.fully_sealed ? "Encrypted" : "Readable"}</span></div>
+        ${v.legacy_v1?.length ? `<p class="note">${v.legacy_v1.length} value(s) still use the
+          older machine-key encryption. Sealing again moves them onto your profile.</p>` : ""}
+        <div class="addrow">
+          <input id="sl-pw" type="password" placeholder="Vault password" />
+          ${v.fully_sealed
+            ? `<button class="act" id="unseal-go" ${busy ? "disabled" : ""}>Decrypt back to plaintext</button>`
+            : `<button class="act primary" id="seal-go2" ${busy ? "disabled" : ""}>Seal the store</button>`}
+        </div>
+        <p class="note">${v.fully_sealed
+          ? "Decrypting puts every value back in the clear on disk. The way out is here on purpose — an encryption you cannot reverse is one nobody turns on."
+          : "Sealing encrypts every value under your profile key."}</p>
+      </div>`;
+
+    const device = `
+      <div class="group">
+        <h3>This device</h3>
+        <p class="note">${esc(v.keystore?.describe || "no OS keystore on this platform")}.
+        ${v.keystore?.available
+          ? "A device factor could let jobs start at boot without you — at the cost of letting anything running as you open the vault. Add one with <code>passbook profile trust-device</code>."
+          : "Sign-in here is by password, which works the same on every platform."}</p>
+      </div>`;
+
+    return `<h2>Vault</h2>
+      <p class="lede">Whether anything on this machine can read your credentials right now.</p>
+      <div class="group">${openState}</div>
+      ${signIn}${encryption}${profiles}${device}`;
+  }
+
+  function lockBanner() {
+    if (!vault?.supported || vault.unlocked || !vault.fully_sealed) return "";
+    return `<div class="banner">
+      <div class="grow"><strong>The vault is locked.</strong>
+      Every value is encrypted, so apps on this machine have no credentials until you sign in.</div>
+      <button class="act primary" data-goto="vault">Sign in</button>
+    </div>`;
+  }
+
+  function accessPage() {
+    const a = state.access || {};
+    const pending = state.broker?.pending || [];
+    const open = a.sessions || [];
+    return `
+      <h2>Access</h2>
+      <p class="lede">How each key is answered when something asks for it.</p>
+      ${pending.map((p) => `
+        <div class="banner">
+          <b>${esc(p.app)}</b> wants ${esc((p.keys || []).join(", "))}
+          ${p.reason ? `<div style="opacity:.85;margin-top:2px">${esc(p.reason)}</div>` : ""}
+          <div class="acts">
+            <button data-ok="${esc(p.id)}" data-for="">Just once</button>
+            <button data-ok="${esc(p.id)}" data-for="1h">For 1 hour</button>
+            <button data-no="${esc(p.id)}">Decline</button>
+          </div>
+        </div>`).join("")}
+      <div class="group">
+        <h3>Stop being asked</h3>
+        ${open.length ? open.map((u) => `
+          <div class="row"><div class="grow">${(u.keys || []).length
+              ? `<span class="mono">${esc(u.keys.join(", "))}</span>` : "Every key"}</div>
+            <span class="tag on">${Math.round(u.remaining_seconds / 60)}m left</span>
+            <button class="act" data-lock="1" ${busy ? "disabled" : ""}>Close now</button></div>`).join("")
+          : `<div class="row"><div class="grow">Open access for a while; it closes on its own.</div>
+             <div class="seg">${(a.presets || ["15m","1h","4h"]).map((p) =>
+               `<button data-unlock="${p}">${p}</button>`).join("")}</div></div>
+             <p class="note">While it is open, anything running as you can use these keys
+             without asking. That is what it is for — but it should never be something
+             you did without noticing.</p>`}
+      </div>
+      <div class="group">
+        <div class="grouphead">
+          <h3>Per key · ${countLabel(shownKeys().length, (state.store?.keys || []).length)}</h3>
+          ${searchField("q-access")}
+        </div>
+        ${shownKeys().map((k) => {
+          const m = modeOf(k);
+          return `<div class="row"><div class="grow"><div class="mono">${esc(k)}</div>
+            <div class="sub">${esc(MODE[m][1])}</div></div>
+            <div class="seg">${["always","ask","never"].map((x) =>
+              `<button data-key="${esc(k)}" data-mode="${x}" aria-pressed="${m === x}">${MODE[x][0]}</button>`).join("")}</div>
+          </div>`; }).join("")
+          || `<div class="empty">${query.trim()
+                ? `Nothing matches “${esc(query)}”.` : "No keys yet."}</div>`}
+      </div>`;
+  }
+
+  function machinesPage() {
+    const l = state.links || {};
+    const rows = [...(l.lent || []).map((r) => ({ ...r, lent: true })), ...(l.borrowed || [])];
+    return `
+      <h2>Machines</h2>
+      <p class="lede">Machines you lend named keys to, or borrow them from. Adding one
+      happens on the command line, because both ends compare a fingerprint.</p>
+      <div class="group">
+        <h3>This machine</h3>
+        <div class="row"><div class="grow mono">${esc(l.fingerprint || "—")}</div></div>
+        ${rows.map((r) => `
+          <div class="row"><div class="grow">
+            <div>${r.lent ? "Lent to" : "Borrowed from"} <span class="mono">${esc(r.fingerprint || r.did)}</span></div>
+            <div class="sub mono">${esc((r.keys || []).join(", ")) || "—"}</div></div>
+            ${r.lent && r.active
+              ? `<button class="act" data-revoke="${esc(r.did)}" ${busy ? "disabled" : ""}>Revoke</button>`
+              : `<span class="tag ${r.active ? "on" : ""}">${r.revoked ? "Revoked" : r.active ? "Active" : "Expired"}</span>`}
+          </div>`).join("") || `<div class="empty">No linked machines.</div>`}
+      </div>`;
+  }
+
+  function brokerPage() {
+    const b = state.broker || {};
+    return `
+      <h2>Broker</h2>
+      <p class="lede">One door for credential reads, so the record does not depend on
+      each app choosing to keep one.</p>
+      <div class="group">
+        <h3>Status</h3>
+        <div class="row"><div class="grow">${b.running
+          ? `Reads go through the broker, default <b>${esc(b.mode || "always")}</b>.`
+          : "Not running — each app records its own reads, so the record has gaps."}</div>
+          <span class="tag ${b.running ? "on" : "off"}">${b.running ? "Running" : "Stopped"}</span>
+          <button class="act ${b.running ? "" : "primary"}" data-broker="${b.running ? "stop" : "start"}"
+            ${busy ? "disabled" : ""}>${b.running ? "Stop" : "Start"}</button></div>
+        <p class="note">${esc(b.limits || "")}</p>
+      </div>`;
+  }
+
+  function recordPage() {
+    const r = state.record || {};
+    return `
+      <h2>Record</h2>
+      <p class="lede">Every read, hash-chained. Key names and times — never a value.</p>
+      <div class="group">
+        <h3>${esc(r.detail || "")}</h3>
+        ${(r.rows || []).slice(-40).reverse().map((row) => `
+          <div class="row"><div class="grow mono">${esc((row.keys || []).join(", ")) || "—"}</div>
+            <span class="tag">${esc(row.app)}</span>
+            <span class="tag">${esc(row.op)}</span></div>`).join("") || `<div class="empty">Nothing recorded yet.</div>`}
+      </div>`;
+  }
+
+  function paint() {
+    if (!state) return;
+    paintNav();
+    const body = { keys: keysPage, vault: vaultPage, access: accessPage, machines: machinesPage,
+                   broker: brokerPage, record: recordPage }[page]();
+    main.innerHTML = lockBanner() + body + (notice ? `<p class="note err">${esc(notice)}</p>` : "");
+
+    main.querySelectorAll("[data-goto]").forEach((b) => b.onclick = () => {
+      page = b.dataset.goto; notice = ""; paint();
+    });
+    main.querySelectorAll("[data-signout]").forEach((b) => b.onclick = () => callVault("vault_signout"));
+    main.querySelectorAll("[data-use]").forEach((b) => b.onclick = () =>
+      callVault("vault_use_profile", { label: b.dataset.use }));
+
+    const signIn = (field, select) => {
+      const profile = select ? (document.getElementById(select)?.value ?? "") : "";
+      callVault("vault_signin", { profile, password: pwd(field) });
+    };
+    const wire = (id, run) => {
+      const button = document.getElementById(id);
+      if (button) button.onclick = run;
+    };
+    wire("si-go", () => signIn("si-pw", "si-profile"));
+    wire("si-go2", () => signIn("si-pw2", null));
+    wire("seal-go", () => callVault("vault_seal", { password: pwd("seal-pw") }));
+    wire("seal-go2", () => callVault("vault_seal", { password: pwd("sl-pw") }));
+    wire("unseal-go", () => callVault("vault_unseal", { password: pwd("sl-pw") }));
+    wire("vp-create", () => callVault("vault_create_profile",
+      { label: document.getElementById("vp-label")?.value ?? "", password: pwd("vp-pw") }));
+    wire("np-create", () => callVault("vault_create_profile",
+      { label: document.getElementById("np-label")?.value ?? "", password: pwd("np-pw") }));
+
+    // Enter submits the password field it is in, because a password field that
+    // needs a mouse to submit is one people retype.
+    [["si-pw", "si-go"], ["si-pw2", "si-go2"], ["seal-pw", "seal-go"],
+     ["vp-pw", "vp-create"], ["np-pw", "np-create"]].forEach(([field, button]) => {
+      const input = document.getElementById(field);
+      if (input) input.onkeydown = (e) => { if (e.key === "Enter") document.getElementById(button)?.click(); };
+    });
+
+    main.querySelectorAll("[data-mode]").forEach((b) => b.onclick = () =>
+      call("set_mode", { app: APP, key: b.dataset.key, mode: b.dataset.mode }));
+    main.querySelectorAll("[data-unlock]").forEach((b) => b.onclick = () =>
+      call("unlock", { duration: b.dataset.unlock, reason: "from PassBook" }));
+    main.querySelectorAll("[data-lock]").forEach((b) => b.onclick = () => call("lock"));
+    main.querySelectorAll("[data-ok]").forEach((b) => b.onclick = () =>
+      call("resolve", { id: b.dataset.ok, approve: true, remember: b.dataset.for }));
+    main.querySelectorAll("[data-no]").forEach((b) => b.onclick = () =>
+      call("resolve", { id: b.dataset.no, approve: false, remember: "" }));
+    main.querySelectorAll("[data-broker]").forEach((b) => b.onclick = () =>
+      call("broker", { action: b.dataset.broker }));
+    main.querySelectorAll("[data-revoke]").forEach((b) => b.onclick = () =>
+      call("revoke", { did: b.dataset.revoke }));
+    main.querySelectorAll("[data-reveal]").forEach((b) => b.onclick = async () => {
+      const k = b.dataset.reveal;
+      if (revealed[k]) { delete revealed[k]; delete values[k]; paint(); return; }
+      try { values[k] = await invoke("reveal_key", { name: k }); revealed[k] = true; notice = ""; }
+      catch (e) { notice = String(e); }
+      paint();
+    });
+    main.querySelectorAll("[data-hist]").forEach((b) => b.onclick = async () => {
+      const k = b.dataset.hist;
+      if (history[k]) { delete history[k]; paint(); return; }
+      history[k] = "loading"; paint();
+      try { history[k] = await invoke("key_history", { name: k }); }
+      catch (e) { history[k] = []; notice = String(e); }
+      paint();
+    });
+    main.querySelectorAll("[data-copy]").forEach((b) => b.onclick = async () => {
+      const k = b.dataset.copy;
+      try {
+        const v = values[k] ?? await invoke("reveal_key", { name: k });
+        await navigator.clipboard.writeText(v);
+        notice = `${k} copied.`;
+      } catch (e) { notice = String(e); }
+      paint();
+    });
+    main.querySelectorAll("[data-remove]").forEach((b) => b.onclick = () => {
+      confirming = b.dataset.remove; paint();
+    });
+    main.querySelectorAll("[data-cancel]").forEach((b) => b.onclick = () => {
+      confirming = null; notice = ""; paint();
+    });
+    main.querySelectorAll("[data-rmgo]").forEach((b) => b.onclick = async () => {
+      const k = b.dataset.rmgo;
+      confirming = null; delete revealed[k]; delete values[k];
+      await call("remove_key", { name: k });
+    });
+    // Saving on blur is how the HivemindOS card behaves; Escape reverts.
+    main.querySelectorAll("[data-val]").forEach((input) => {
+      const k = input.dataset.val;
+      if (!revealed[k]) return;
+      input.onkeydown = (e) => {
+        if (e.key === "Enter") input.blur();
+        if (e.key === "Escape") { input.value = values[k] ?? ""; input.blur(); }
+      };
+      input.onblur = async () => {
+        const next = input.value;
+        if (next === (values[k] ?? "") || !next.trim()) return;
+        values[k] = next;
+        await call("add_key", { name: k, value: next, replace: true });
+      };
+    });
+    // innerHTML is replaced on every paint, so typing would lose focus after
+    // each keystroke without restoring it here.
+    ["q-keys", "q-access"].forEach((id) => {
+      const box = document.getElementById(id);
+      if (!box) return;
+      box.oninput = () => {
+        query = box.value;
+        const at = box.selectionStart;
+        paint();
+        const again = document.getElementById(id);
+        if (again) { again.focus(); again.setSelectionRange(at, at); }
+      };
+      box.onkeydown = (e) => {
+        if (e.key === "Escape" && query) { query = ""; paint(); document.getElementById(id)?.focus(); }
+      };
+    });
+    const go = document.getElementById("addgo");
+    if (go) go.onclick = async () => {
+      const name = document.getElementById("k").value;
+      const value = document.getElementById("v").value;
+      if (!name.trim() || !value.trim()) { notice = "A key needs a name and a value."; paint(); return; }
+      await call("add_key", { name, value, replace: false });
+    };
+  }
+
+  async function boot() {
+    if (!invoke) {
+      main.innerHTML = `<h2>PassBook</h2><p class="lede err">This window could not reach
+        the app backend. That is a build problem, not a credential problem —
+        <code>withGlobalTauri</code> must be enabled in tauri.conf.json.</p>`;
+      return;
+    }
+    try { state = await invoke("state"); await refreshVault(); paint(); }
+    catch (e) { main.innerHTML = `<h2>PassBook</h2><p class="lede err">${esc(String(e))}</p>`; }
+  }
+  boot();
+  setInterval(async () => {
+    // A background refresh must not wipe a value someone is mid-edit on.
+    const focused = document.activeElement;
+    if (busy || confirming) return;
+    if (focused?.classList?.contains("val") || focused?.classList?.contains("search")) return;
+    // A half-typed password must survive the refresh for the same reason a
+    // half-typed value does.
+    if (focused?.type === "password") return;
+    try { state = await invoke("state"); await refreshVault(); paint(); } catch {}
+  }, 5000);
+})();
+</script>

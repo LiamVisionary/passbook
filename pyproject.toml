@@ -1,0 +1,92 @@
+# Packaging PassBook for the tools people already have.
+#
+#   uv tool install passbook
+#   pipx install passbook
+#
+# Both create their own isolated environment, so `cryptography` installs
+# cleanly and nothing touches a system Python. That is why it is a hard
+# dependency here while `passbook.py` on its own has none: the promise of "no
+# dependencies" is about the file you vendor into a project, not about the tool
+# you install on a machine. A security tool whose sealing and linking are
+# optional extras would ship with them switched off for most people.
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "passbook"
+version = "1.0.0"
+description = "One credential store per machine, shared by every app that opts in."
+readme = "README.md"
+requires-python = ">=3.9"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+keywords = ["credentials", "environment", "secrets", "dotenv"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Topic :: Security",
+    "Topic :: Software Development :: Libraries",
+]
+dependencies = ["cryptography>=41"]
+
+[project.urls]
+Homepage = "https://github.com/LiamVisionary/passbook"
+Source = "https://github.com/LiamVisionary/passbook"
+Issues = "https://github.com/LiamVisionary/passbook/issues"
+
+# One implementation, many names: each console script lands with its own
+# basename, which is what the CLI dispatches on.
+[project.scripts]
+passbook = "passbook_cli:main"
+passbook-access = "passbook_cli:main"
+passbook-add = "passbook_cli:main"
+passbook-approve = "passbook_cli:main"
+passbook-broker = "passbook_cli:main"
+passbook-check = "passbook_cli:main"
+passbook-delete = "passbook_cli:main"
+passbook-get = "passbook_cli:main"
+passbook-history = "passbook_cli:main"
+passbook-install = "passbook_cli:main"
+passbook-link = "passbook_cli:main"
+passbook-list = "passbook_cli:main"
+passbook-lock = "passbook_cli:main"
+passbook-passkey = "passbook_cli:main"
+passbook-policy = "passbook_cli:main"
+passbook-profile = "passbook_cli:main"
+passbook-remove = "passbook_cli:main"
+passbook-reveal = "passbook_cli:main"
+passbook-run = "passbook_cli:main"
+passbook-seal = "passbook_cli:main"
+passbook-secure = "passbook_cli:main"
+passbook-signin = "passbook_cli:main"
+passbook-signout = "passbook_cli:main"
+passbook-state = "passbook_cli:main"
+passbook-status = "passbook_cli:main"
+passbook-unlock = "passbook_cli:main"
+passbook-unseal = "passbook_cli:main"
+passbook-vault = "passbook_cli:main"
+passbook-set = "passbook_cli:main"
+
+[tool.setuptools]
+# Every module, or the installed tool is quietly missing features. This list
+# went stale once and shipped without the vault, the access modes, the keystore
+# and the peer check — all of which import fine from a checkout, so nothing
+# failed until someone installed it.
+py-modules = [
+    "passbook",
+    "passbook_access",
+    "passbook_broker",
+    "passbook_cli",
+    "passbook_keystore",
+    "passbook_link",
+    "passbook_peer",
+    "passbook_seal",
+    "passbook_stamp",
+    "passbook_vault",
+]
+
+[tool.setuptools.data-files]
+"share/passbook" = ["SPEC.md", "SIGNING.md", "AGENT_PROMPT.md", "passbook.mjs"]

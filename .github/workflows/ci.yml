@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # The portability claim is the point of this project, so it is tested rather
+  # than asserted. The vault opens the same way on every OS; the broker needs a
+  # Unix socket and skips itself on Windows, which the matrix shows honestly.
+  test:
+    name: ${{ matrix.os }} · py${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.9", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install
+        run: python -m pip install --upgrade pip pytest cryptography
+      - name: Test
+        run: python -m pytest tests -q
+
+  # A machine with no OS keystore is the normal case on a headless server, and
+  # the vault has to work there on a password alone. This pins that.
+  no-keystore:
+    name: no OS keystore
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip pytest cryptography
+      - name: Test with every keystore disabled
+        env:
+          PASSBOOK_KEYSTORE: none
+        run: python -m pytest tests -q
+
+  package:
+    name: package installs and runs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip build
+      - run: python -m build
+      - name: Install the wheel and check every module shipped
+        run: |
+          python -m pip install dist/*.whl
+          python - <<'PY'
+          import importlib
+          # The module list in pyproject went stale once and shipped a tool with
+          # no vault. This fails the build rather than the user's machine.
+          for name in ("passbook", "passbook_access", "passbook_broker", "passbook_cli",
+                       "passbook_keystore", "passbook_link", "passbook_peer",
+                       "passbook_seal", "passbook_stamp", "passbook_vault"):
+              importlib.import_module(name)
+          print("all modules import from the installed wheel")
+          PY
+          passbook --help > /dev/null
+          passbook-unseal --help > /dev/null
+          echo "console scripts dispatch"

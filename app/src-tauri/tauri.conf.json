@@ -1,0 +1,49 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "PassBook",
+  "mainBinaryName": "passbook-app",
+  "version": "1.0.0",
+  "identifier": "app.hivemindos.passbook",
+  "build": {
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "PassBook",
+        "width": 1040,
+        "height": 760,
+        "minWidth": 860,
+        "minHeight": 600,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+    },
+    "macOSPrivateApi": true,
+    "withGlobalTauri": true
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "app",
+      "dmg"
+    ],
+    "category": "Utility",
+    "shortDescription": "The credentials this machine shares",
+    "longDescription": "PassBook manages one credential store per machine: which keys are stored, how each one is answered, who has borrowed them, and a tamper-evident record of every read.",
+    "macOS": {
+      "minimumSystemVersion": "11.0"
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.png"
+    ]
+  }
+}

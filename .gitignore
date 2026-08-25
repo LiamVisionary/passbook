@@ -1,0 +1,17 @@
+# Rust build output and generated Tauri scaffolding: reproducible from source,
+# and target/ is hundreds of megabytes.
+app/src-tauri/target/
+app/src-tauri/gen/
+node_modules/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+
+# macOS
+.DS_Store

@@ -460,6 +460,34 @@ fn vault_use_profile(label: String) -> Result<Value, String> {
     vault_state()
 }
 
+/// Which projects a key is for: every one, only these, or all but these.
+#[tauri::command]
+fn set_key_projects(name: String, mode: String, projects: Vec<String>) -> Result<Value, String> {
+    if name.trim().is_empty() {
+        return Err("Which key?".into());
+    }
+    let mut args: Vec<&str> = vec!["projects", "set", name.trim()];
+    match mode.as_str() {
+        "all" => args.push("--every"),
+        "include" => args.push("--only"),
+        "exclude" => args.push("--without"),
+        other => return Err(format!("{other} is not a project rule")),
+    }
+    let named: Vec<String> = projects
+        .iter()
+        .map(|p| p.trim().to_string())
+        .filter(|p| !p.is_empty())
+        .collect();
+    if mode != "all" && named.is_empty() {
+        return Err("Pick at least one project.".into());
+    }
+    for project in &named {
+        args.push(project);
+    }
+    run(&args)?;
+    state()
+}
+
 /// Write the store to a file the person picked in a save dialog.
 ///
 /// The passphrase travels to the CLI's stdin like a vault password does, and
@@ -614,7 +642,8 @@ fn main() {
             key_history, vault_state, vault_signin, vault_signout, vault_create_profile,
             vault_use_profile, vault_seal, vault_unseal, vault_secure, set_key_group, set_key_audience, set_key_scope, set_keys_scope, remove_keys,
             access_matrix, oauth_state, oauth_refresh, oauth_disconnect, oauth_connect,
-            set_workspace, export_store, inspect_export, import_store, make_recovery_code
+            set_workspace, export_store, inspect_export, import_store, make_recovery_code,
+            set_key_projects
         ])
         .run(tauri::generate_context!())
         .expect("PassBook failed to start");

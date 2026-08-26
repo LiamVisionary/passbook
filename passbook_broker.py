@@ -540,11 +540,15 @@ def _handle(payload: Mapping[str, Any], root: Path | None = None,
     policy = read_policy(root)
     # Whose workspace is asking, not this daemon's.
     asking_workspace = str(payload.get("workspace") or "")
+    # A claim the caller makes, like its app name. The broker cannot verify it
+    # and does not pretend to; what it does is hold the caller to it.
+    asking_project = str(payload.get("project") or "")
     wanted = [str(key).strip() for key in (payload.get("keys") or []) if str(key).strip()]
 
     allowed, refused, asked = [], [], []
     for key in wanted:
-        verdict = access.decide_key(app, key, policy, root=root, workspace=asking_workspace)
+        verdict = access.decide_key(app, key, policy, root=root,
+                                    workspace=asking_workspace, project=asking_project)
         if verdict["outcome"] == "grant":
             allowed.append(key)
         elif verdict["outcome"] == "refuse":
@@ -716,9 +720,17 @@ def request_through_broker(
     None means "not available", never "denied" — those are different answers and
     a caller that conflated them would fail open on a refusal.
     """
+    # The project is worked out here rather than asked for, so every caller
+    # that already reaches the broker is held to it without changing its code.
+    try:
+        import passbook
+
+        here = passbook.project()
+    except Exception:  # noqa: BLE001 — no project is the common case
+        here = ""
     answer = _ask({
         "op": "request", "app": app, "keys": list(keys),
-        "reason": reason, "workspace": workspace_id,
+        "reason": reason, "workspace": workspace_id, "project": here,
     }, root=root)
     if not answer or not answer.get("ok"):
         return None

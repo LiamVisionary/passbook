@@ -1256,6 +1256,65 @@ def _export_values(app: str, reason: str) -> dict[str, str] | None:
     return readable
 
 
+def cmd_projects(args: argparse.Namespace) -> int:
+    """Which projects each key is for."""
+    import passbook_access as access
+
+    policy = access.read_policy()
+    names = sorted(passbook.key_names())
+    here = passbook.project()
+    rows = [(name, access.project_for(name, policy)) for name in names]
+    if args.json:
+        print(json.dumps({
+            "project": here,
+            "modes": list(access.PROJECT_MODES),
+            "seen": access.projects_seen(policy),
+            "keys": [{"key": name, **rule} for name, rule in rows],
+        }, indent=2))
+        return 0
+    print(f"working in project: {here or '(none — no git root, and PASSBOOK_PROJECT is unset)'}\n")
+    limited = [(name, rule) for name, rule in rows if rule["mode"] != "all"]
+    if not limited:
+        print("Every key is readable from every project.")
+        print("Narrow one with:  passbook projects set KEY --only <project>")
+        return 0
+    for name, rule in limited:
+        word = "only" if rule["mode"] == "include" else "all except"
+        print(f"  {name}\n      {word} {', '.join(rule['projects'])}")
+    print(f"\n{len(rows) - len(limited)} other key(s) are readable from every project.")
+    return 0
+
+
+def cmd_projects_set(args: argparse.Namespace) -> int:
+    """Limit a key to named projects, or exclude named projects from it."""
+    import passbook_access as access
+
+    if args.every:
+        mode, names = "all", []
+    elif args.only:
+        mode, names = "include", args.only
+    elif args.without:
+        mode, names = "exclude", args.without
+    else:
+        return _fail("Which projects?",
+                     "Use --every, --only <project>… or --without <project>…")
+    policy = access.read_policy()
+    changed = []
+    for key in args.keys:
+        try:
+            access.set_projects(key, mode, names, policy)
+        except ValueError as error:
+            return _fail(str(error))
+        changed.append(key)
+    access.write_policy(policy)
+    if mode == "all":
+        print(f"{len(changed)} key(s) are readable from every project again.")
+    else:
+        word = "only" if mode == "include" else "all except"
+        print(f"{len(changed)} key(s): {word} {', '.join(sorted(names))}.")
+    return 0
+
+
 def cmd_export(args: argparse.Namespace) -> int:
     """Write the store to a file: encrypted by default, GPG or plain on request."""
     try:
@@ -1887,6 +1946,11 @@ def machine_state() -> dict:
             "groups": passbook_catalog.groups(names, policy),
             "group_of": passbook_catalog.effective_groups(names, policy),
             "audiences": restricted,
+            "projects": {name: rule for name in names
+                         if (rule := passbook_access.project_for(name, policy))["mode"] != "all"},
+            "project_modes": list(passbook_access.PROJECT_MODES),
+            "projects_seen": passbook_access.projects_seen(policy),
+            "project": passbook.project(),
             "agents": passbook_catalog.agents_seen(policy=policy),
             "modes": list(passbook_access.AUDIENCE_MODES),
         }
@@ -2578,6 +2642,22 @@ def build_parser() -> argparse.ArgumentParser:
     scope_set.add_argument("--tailnet", action="store_true",
                            help="as machine, and lendable to linked machines")
     scope_set.set_defaults(json=False, key="", func=cmd_scope_set)
+
+    projects_cmd = subs.add_parser("projects", help="which projects each key is for")
+    projects_cmd.add_argument("--json", action="store_true")
+    projects_cmd.set_defaults(func=cmd_projects)
+    projects_subs = projects_cmd.add_subparsers(dest="projects_command")
+    projects_show = projects_subs.add_parser("show", help="every key's projects")
+    projects_show.add_argument("--json", action="store_true")
+    projects_show.set_defaults(func=cmd_projects)
+    projects_set = projects_subs.add_parser("set", help="limit one key or many to projects")
+    projects_set.add_argument("keys", nargs="+", metavar="KEY")
+    projects_set.add_argument("--every", action="store_true", help="readable from every project")
+    projects_set.add_argument("--only", nargs="+", default=[], metavar="PROJECT",
+                              help="readable ONLY from these projects")
+    projects_set.add_argument("--without", nargs="+", default=[], metavar="PROJECT",
+                              help="readable from every project EXCEPT these")
+    projects_set.set_defaults(json=False, func=cmd_projects_set)
 
     export_cmd = subs.add_parser("export", help="write this store to a file")
     export_cmd.add_argument("file")

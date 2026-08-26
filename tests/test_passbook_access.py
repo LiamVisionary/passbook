@@ -256,3 +256,101 @@ def test_reading_a_v1_policy_does_not_rewrite_it(machine):
     access.read_policy()
 
     assert access.policy_path().read_text(encoding="utf-8") == legacy
+
+
+# ── projects: a third bound, beside scope and audience ─────────────────────
+
+def test_a_key_with_no_project_rule_is_readable_from_everywhere():
+    policy = access.upgrade_policy({})
+    assert access.project_for("ANY_KEY", policy) == {"mode": "all", "projects": []}
+    assert access.project_allows("anything", "ANY_KEY", policy)["allowed"] is True
+    assert access.project_allows("", "ANY_KEY", policy)["allowed"] is True
+
+
+def test_include_limits_a_key_to_named_projects():
+    policy = access.upgrade_policy({})
+    access.set_projects("DEPLOY_KEY", "include", ["acme-site"], policy)
+    assert access.project_allows("acme-site", "DEPLOY_KEY", policy)["allowed"] is True
+    assert access.project_allows("other-repo", "DEPLOY_KEY", policy)["allowed"] is False
+
+
+def test_a_caller_that_names_no_project_is_not_on_an_include_list():
+    """An `include` list says the key belongs to named projects. A caller that
+    names none is not one of them — the alternative is that running outside any
+    checkout is the way around every project rule."""
+    policy = access.upgrade_policy({})
+    access.set_projects("DEPLOY_KEY", "include", ["acme-site"], policy)
+    verdict = access.project_allows("", "DEPLOY_KEY", policy)
+    assert verdict["allowed"] is False
+    assert "named no project" in verdict["why"]
+
+
+def test_exclude_keeps_everyone_but_the_named():
+    policy = access.upgrade_policy({})
+    access.set_projects("PROD_KEY", "exclude", ["scratch"], policy)
+    assert access.project_allows("scratch", "PROD_KEY", policy)["allowed"] is False
+    assert access.project_allows("anything-else", "PROD_KEY", policy)["allowed"] is True
+    # No project named is not the excluded one.
+    assert access.project_allows("", "PROD_KEY", policy)["allowed"] is True
+
+
+def test_a_project_rule_refuses_whatever_the_mode_says():
+    """The bound is not a preference: `always` does not get past it."""
+    policy = access.upgrade_policy({})
+    access.set_projects("DEPLOY_KEY", "include", ["acme-site"], policy)
+    # The most permissive mode there is, set the way the policy file stores it.
+    policy.setdefault("apps", {}).setdefault("some-agent", {}) \
+          .setdefault("keys", {})["DEPLOY_KEY"] = {"mode": "always"}
+    verdict = access.decide_key("some-agent", "DEPLOY_KEY", policy,
+                                workspace="", project="other-repo")
+    assert verdict["outcome"] == "refuse"
+    assert verdict.get("project") is True
+
+
+def test_a_project_rule_does_not_disturb_a_key_it_does_not_name():
+    policy = access.upgrade_policy({})
+    access.set_projects("DEPLOY_KEY", "include", ["acme-site"], policy)
+    verdict = access.decide_key("some-agent", "OTHER_KEY", policy,
+                                workspace="", project="other-repo")
+    assert verdict["outcome"] == "grant"
+
+
+def test_an_empty_project_list_is_refused_rather_than_locking_everything_out():
+    policy = access.upgrade_policy({})
+    with pytest.raises(ValueError, match="needs at least one project"):
+        access.set_projects("DEPLOY_KEY", "include", [], policy)
+    with pytest.raises(ValueError, match="must be one of"):
+        access.set_projects("DEPLOY_KEY", "sometimes", ["x"], policy)
+
+
+def test_a_corrupt_project_entry_degrades_open_not_shut():
+    """Same reasoning as the audience: a hand-edited entry must not silently
+    cut every project off from a credential."""
+    policy = access.upgrade_policy({})
+    policy.setdefault("keys", {})["ODD_KEY"] = {"projects": {"include": []}}
+    assert access.project_for("ODD_KEY", policy)["mode"] == "all"
+    policy["keys"]["WORSE_KEY"] = {"projects": 17}
+    assert access.project_for("WORSE_KEY", policy)["mode"] == "all"
+
+
+def test_setting_projects_back_to_every_clears_the_rule():
+    policy = access.upgrade_policy({})
+    access.set_projects("DEPLOY_KEY", "include", ["acme-site"], policy)
+    access.set_projects("DEPLOY_KEY", "all", [], policy)
+    assert access.project_for("DEPLOY_KEY", policy)["mode"] == "all"
+    assert access.project_allows("anything", "DEPLOY_KEY", policy)["allowed"] is True
+
+
+def test_projects_seen_gathers_every_name_any_key_mentions():
+    policy = access.upgrade_policy({})
+    access.set_projects("A_KEY", "include", ["acme-site", "beta"], policy)
+    access.set_projects("B_KEY", "exclude", ["scratch"], policy)
+    assert access.projects_seen(policy) == ["acme-site", "beta", "scratch"]
+
+
+def test_projects_survive_a_policy_write(tmp_path):
+    policy = access.upgrade_policy({})
+    access.set_projects("DEPLOY_KEY", "include", ["acme-site"], policy)
+    access.write_policy(policy, root=tmp_path)
+    again = access.read_policy(tmp_path)
+    assert access.project_for("DEPLOY_KEY", again)["projects"] == ["acme-site"]

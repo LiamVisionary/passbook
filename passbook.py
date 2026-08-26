@@ -169,6 +169,45 @@ def workspaces(environ: Mapping[str, str] | None = None) -> list[str]:
     return sorted(named)
 
 
+PROJECT_ENV_VAR = "PASSBOOK_PROJECT"
+_PROJECT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+
+def project(environ: Mapping[str, str] | None = None, *, cwd: Path | None = None) -> str:
+    """Which project this process is working in.
+
+    `PASSBOOK_PROJECT` if it is set; otherwise the name of the nearest enclosing
+    git repository; otherwise nothing.
+
+    Deliberately a claim, not a proof — the same standing an agent name has. A
+    process can set the variable to anything, and this file does not pretend
+    otherwise. What it buys is still real: a key limited to one project is not
+    handed to an agent running in a different checkout, so an instruction
+    smuggled into one repository cannot spend another repository's credentials.
+    The threat it addresses is a confused agent, not a determined attacker who
+    already runs code as you — and against that one, nothing on this side of the
+    broker would help either.
+
+    A name that is not a plausible directory name is dropped rather than raised
+    on: an odd checkout name should not take down every credential read on the
+    machine.
+    """
+    source = os.environ if environ is None else environ
+    declared = str(source.get(PROJECT_ENV_VAR, "")).strip()
+    if declared:
+        return declared if _PROJECT.match(declared) else ""
+    here = Path(cwd) if cwd is not None else Path.cwd()
+    try:
+        here = here.resolve()
+    except OSError:
+        return ""
+    for candidate in (here, *here.parents):
+        if (candidate / ".git").exists():
+            name = candidate.name
+            return name if _PROJECT.match(name) else ""
+    return ""
+
+
 def set_active_workspace(name: str, environ: Mapping[str, str] | None = None) -> str:
     """Point the machine's active workspace at `name`, and say what it was.
 

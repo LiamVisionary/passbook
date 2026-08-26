@@ -518,6 +518,8 @@
   // anybody just set an error at the far bottom of a long list — which reads
   // as a dead button. They pick a mode now; Save commits it.
   let audienceFor = null, audienceDraft = null;
+  // The project editor, same shape as the audience one and open one at a time.
+  let projectsFor = null, projectsDraft = null, projectTyped = "";
   // Which buttons are showing a tick, and the timer that clears each one. The
   // timer is held so a second press restarts it rather than the first press's
   // timer wiping the second one's tick.
@@ -852,13 +854,20 @@
       : `all except ${rule.agents.join(", ")}`;
 
     if (!editing) {
+      const prule = cat.projects?.[k];
+      const plabel = !prule ? ""
+        : prule.mode === "include" ? `only in ${prule.projects.join(", ")}`
+        : `not in ${prule.projects.join(", ")}`;
       return `<div class="sub aud">
         ${used ? `<span class="used">${used}</span>` : ""}
         ${scopePicker(k)}
         <span class="${rule ? "restricted" : ""}">${rule ? icon("shield", "tinyicon") : ""}
           Readable by ${esc(label)}</span>
         <button class="icon" data-aud="${esc(k)}">${icon("pencil", "tinyicon")} Change</button>
-      </div>`;
+        ${prule ? `<span class="restricted">${icon("folder", "tinyicon")} ${esc(plabel)}</span>` : ""}
+        <button class="icon" data-proj="${esc(k)}">${icon("folder", "tinyicon")}
+          ${prule ? "Projects" : "Limit to a project"}</button>
+      </div>${projectsFor === k ? projectEditor(k) : ""}`;
     }
     const known = cat.agents || [];
     const draft = audienceDraft || { mode: rule?.mode || "all", agents: [...(rule?.agents || [])] };
@@ -891,6 +900,67 @@
       <div class="audmodes">
         <button class="act primary" data-audsave="${esc(k)}" ${ready && !busy ? "" : "disabled"}>Save</button>
         <button class="act" data-audcancel="1">Cancel</button>
+      </div>
+    </div>`;
+  }
+
+  /** Which projects a key is for.
+   *
+   *  The same three modes as the agent audience, because it is the same
+   *  question asked about a different noun. A project is a claim its caller
+   *  makes — usually the basename of a git root — which is exactly the standing
+   *  an agent name has, and it buys the same thing: a key limited to one
+   *  checkout is not handed to an agent running in another, so an instruction
+   *  smuggled into one repository cannot spend another repository's credentials.
+   */
+  function projectEditor(k) {
+    const cat = state.catalog || {};
+    const rule = cat.projects?.[k];
+    const draft = projectsDraft
+      || { mode: rule?.mode || "all", projects: [...(rule?.projects || [])] };
+    const known = [...new Set([...(cat.projects_seen || []),
+                               ...(cat.project ? [cat.project] : []),
+                               ...draft.projects])].sort();
+    const needs = draft.mode !== "all";
+    const ready = !needs || draft.projects.length > 0;
+    const modeLabel = (m) => ({ all: "Every project", include: "Only these",
+                                exclude: "All except" }[m]);
+    const summary = draft.mode === "all"
+      ? "readable from any project"
+      : draft.projects.length
+        ? (draft.mode === "include"
+            ? `readable only from ${draft.projects.join(", ")}`
+            : `readable everywhere except ${draft.projects.join(", ")}`)
+        : "now pick which projects";
+
+    return `<div class="audedit">
+      <div class="sub">Which projects may read <span class="mono">${esc(k)}</span>?</div>
+      <div class="audmodes">
+        ${["all", "include", "exclude"].map((m) =>
+          `<button class="act ${draft.mode === m ? "primary" : ""}" data-projmode="${m}"
+            aria-pressed="${draft.mode === m}">${modeLabel(m)}</button>`).join("")}
+      </div>
+      ${needs ? `
+        ${known.length ? `<div class="audlist">
+          ${known.map((name) => `<label><input type="checkbox" data-projname="${esc(name)}"
+            ${draft.projects.includes(name) ? "checked" : ""} /> ${esc(name)}${
+              name === cat.project ? " (here)" : ""}</label>`).join("")}
+        </div>` : ""}
+        <div class="addrow two">
+          <input id="proj-new" placeholder="Another project name" spellcheck="false"
+            value="${esc(projectTyped)}" />
+          <button class="act" data-projadd>${icon("plus")} Add</button>
+        </div>` : ""}
+      <p class="note">${draft.mode === "exclude"
+        ? "Excluding a project is final: a caller working there is refused whatever the access mode says."
+        : `Result: ${esc(summary)}.`}</p>
+      <p class="note">A project is what the caller says it is \u2014 the name of its git root,
+      or <span class="mono">PASSBOOK_PROJECT</span>. It is a claim, like an agent's name, not a
+      password. It stops a confused agent reaching across checkouts; it does not stop someone
+      who already runs code as you.</p>
+      <div class="audmodes">
+        <button class="act primary" data-projsave="${esc(k)}" ${ready && !busy ? "" : "disabled"}>Save</button>
+        <button class="act" data-projcancel="1">Cancel</button>
       </div>
     </div>`;
   }
@@ -1758,7 +1828,56 @@ passbook oauth connect google:work</pre>
     });
 
     main.querySelectorAll("[data-aud]").forEach((b) => b.onclick = () => {
-      audienceFor = b.dataset.aud; audienceDraft = null; paint();
+      audienceFor = b.dataset.aud; audienceDraft = null;
+      projectsFor = null; projectsDraft = null; paint();
+    });
+    main.querySelectorAll("[data-proj]").forEach((b) => b.onclick = () => {
+      projectsFor = b.dataset.proj; projectsDraft = null; projectTyped = "";
+      audienceFor = null; audienceDraft = null; paint();
+    });
+    main.querySelectorAll("[data-projcancel]").forEach((b) => b.onclick = () => {
+      projectsFor = null; projectsDraft = null; projectTyped = ""; paint();
+    });
+    main.querySelectorAll("[data-projmode]").forEach((b) => b.onclick = () => {
+      const rule = state.catalog?.projects?.[projectsFor];
+      projectsDraft = projectsDraft
+        || { mode: rule?.mode || "all", projects: [...(rule?.projects || [])] };
+      const next = b.dataset.projmode;
+      // `include` and `exclude` mean opposite things about the same names, so a
+      // flip starts empty rather than carrying a selection across a change of
+      // meaning nobody asked for.
+      if (next !== projectsDraft.mode) projectsDraft.projects = [];
+      projectsDraft.mode = next;
+      paint();
+    });
+    main.querySelectorAll("[data-projname]").forEach((c) => c.onchange = () => {
+      projectsDraft = projectsDraft || { mode: "include", projects: [] };
+      const name = c.dataset.projname;
+      projectsDraft.projects = c.checked
+        ? [...new Set([...projectsDraft.projects, name])]
+        : projectsDraft.projects.filter((p) => p !== name);
+      paint();
+    });
+    main.querySelectorAll("[data-projadd]").forEach((b) => b.onclick = () => {
+      const box = document.getElementById("proj-new");
+      const name = (box?.value ?? "").trim();
+      if (!name) return;
+      projectsDraft = projectsDraft || { mode: "include", projects: [] };
+      if (projectsDraft.mode === "all") projectsDraft.mode = "include";
+      projectsDraft.projects = [...new Set([...projectsDraft.projects, name])];
+      projectTyped = "";
+      paint();
+    });
+    main.querySelectorAll("[data-projsave]").forEach((b) => b.onclick = async () => {
+      const draft = projectsDraft || { mode: "all", projects: [] };
+      busy = true; paint();
+      try {
+        state = await invoke("set_key_projects", {
+          name: b.dataset.projsave, mode: draft.mode,
+          projects: draft.mode === "all" ? [] : draft.projects });
+        notice = ""; projectsFor = null; projectsDraft = null; projectTyped = ""; grid = null;
+      } catch (e) { notice = String(e); }
+      finally { busy = false; paint(); }
     });
     main.querySelectorAll("[data-audcancel]").forEach((b) => b.onclick = () => {
       audienceFor = null; audienceDraft = null; paint();
@@ -1950,6 +2069,13 @@ passbook oauth connect google:work</pre>
     });
     // innerHTML is replaced on every paint, so typing would lose focus after
     // each keystroke without restoring it here.
+    const projBox = document.getElementById("proj-new");
+    if (projBox) {
+      projBox.oninput = () => { projectTyped = projBox.value; };
+      projBox.onkeydown = (e) => {
+        if (e.key === "Enter") { e.preventDefault(); document.querySelector("[data-projadd]")?.click(); }
+      };
+    }
     ["q-keys", "q-access"].forEach((id) => {
       const box = document.getElementById(id);
       if (!box) return;

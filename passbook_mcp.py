@@ -206,7 +206,7 @@ def _visible(agent: str, names: list[str], policy: Mapping[str, Any], root: Path
         if catalog is not None:
             entry["group"] = catalog.group_of(name, policy)
         if access is not None:
-            verdict = access.decide_key(agent, name, policy, root=root)
+            verdict = access.decide_key(agent, name, policy, root=root, project=passbook.project())
             entry["access"] = verdict["outcome"]
             entry["why"] = verdict["why"]
         else:
@@ -278,7 +278,7 @@ def _tool_get_credential(arguments: Mapping[str, Any], state: Mapping[str, Any])
     # door rather than at the one that happens to be open.
     if access is not None:
         policy = access.read_policy(root)
-        verdict = access.decide_key(agent, name, policy, root=root)
+        verdict = access.decide_key(agent, name, policy, root=root, project=passbook.project())
         if verdict["outcome"] == "refuse":
             _record(agent, name, granted=False, reason=verdict["why"], root=root)
             return {"name": name, "value": None, "refused": True, "why": verdict["why"]}
@@ -371,7 +371,8 @@ def _tool_get_oauth_token(arguments: Mapping[str, Any], state: Mapping[str, Any]
     # agent excluded from the access-token key is excluded from the token.
     access = _access()
     if access is not None:
-        verdict = access.decide_key(agent, keys["access_token"], access.read_policy(root), root=root)
+        verdict = access.decide_key(agent, keys["access_token"], access.read_policy(root), root=root,
+                                  project=passbook.project())
         if verdict["outcome"] == "refuse":
             _record(agent, keys["access_token"], granted=False, reason=verdict["why"], root=root)
             return {"id": identifier, "token": None, "refused": True, "why": verdict["why"]}

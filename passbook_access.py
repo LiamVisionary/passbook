@@ -436,6 +436,102 @@ def audience_allows(app: str, key: str, policy: Mapping[str, Any]) -> dict[str, 
     return {"allowed": True, "why": "not excluded"}
 
 
+# ── projects ───────────────────────────────────────────────────────────────
+#
+# A third bound, beside scope (which workspaces) and audience (which agents):
+# which PROJECTS a key is for. The same three modes, because they are the same
+# question asked about a different noun, and a second vocabulary for `include`
+# would be a second thing to learn.
+#
+# A project is a claim the caller makes, exactly like an agent name — usually
+# the basename of its git root. It decides policy and fills the record; it is
+# not a password, and this file does not pretend otherwise. What it buys is
+# real all the same: a key scoped to one project is not handed to an agent
+# running in a different checkout, so a prompt injection in one repository
+# cannot spend another repository's credentials.
+
+PROJECT_MODES = ("all", "include", "exclude")
+
+
+def project_for(key: str, policy: Mapping[str, Any]) -> dict[str, Any]:
+    """A key's projects, normalised. Anything unreadable degrades to `all`.
+
+    Open rather than shut, for the reason `audience_for` degrades open: a
+    corrupt entry must not cut every project off from a credential, because the
+    failure would look like an outage somewhere else entirely.
+    """
+    raw = key_entry(key, policy).get("projects", "all")
+    if isinstance(raw, str):
+        return {"mode": "all", "projects": []} if raw.strip().lower() in {"", "all", "*"} else {
+            "mode": "include", "projects": [raw.strip()]}
+    if isinstance(raw, list):
+        return {"mode": "include",
+                "projects": sorted({str(a).strip() for a in raw if str(a).strip()})}
+    if isinstance(raw, dict):
+        for mode in ("include", "exclude"):
+            listed = raw.get(mode)
+            if isinstance(listed, list):
+                names = sorted({str(a).strip() for a in listed if str(a).strip()})
+                if names:
+                    return {"mode": mode, "projects": names}
+    return {"mode": "all", "projects": []}
+
+
+def project_allows(project: str, key: str, policy: Mapping[str, Any]) -> dict[str, Any]:
+    """May a caller working in this project see this key?"""
+    rule = project_for(key, policy)
+    name = str(project).strip()
+    if rule["mode"] == "all":
+        return {"allowed": True, "why": "every project"}
+    if not name:
+        # An `include` list is a statement that this key belongs to named
+        # projects. A caller that names none is not one of them.
+        if rule["mode"] == "include":
+            return {"allowed": False,
+                    "why": f"this key is limited to {', '.join(rule['projects'])}, "
+                           "and this caller named no project"}
+        return {"allowed": True, "why": "no project named, and none is excluded"}
+    if rule["mode"] == "include":
+        if name in rule["projects"]:
+            return {"allowed": True, "why": f"{name} is on this key's list"}
+        return {"allowed": False,
+                "why": f"this key is limited to {', '.join(rule['projects'])}"}
+    if name in rule["projects"]:
+        return {"allowed": False, "why": f"{name} is excluded from this key"}
+    return {"allowed": True, "why": "not excluded"}
+
+
+def set_projects(key: str, mode: str, projects: Iterable[str],
+                 policy: MutableMapping[str, Any]) -> dict[str, Any]:
+    """Set which projects a key is for. Returns the normalised rule."""
+    mode = str(mode).strip().lower()
+    if mode not in PROJECT_MODES:
+        raise ValueError(f"projects must be one of {', '.join(PROJECT_MODES)}")
+    names = sorted({str(a).strip() for a in projects if str(a).strip()})
+    if mode != "all" and not names:
+        raise ValueError(f"`{mode}` needs at least one project name")
+    keys = policy.setdefault("keys", {})
+    entry = keys.setdefault(str(key), {})
+    entry["projects"] = "all" if mode == "all" else {mode: names}
+    return project_for(key, policy)
+
+
+def projects_seen(policy: Mapping[str, Any]) -> list[str]:
+    """Every project name any key mentions, so a picker has something to show."""
+    names: set[str] = set()
+    for entry in (policy.get("keys") or {}).values():
+        raw = entry.get("projects") if isinstance(entry, dict) else None
+        if isinstance(raw, dict):
+            for listed in raw.values():
+                if isinstance(listed, list):
+                    names.update(str(a).strip() for a in listed if str(a).strip())
+        elif isinstance(raw, list):
+            names.update(str(a).strip() for a in raw if str(a).strip())
+        elif isinstance(raw, str) and raw.strip().lower() not in {"", "all", "*"}:
+            names.add(raw.strip())
+    return sorted(names)
+
+
 def set_audience(key: str, mode: str, agents: Iterable[str], policy: MutableMapping[str, Any]) -> dict[str, Any]:
     """Set a key's audience in place. Returns the normalised rule."""
     mode = str(mode).strip().lower()
@@ -629,7 +725,7 @@ def requires_passkey(rule: Mapping[str, Any]) -> bool:
 
 
 def decide_key(app: str, key: str, policy: Mapping[str, Any], *, root: Path | None = None,
-               workspace: str | None = None) -> dict[str, Any]:
+               workspace: str | None = None, project: str | None = None) -> dict[str, Any]:
     """What to do about one key, right now: grant, refuse, or ask.
 
     Returns an outcome and the reason for it, because "denied" with no cause is
@@ -647,6 +743,19 @@ def decide_key(app: str, key: str, policy: Mapping[str, Any], *, root: Path | No
     reach = scope_allows(workspace, key, policy)
     if not reach["allowed"]:
         return {"outcome": "refuse", "mode": "never", "why": reach["why"], "scope": True}
+
+    # Then the project, for the same reason and in the same way: a key that is
+    # not this project's is not this project's whoever is asking for it.
+    if project is None:
+        try:
+            import passbook
+
+            project = passbook.project()
+        except Exception:  # noqa: BLE001 — no project is the common case
+            project = ""
+    belongs = project_allows(project, key, policy)
+    if not belongs["allowed"]:
+        return {"outcome": "refuse", "mode": "never", "why": belongs["why"], "project": True}
 
     # The audience is a bound, not a preference: if this key is not for this
     # agent, no mode and no unlock can produce a grant.

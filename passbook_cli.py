@@ -526,8 +526,12 @@ def cmd_unseal(args: argparse.Namespace) -> int:
     if opened is None:
         return 1
     dek, profile = opened
-    result = module.unseal_store(dek, profile_id=profile)
+    result = module.unseal_store(dek, profile_id=profile, only=getattr(args, "only", []) or [])
     print(result.get("detail", ""))
+    if result.get("opened") and getattr(args, "only", None):
+        print("They will stay readable through future seals.")
+    if result.get("absent"):
+        print(f"Not in this store: {', '.join(result['absent'])}", file=sys.stderr)
     if result.get("stuck"):
         print(f"Still sealed: {', '.join(result['stuck'])}", file=sys.stderr)
         print("Those were sealed under a different profile.", file=sys.stderr)
@@ -1987,6 +1991,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     unseal = subs.add_parser("unseal", help="put the store back to plaintext — the way out of sealing")
     unseal.add_argument("--profile", default="", help="which profile sealed it; omit for the active one")
+    unseal.add_argument("--only", nargs="+", default=[], metavar="KEY",
+                        help="release just these, and remember to leave them readable")
     unseal.add_argument("--password-stdin", dest="password_stdin",
         action="store_true", help="read the password from stdin instead of prompting")
     unseal.set_defaults(func=cmd_unseal)

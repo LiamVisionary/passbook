@@ -716,11 +716,19 @@ def seal_store(
 
 def unseal_store(
     dek: bytes, *, profile_id: str = "", root: Path | None = None, path: Path | None = None,
+    only: Iterable[str] = (),
 ) -> dict[str, Any]:
     """Put the store back to plaintext. The door out.
 
     Sealing without this is a one-way trip, and a security feature you cannot
     reverse is one people are right to refuse to turn on.
+
+    `only` releases named keys and nothing else, and remembers them so the next
+    seal leaves them alone. That is for the values that are not secrets and
+    cannot be read by anything that could sign in — a boot flag some hook
+    compares to "1" before a broker exists. Sealed, such a value silently
+    changes a setting rather than protecting anything, and the symptom shows up
+    somewhere else entirely as a feature that quietly stopped.
     """
     import passbook
 
@@ -733,7 +741,17 @@ def unseal_store(
     except (OSError, UnicodeDecodeError):
         return {"ok": False, "opened": [], "detail": f"No store at {target}"}
 
-    sealed = {n: v for n, v in current.items() if is_sealed(v)}
+    wanted = {str(name).strip() for name in only if str(name).strip()}
+    sealed = {n: v for n, v in current.items() if is_sealed(v) and (not wanted or n in wanted)}
+    if wanted:
+        absent = sorted(name for name in wanted if name not in current)
+        unsealed_already = sorted(name for name in wanted
+                                  if name in current and not is_sealed(current[name]))
+        if not sealed:
+            return {"ok": not absent, "opened": [], "absent": absent,
+                    "already_plain": unsealed_already,
+                    "detail": ("Nothing named there is sealed." if not absent
+                               else f"Not in this store: {', '.join(absent)}")}
     if not sealed:
         return {"ok": True, "opened": [], "detail": "Nothing is sealed at v2."}
     opened: dict[str, str] = {}
@@ -743,6 +761,10 @@ def unseal_store(
             opened[name] = unseal_value(name, value, dek, profile_id=profile_id)
         except InvalidFactor:
             stuck.append(name)
+    if opened and wanted:
+        # Remember them, or the next seal pass quietly swallows them again and
+        # the same setting turns itself off a second time.
+        set_skip_list(set(skip_list(root=root)) | set(opened), root=root)
     if opened:
         # `exact` because this is a move, not a set: whatever was encrypted has
         # to come back byte for byte, trailing whitespace included. One real

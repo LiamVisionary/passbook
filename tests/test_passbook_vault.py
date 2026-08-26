@@ -405,3 +405,36 @@ def test_reads_while_sealed_are_exact_too(root):
     vault.seal_store(dek, profile_id=pid, root=root)
     on_disk = passbook.parse_env_text((root / ".env").read_text(encoding="utf-8"))
     assert vault.unseal_mapping(on_disk, dek, profile_id=pid)["ODD_ONE"] == odd
+
+
+def test_one_key_can_be_released_and_stays_released(root):
+    """A boot flag that got sealed silently turns a feature off, and the symptom
+    appears somewhere else entirely. Releasing it must also be remembered, or
+    the next seal pass turns it off again."""
+    passbook.set_values({"TIP_BOT_AUTOSTART": "1"}, overwrite=True)
+    pid = _profile(root)
+    dek = vault.unlock_with_password(pid, PASSWORD, root=root)
+    vault.seal_store(dek, profile_id=pid, root=root)
+    assert vault.is_sealed(passbook.parse_env_text((root / ".env").read_text())["TIP_BOT_AUTOSTART"])
+
+    result = vault.unseal_store(dek, profile_id=pid, root=root, only=["TIP_BOT_AUTOSTART"])
+    on_disk = passbook.parse_env_text((root / ".env").read_text(encoding="utf-8"))
+    assert result["opened"] == ["TIP_BOT_AUTOSTART"]
+    assert on_disk["TIP_BOT_AUTOSTART"] == "1"
+    assert vault.is_sealed(on_disk["OPENAI_API_KEY"]), "releasing one key unsealed the rest"
+
+    # And a later seal must leave it alone.
+    passbook.set_values({"ADDED_LATER": "plain"}, overwrite=True)
+    vault.seal_store(dek, profile_id=pid, root=root)
+    after = passbook.parse_env_text((root / ".env").read_text(encoding="utf-8"))
+    assert after["TIP_BOT_AUTOSTART"] == "1", "the release was forgotten"
+    assert vault.is_sealed(after["ADDED_LATER"])
+
+
+def test_releasing_a_key_that_is_not_there_says_so(root):
+    pid = _profile(root)
+    dek = vault.unlock_with_password(pid, PASSWORD, root=root)
+    vault.seal_store(dek, profile_id=pid, root=root)
+    result = vault.unseal_store(dek, profile_id=pid, root=root, only=["NOT_A_KEY"])
+    assert not result["ok"] and result["absent"] == ["NOT_A_KEY"]
+    assert result["opened"] == []

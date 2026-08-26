@@ -215,3 +215,15 @@ def test_malformed_json_is_answered_not_fatal(machine):
     out = io.StringIO()
     mcp.serve(stdin=io.StringIO("{not json\n"), stdout=out)
     assert json.loads(out.getvalue())["error"]["code"] == -32700
+
+
+def test_listing_does_not_promise_what_a_locked_vault_cannot_give(machine, monkeypatch):
+    """`readable_now` counted policy grants while the vault was shut, so an agent
+    was told a key was readable and then refused it."""
+    monkeypatch.setattr(mcp, "_store_is_locked", lambda root: True)
+    payload = _call(_session(), "list_credentials")
+    assert payload["readable_now"] == 0
+    assert {c["access"] for c in payload["credentials"]} == {"locked"}
+    assert all("sign in" in c["why"] for c in payload["credentials"])
+    # The names are still there — that is the point of a locked store.
+    assert len(payload["credentials"]) == 3

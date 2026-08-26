@@ -145,9 +145,33 @@ def _client_name(state: Mapping[str, Any]) -> str:
     return str(state.get("client") or "mcp-client")
 
 
+def _store_is_locked(root: Path | None) -> bool:
+    """Sealed, and nobody signed in. Policy cannot see this; the vault can."""
+    try:
+        import passbook_vault
+    except ImportError:
+        return False
+    try:
+        if not passbook_vault.status(root=root).get("sealed"):
+            return False
+    except Exception:  # noqa: BLE001
+        return False
+    try:
+        import passbook_broker
+
+        return not passbook_broker.vault_status(root=root).get("unlocked")
+    except Exception:  # noqa: BLE001 — no broker over a sealed store means shut
+        return True
+
+
 def _visible(agent: str, names: list[str], policy: Mapping[str, Any], root: Path | None):
     access = _access()
     catalog = _catalog_module()
+    # Policy answers "may this agent", the vault answers "can anyone right now".
+    # Reporting the first alone told an agent a key was readable and then refused
+    # it — a contradiction that sends an agent round in circles instead of
+    # telling the owner to sign in.
+    locked = _store_is_locked(root)
     out = []
     for name in names:
         entry: dict[str, Any] = {"name": name}
@@ -159,6 +183,9 @@ def _visible(agent: str, names: list[str], policy: Mapping[str, Any], root: Path
             entry["why"] = verdict["why"]
         else:
             entry["access"] = "grant"
+        if locked and entry["access"] == "grant":
+            entry["access"] = "locked"
+            entry["why"] = "the store is locked; the owner needs to sign in"
         out.append(entry)
     return out
 

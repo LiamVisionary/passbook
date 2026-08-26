@@ -1753,6 +1753,35 @@ def cmd_sync(args: argparse.Namespace) -> int:
         print(f"  - {key}: {why}")
     if not args.apply:
         print("\nNothing was changed. Add --apply to pull what is listed above.")
+        return 0
+
+    if not plan["apply"]:
+        return 0
+
+    # Writing back. If the store is sealed the incoming values must be sealed
+    # too, and if they cannot be, NOTHING is written — a peer's value landing
+    # as plaintext beside encrypted ones is the outcome this whole path exists
+    # to prevent, and there is deliberately no fallback that does it anyway.
+    store_sealed = any(passbook_vault.is_sealed(v) for v in raw.values())
+    if store_sealed:
+        import passbook_broker
+
+        answer = passbook_broker.seal_values(plan["apply"], app="passbook-sync",
+                                             workspace_id=passbook.workspace())
+        if not answer.get("ok"):
+            return _fail(
+                f"Held back {len(plan['apply'])} key(s): {answer.get('error', 'could not seal')}",
+                "Sign in so they can be written encrypted:  passbook signin")
+        written = answer.get("written") or sorted(plan["apply"])
+    else:
+        result = passbook.set_values(plan["apply"], overwrite=True, exact=True)
+        written = sorted({*result.get("added", []), *result.get("updated", [])})
+
+    # Stamp what arrived so the next pass compares ages correctly. Without this
+    # the key looks older than every peer's copy and the write undoes itself.
+    if written:
+        passbook_sync.touch_meta(store, written)
+    print(f"\nPulled {len(written)} key(s).")
     return 0
 
 

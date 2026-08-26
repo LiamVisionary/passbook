@@ -134,7 +134,12 @@
   .navfoot-t { font-size: 12px; font-weight: 600; }
   .navfoot-s { font-size: 11px; color: var(--ink3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .navfoot.open .navfoot-main svg { color: var(--good); }
-  .navfoot.shut .navfoot-main svg { color: var(--warn); }
+  /* Locked AND encrypted is the good state; it should not wear the warning
+     colour that a store sitting in the clear needs. */
+  .navfoot.shut .navfoot-main svg { color: var(--good); }
+  .navfoot.exposed { border-color: var(--warn); background: var(--warn-soft); }
+  .navfoot.exposed .navfoot-main svg { color: var(--warn); }
+  .navfoot.exposed .navfoot-t { color: var(--warn); }
 
   /* ── content ─────────────────────────────────────────────────────────── */
   main { flex: 1; overflow-y: auto; padding: 30px 28px 32px; -webkit-app-region: drag; }
@@ -266,6 +271,14 @@
   }
   /* A hidden value is a chip beside its name, not a field of its own: a row of
      empty grey per key is most of what you see on a store of any size. */
+  /* Not decoration: this is the one place a person looking at a key can learn
+     that the lock in the sidebar does not cover it. */
+  .bare {
+    display: inline-flex; align-items: center; gap: 4px; white-space: nowrap;
+    font-size: 10.5px; font-weight: 600; letter-spacing: .01em;
+    color: var(--warn); background: var(--warn-soft);
+    border-radius: 5px; padding: 2px 7px;
+  }
   .masked {
     font: 10.5px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .1em;
     color: var(--ink3); background: var(--chip); border-radius: 5px;
@@ -645,17 +658,36 @@
     const v = vault;
     if (!v?.supported) return "";
     const open = !!v.unlocked;
-    const detail = open
-      ? profileLabel(v.signed_in_profile) + (v.expires_in ? ` · ${humanTime(v.expires_in)} left` : "")
-      : (v.fully_sealed ? "Nothing can read it" : "Values still readable");
+    const bare = (v.plaintext?.length ?? 0) + (v.legacy_v1?.length ?? 0);
     const where = state?.catalog?.workspace || state?.store?.workspace || "";
-    return `<div class="navfoot ${open ? "open" : "shut"}">
-      <button class="navfoot-main" data-page="switch"
-        title="Workspace and sign-in">
-        ${icon(open ? "unlock" : "lock", "navicon")}
+
+    // Three states, not two, because "locked" and "protected" are not the same
+    // thing and this footer used to say the first while meaning neither.
+    //
+    // A locked vault over a store that is mostly plaintext is the worst of
+    // them: it reads as safety, and the reassurance is the danger. It gets the
+    // count in the headline, where "Vault locked" used to sit, because a person
+    // who has just pressed Lock is looking at exactly this corner and deserves
+    // to be told that pressing it did not do what the word says.
+    const exposed = bare > 0;
+    const tone = open ? "open" : exposed ? "exposed" : "shut";
+    const headline = exposed
+      ? `${bare} readable`
+      : (open ? "Vault open" : "Vault locked");
+    const detail = exposed
+      ? "not encrypted on disk"
+      : open
+        ? profileLabel(v.signed_in_profile) + (v.expires_in ? ` \u00b7 ${humanTime(v.expires_in)} left` : "")
+        : "nothing can read it";
+    const glyph = exposed ? "alert" : open ? "unlock" : "lock";
+
+    return `<div class="navfoot ${tone}">
+      <button class="navfoot-main" data-page="vault"
+        title="${exposed ? `${bare} value(s) are in the clear on disk` : "Workspace and sign-in"}">
+        ${icon(glyph, "navicon")}
         <span class="col">
-          <span class="navfoot-t">${open ? "Vault open" : "Vault locked"}</span>
-          <span class="navfoot-s">${esc(where ? `${where} \u00b7 ${detail}` : detail)}</span>
+          <span class="navfoot-t">${esc(headline)}</span>
+          <span class="navfoot-s">${esc(exposed || !where ? detail : `${where} \u00b7 ${detail}`)}</span>
         </span>
       </button>
       ${open ? `<button class="iconbtn navlock" data-locknow title="Lock and switch workspace"
@@ -689,15 +721,32 @@
   // Mirrors the HivemindOS agent-env card: name and actions on one line, the
   // value on its own line underneath — masked until revealed, editable in
   // place, saved on blur.
-  function keyRow(k) {
+  /** Keys sitting in the clear, as a set the rows can ask cheaply.
+   *
+   *  Read from the vault where it answers, else the state's own sealing block.
+   *  Both now come from the v2 vault, so they cannot disagree.
+   */
+  function readableSet() {
+    const source = vault?.supported ? vault : state?.sealing;
+    const listed = source?.plaintext;
+    return new Set(Array.isArray(listed) ? listed : []);
+  }
+
+  function keyRow(k, readable) {
     const shown = revealed[k];
     const pending = confirming === k;
+    // A key nobody encrypted is not protected by the vault, whatever the vault
+    // says about itself. Saying so on the row is the whole point: this app told
+    // someone "Vault locked" in the sidebar while the eye icon beside every key
+    // still worked, and the sentence that explained why was below 279 rows.
+    const bare = readable ? readable.has(k) : false;
     return `<div class="keyrow">
       <div class="head">
         <input type="checkbox" class="pick" data-pick="${esc(k)}"
           ${picked[k] ? "checked" : ""} aria-label="Select ${esc(k)}" />
         <span class="named"><span class="mono">${esc(k)}</span>
-          ${shown || pending ? "" : `<span class="masked" title="Hidden">••••••••••</span>`}</span>
+          ${shown || pending ? "" : `<span class="masked" title="Hidden">••••••••••</span>`}
+          ${bare ? `<span class="bare" title="This value is not encrypted. Anything running as you can read it, signed in or not.">${icon("unlock", "tinyicon")} readable</span>` : ""}</span>
         ${pending ? `
           <span class="confirming"><span class="sub">Remove it? Another app may be using it,
             and the value is not recoverable from here.</span></span>
@@ -788,7 +837,8 @@
   function groupedKeys(keys) {
     if (!keys.length) return "";
     const cat = state.catalog;
-    if (!cat?.available || query.trim()) return keys.map((k) => keyRow(k)).join("");
+    const readable = readableSet();
+    if (!cat?.available || query.trim()) return keys.map((k) => keyRow(k, readable)).join("");
 
     const shown = new Set(keys);
     const buckets = [];
@@ -796,7 +846,7 @@
       const here = members.filter((m) => shown.has(m));
       if (here.length) buckets.push([group, here]);
     }
-    if (buckets.length < 2) return keys.map((k) => keyRow(k)).join("");
+    if (buckets.length < 2) return keys.map((k) => keyRow(k, readable)).join("");
 
     return buckets.map(([group, members]) => {
       const shut = collapsed[group];
@@ -810,7 +860,7 @@
           ${restricted ? `<span class="grestricted">${icon("shield", "tinyicon")}
             ${restricted} restricted</span>` : ""}
         </div>
-        ${shut ? "" : members.map((k) => keyRow(k)).join("")}`;
+        ${shut ? "" : members.map((k) => keyRow(k, readable)).join("")}`;
     }).join("");
   }
 

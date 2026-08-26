@@ -753,6 +753,33 @@ def matches_skip(name: str, patterns: Iterable[str]) -> bool:
     return False
 
 
+def _record_seal_change(op: str, names: list[str], *, profile_id: str, detail: str,
+                        root: Path | None = None) -> None:
+    """Write a seal or unseal into the ledger, by key name, never by value.
+
+    Here rather than in the CLI because the CLI is not the only caller. A
+    background sync decrypted 192 keys through this function and left no row
+    anywhere, so the erosion was invisible until somebody noticed Reveal still
+    working after they pressed Lock. Recording at the door every caller must
+    pass through is the only version of this that cannot be bypassed by
+    forgetting.
+
+    Failing to record must never fail the operation itself: a store that cannot
+    be sealed because its audit line would not write is worse than one sealed
+    with a gap in the record. The gap is loud in the count instead.
+    """
+    if not names:
+        return
+    try:
+        import passbook_stamp
+
+        passbook_stamp.stamp(op=op, keys=sorted(names), app="passbook-vault",
+                             reason=f"{detail} (profile {profile_id})", granted=True,
+                             root=root)
+    except Exception:  # noqa: BLE001 — see the docstring
+        pass
+
+
 def seal_store(
     dek: bytes, *, profile_id: str = "", root: Path | None = None, path: Path | None = None,
     skip: Iterable[str] = (),
@@ -794,10 +821,12 @@ def seal_store(
         overwrite=True,
     )
     left = sorted(exempt)
+    detail = (f"Sealed {len(plain)} value(s) under profile {profile_id}."
+              + (f" Left {len(left)} readable on purpose." if left else ""))
+    _record_seal_change("seal", sorted(plain), profile_id=profile_id,
+                        detail=f"sealed {len(plain)} value(s)", root=root)
     return {"ok": True, "sealed": sorted(plain), "path": str(target), "profile": profile_id,
-            "skipped": left,
-            "detail": f"Sealed {len(plain)} value(s) under profile {profile_id}."
-                      + (f" Left {len(left)} readable on purpose." if left else "")}
+            "skipped": left, "detail": detail}
 
 
 def unseal_store(
@@ -858,6 +887,8 @@ def unseal_store(
         # rollback that quietly trimmed it would be a migration that edits
         # credentials — which is a migration nobody should trust.
         passbook.set_values(opened, overwrite=True, exact=True)
+    _record_seal_change("unseal", sorted(opened), profile_id=profile_id,
+                        detail=f"opened {len(opened)} value(s) back to plaintext", root=root)
     return {"ok": not stuck, "opened": sorted(opened), "stuck": sorted(stuck),
             "path": str(target),
             "detail": (f"Opened {len(opened)} value(s) back to plaintext."

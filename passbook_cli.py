@@ -2011,12 +2011,26 @@ def machine_state() -> dict:
     # propose a path a person would recognise.
     state["home"] = str(Path.home())
 
+    # Ask the v2 vault, not the v1 module.
+    #
+    # `passbook_seal` predates `hive-sealed:v2:` and does not recognise it, so on
+    # a v2-sealed store it reported every encrypted value as plaintext — this
+    # machine had 261 sealed keys and this field said 0 sealed, 280 readable.
+    # The window prefers `vault` where it has it and falls back to this, so the
+    # fallback was the one that lied, on the screen whose whole job is saying
+    # whether anything is encrypted.
     try:
-        import passbook_seal
+        import passbook_vault
 
-        state["sealing"] = passbook_seal.status()
+        state["sealing"] = passbook_vault.status()
     except ImportError:
-        state["sealing"] = {"supported": False, "detail": "Encryption at rest is not installed."}
+        try:
+            import passbook_seal
+
+            state["sealing"] = passbook_seal.status()
+        except ImportError:
+            state["sealing"] = {"supported": False,
+                                "detail": "Encryption at rest is not installed."}
 
     try:
         import passbook_access
@@ -2161,6 +2175,14 @@ def cmd_reveal(args: argparse.Namespace) -> int:
     """
     value = passbook.reveal(args.key, app="passbook-cli", reason=args.reason)
     if not value:
+        # Three answers, not two — the same three `check` and `get` give. A key
+        # that is present but encrypted is not a key that is missing, and
+        # "is not set" over one of those sends a reader off to re-create a
+        # credential that was never gone, usually pasting a new value over the
+        # good one.
+        if args.key in set(passbook.key_names()):
+            return _fail(f"{args.key} is in this store, but encrypted and the vault is shut.",
+                         "Sign in to read it:  passbook signin")
         return _fail(f"{args.key} is not set.", "See what is:  passbook-list")
     print(value)
     return 0

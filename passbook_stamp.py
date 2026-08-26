@@ -83,6 +83,14 @@ OPERATIONS = frozenset({
     # that one now exists, and when, because a second one appearing is
     # something the owner should be able to notice.
     "recovery",
+    # Encrypting or decrypting the whole store.
+    #
+    # `unseal` is the most consequential operation in this file and it was the
+    # one operation the record could not hold. A background sync decrypted 192
+    # keys over about ninety minutes and left no row anywhere; the only reason
+    # anyone noticed was a person wondering why Reveal still worked after they
+    # pressed Lock. Every smaller act was recorded and the largest was not.
+    "seal", "unseal",
 })
 
 

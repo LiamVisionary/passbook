@@ -124,7 +124,13 @@ def test_state_still_answers_on_a_machine_with_nothing_optional_installed(machin
     import builtins
 
     real_import = builtins.__import__
-    optional = {"passbook_stamp", "passbook_seal", "passbook_link", "passbook_broker", "passbook_access"}
+    # `passbook_vault` joined this list when `state["sealing"]` moved onto it.
+    # It reported from `passbook_seal`, which predates `hive-sealed:v2:` and so
+    # called every v2-encrypted value plaintext — a machine with 261 sealed keys
+    # was told it had none. A bare machine has neither module, so refusing only
+    # the old one stopped simulating a bare machine.
+    optional = {"passbook_stamp", "passbook_seal", "passbook_vault", "passbook_link",
+                "passbook_broker", "passbook_access"}
 
     def refuse(name, *args, **kwargs):
         if name in optional:

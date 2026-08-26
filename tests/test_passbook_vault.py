@@ -502,3 +502,74 @@ def test_tidying_refuses_if_it_would_change_a_value(root, monkeypatch):
 def test_a_clean_file_needs_no_repair(root):
     assert passbook.duplicate_keys(root / ".env") == {}
     assert passbook.drop_duplicate_lines(root / ".env")["removed"] == {}
+
+
+# ── the record of sealing itself ───────────────────────────────────────────
+#
+# These exist because the erosion that prompted them was invisible. A sync
+# decrypted 192 of 262 keys over about ninety minutes, and the ledger — which
+# holds every read, every reveal, every sign-in — had no row for any of it. The
+# only thing that surfaced it was somebody noticing that Reveal still worked
+# after they pressed Lock.
+
+
+def _ledger(root: Path) -> list[dict]:
+    path = root / "credential-access-proofs.jsonl"
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+
+def _opened(root: Path):
+    pid = _profile(root)
+    return vault.unlock_with_password(pid, PASSWORD, root=root), pid
+
+
+def test_sealing_the_store_is_written_into_the_record(root):
+    dek, pid = _opened(root)
+
+    vault.seal_store(dek, profile_id=pid, root=root)
+
+    rows = [r for r in _ledger(root) if r["op"] == "seal"]
+    assert len(rows) == 1
+    assert set(rows[0]["keys"]) == {"OPENAI_API_KEY", "OTHER"}
+    # Names, never values — the same guarantee every other row makes.
+    assert "sk-not-a-real-key" not in json.dumps(rows[0])
+
+
+def test_decrypting_the_store_is_written_into_the_record(root):
+    dek, pid = _opened(root)
+    vault.seal_store(dek, profile_id=pid, root=root)
+
+    vault.unseal_store(dek, profile_id=pid, root=root)
+
+    rows = [r for r in _ledger(root) if r["op"] == "unseal"]
+    assert len(rows) == 1
+    assert set(rows[0]["keys"]) == {"OPENAI_API_KEY", "OTHER"}
+
+
+def test_a_seal_that_changes_nothing_writes_no_row(root):
+    """A pass over an already-sealed store is not an event."""
+    dek, pid = _opened(root)
+    vault.seal_store(dek, profile_id=pid, root=root)
+
+    vault.seal_store(dek, profile_id=pid, root=root)
+
+    assert len([r for r in _ledger(root) if r["op"] == "seal"]) == 1
+
+
+def test_a_record_that_cannot_be_written_does_not_stop_the_seal(root, monkeypatch):
+    """A store that refuses to encrypt because its audit line failed is worse
+    than one encrypted with a gap in the record."""
+    import passbook_stamp
+
+    def explode(**kwargs):
+        raise OSError("no room for the ledger")
+
+    monkeypatch.setattr(passbook_stamp, "stamp", explode)
+    dek, pid = _opened(root)
+
+    result = vault.seal_store(dek, profile_id=pid, root=root)
+
+    assert result["ok"] is True
+    assert set(result["sealed"]) == {"OPENAI_API_KEY", "OTHER"}

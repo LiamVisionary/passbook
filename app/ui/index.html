@@ -269,7 +269,11 @@
   let signins = null, connecting = {};
   // Which keys are ticked, and whether a bulk delete is awaiting a yes.
   let picked = {}, bulkConfirm = false;
-  let audienceFor = null;   // the key whose audience is being edited
+  // The key whose audience is open, and the edit in progress. The mode
+  // buttons used to apply on click, so choosing `Only chosen` before ticking
+  // anybody just set an error at the far bottom of a long list — which reads
+  // as a dead button. They pick a mode now; Save commits it.
+  let audienceFor = null, audienceDraft = null;
   // Which row is mid-edit. The background refresh must not wipe a half-typed
   // value out from under someone, so polling pauses while this is set.
   let revealed = {};    // key -> true once its value has been fetched and shown
@@ -524,21 +528,37 @@
       </div>`;
     }
     const known = cat.agents || [];
+    const draft = audienceDraft || { mode: rule?.mode || "all", agents: [...(rule?.agents || [])] };
+    const needsAgents = draft.mode !== "all";
+    const ready = !needsAgents || draft.agents.length > 0;
+    const modeLabel = (m) => ({ all: "Every agent", include: "Only chosen", exclude: "All except" }[m]);
+    const summary = draft.mode === "all"
+      ? "every agent will be able to read it"
+      : draft.agents.length
+        ? (draft.mode === "include"
+            ? `only ${draft.agents.join(", ")} will be able to read it`
+            : `everyone except ${draft.agents.join(", ")} will be able to read it`)
+        : "now pick which agents";
+
     return `<div class="audedit">
       <div class="sub">Who may read <span class="mono">${esc(k)}</span>?</div>
       <div class="audmodes">
-        <button class="act ${!rule ? "primary" : ""}" data-audset="${esc(k)}" data-mode="all">Every agent</button>
-        <button class="act ${rule?.mode === "include" ? "primary" : ""}" data-audset="${esc(k)}" data-mode="include">Only chosen</button>
-        <button class="act ${rule?.mode === "exclude" ? "primary" : ""}" data-audset="${esc(k)}" data-mode="exclude">All except</button>
+        ${["all", "include", "exclude"].map((m) =>
+          `<button class="act ${draft.mode === m ? "primary" : ""}" data-audmode="${m}"
+            aria-pressed="${draft.mode === m}">${modeLabel(m)}</button>`).join("")}
       </div>
-      ${known.length ? `<div class="audlist">
+      ${needsAgents ? (known.length ? `<div class="audlist">
         ${known.map((a) => `<label><input type="checkbox" data-audagent="${esc(a)}"
-          ${rule?.agents?.includes(a) ? "checked" : ""} /> ${esc(a)}</label>`).join("")}
+          ${draft.agents.includes(a) ? "checked" : ""} /> ${esc(a)}</label>`).join("")}
       </div>` : `<p class="note">No agents have asked for a credential yet, so there is
-        nobody to choose. They appear here once they do.</p>`}
-      <p class="note">Excluding an agent is final: it is refused whatever the access
-      mode says, and no approval or unlock overrides it.</p>
-      <button class="act" data-audcancel="1">Done</button>
+        nobody to choose. They appear here the first time one asks.</p>`) : ""}
+      <p class="note">${draft.mode === "exclude"
+        ? "Excluding an agent is final: it is refused whatever the access mode says, and no approval or unlock overrides it."
+        : `Result: ${esc(summary)}.`}</p>
+      <div class="audmodes">
+        <button class="act primary" data-audsave="${esc(k)}" ${ready && !busy ? "" : "disabled"}>Save</button>
+        <button class="act" data-audcancel="1">Cancel</button>
+      </div>
     </div>`;
   }
 
@@ -1103,23 +1123,40 @@ passbook oauth connect google:work</pre>
     });
 
     main.querySelectorAll("[data-aud]").forEach((b) => b.onclick = () => {
-      audienceFor = b.dataset.aud; paint();
+      audienceFor = b.dataset.aud; audienceDraft = null; paint();
     });
     main.querySelectorAll("[data-audcancel]").forEach((b) => b.onclick = () => {
-      audienceFor = null; paint();
+      audienceFor = null; audienceDraft = null; paint();
     });
-    main.querySelectorAll("[data-audset]").forEach((b) => b.onclick = async () => {
-      const mode = b.dataset.mode;
-      const chosen = [...main.querySelectorAll("[data-audagent]")]
-        .filter((x) => x.checked).map((x) => x.dataset.audagent);
-      if (mode !== "all" && !chosen.length) {
-        notice = "Tick at least one agent first."; paint(); return;
-      }
+    main.querySelectorAll("[data-audmode]").forEach((b) => b.onclick = () => {
+      const rule = state.catalog?.audiences?.[audienceFor];
+      audienceDraft = audienceDraft
+        || { mode: rule?.mode || "all", agents: [...(rule?.agents || [])] };
+      const next = b.dataset.audmode;
+      // Between `include` and `exclude` the same names mean opposite things —
+      // the agent that was the only one allowed becomes one of the blocked. So
+      // a flip starts empty rather than carrying a selection across a change of
+      // meaning that nobody asked for.
+      if (next !== audienceDraft.mode) audienceDraft.agents = [];
+      audienceDraft.mode = next;
+      paint();
+    });
+    main.querySelectorAll("[data-audagent]").forEach((c) => c.onchange = () => {
+      audienceDraft = audienceDraft || { mode: "include", agents: [] };
+      const who = c.dataset.audagent;
+      audienceDraft.agents = c.checked
+        ? [...new Set([...audienceDraft.agents, who])]
+        : audienceDraft.agents.filter((a) => a !== who);
+      paint();
+    });
+    main.querySelectorAll("[data-audsave]").forEach((b) => b.onclick = async () => {
+      const draft = audienceDraft || { mode: "all", agents: [] };
       busy = true; paint();
       try {
-        state = await invoke("set_key_audience",
-          { name: b.dataset.audset, mode, agents: mode === "all" ? [] : chosen });
-        notice = ""; audienceFor = null; grid = null;
+        state = await invoke("set_key_audience", {
+          name: b.dataset.audsave, mode: draft.mode,
+          agents: draft.mode === "all" ? [] : draft.agents });
+        notice = ""; audienceFor = null; audienceDraft = null; grid = null;
       } catch (e) { notice = String(e); }
       finally { busy = false; paint(); }
     });

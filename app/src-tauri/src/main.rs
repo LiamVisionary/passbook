@@ -588,6 +588,16 @@ fn make_recovery_code(password: String) -> Result<Value, String> {
     Ok(serde_json::json!({ "ok": true, "code": code }))
 }
 
+/// Stop counting a tailnet machine as holding this store.
+#[tauri::command]
+fn forget_machine(host: String) -> Result<Value, String> {
+    if host.trim().is_empty() {
+        return Err("Which machine?".into());
+    }
+    run(&["forget", host.trim()])?;
+    state()
+}
+
 /// Switch which workspace this machine acts for.
 ///
 /// Written into HivemindOS's own manifest by the CLI, not a PassBook-side copy,
@@ -658,6 +668,7 @@ fn main() {
             vault_use_profile, vault_seal, vault_unseal, vault_secure, set_key_group, set_key_audience, set_key_scope, set_keys_scope, remove_keys,
             access_matrix, oauth_state, oauth_refresh, oauth_disconnect, oauth_connect,
             set_workspace, export_store, inspect_export, import_store, make_recovery_code,
+            forget_machine,
             set_key_projects, set_confirmation
         ])
         .run(tauri::generate_context!())

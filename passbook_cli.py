@@ -1628,6 +1628,26 @@ def cmd_recovery(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_forget(args: argparse.Namespace) -> int:
+    """Stop counting a tailnet machine as holding this store."""
+    module = _link_or_fail()
+    if module is None:
+        return 1
+    try:
+        result = module.forget(args.host)
+    except module.LinkError as error:
+        return _fail(str(error))
+    print(f"{args.host} is no longer recorded as holding this store.")
+    if result.get("rotate"):
+        print("\nThis does not unsend anything. That machine still has these "
+              "until they are changed at the provider:", file=sys.stderr)
+        for key in result["rotate"][:12]:
+            print(f"  {key}", file=sys.stderr)
+        if len(result["rotate"]) > 12:
+            print(f"  ... and {len(result['rotate']) - 12} more", file=sys.stderr)
+    return 0
+
+
 def cmd_sync(args: argparse.Namespace) -> int:
     """What replication would do, or does, between this machine and its peers.
 
@@ -1679,6 +1699,24 @@ def cmd_sync(args: argparse.Namespace) -> int:
     plan = passbook_sync.plan_pull(local, local_meta, payloads)
     allowed, withheld = passbook_sync.sendable({k: "" for k in raw})
 
+    # Record the machines that receive this store, so the Machines page stops
+    # saying "no linked machines" while four of them hold it. Recorded as
+    # `tailnet` rather than as grants: no fingerprint was compared, and the
+    # page must not imply one was.
+    adopted = []
+    if not args.no_adopt:
+        try:
+            import passbook_link
+
+            for peer in peers:
+                if peer["host"] in unreachable:
+                    continue
+                passbook_link.adopt(peer["host"], keys=sorted(allowed), node=peer["port"])
+                adopted.append(peer["host"])
+        except Exception as error:  # noqa: BLE001 — never fail a dry run on bookkeeping
+            notice = f"could not record the machines: {error}"
+            print(notice, file=sys.stderr)
+
     if args.json:
         print(json.dumps({
             "peers": [p["host"] for p in peers],
@@ -1689,6 +1727,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
             "refusedSealedFromPeer": plan["refusedSealedFromPeer"],
             "mayReplicate": len(allowed),
             "withheldByReach": sorted(withheld),
+            "adopted": adopted,
         }, indent=2))
         return 0
 
@@ -1707,6 +1746,8 @@ def cmd_sync(args: argparse.Namespace) -> int:
             print(f"\n{label}: {len(names)}")
             for key in sorted(names)[:10]:
                 print(f"  - {key}")
+    if adopted:
+        print(f"\nrecorded on the Machines page: {len(adopted)} machine(s)")
     print(f"\nreach: {len(allowed)} key(s) may replicate, {len(withheld)} withheld")
     for key, why in sorted(withheld.items())[:10]:
         print(f"  - {key}: {why}")
@@ -2991,9 +3032,15 @@ def build_parser() -> argparse.ArgumentParser:
     recovery_cmd.add_argument("--password-stdin", dest="password_stdin", action="store_true")
     recovery_cmd.set_defaults(func=cmd_recovery)
 
+    forget_cmd = subs.add_parser("forget", help="stop counting a tailnet machine as holding this store")
+    forget_cmd.add_argument("host")
+    forget_cmd.set_defaults(func=cmd_forget)
+
     sync_cmd = subs.add_parser("sync", help="what replication would move between this machine and its peers")
     sync_cmd.add_argument("--apply", action="store_true",
                           help="actually pull what the plan lists (default is a dry run)")
+    sync_cmd.add_argument("--no-adopt", dest="no_adopt", action="store_true",
+                          help="do not record the peers on the Machines page")
     sync_cmd.add_argument("--json", action="store_true")
     sync_cmd.set_defaults(func=cmd_sync)
 

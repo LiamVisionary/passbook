@@ -630,6 +630,73 @@ def accept(
     }
 
 
+# ── tailnet adoption ───────────────────────────────────────────────────────
+#
+# A machine can hold this store for a second reason: it shares the tailnet, and
+# replication reaches it. That is real access and it belonged on the Machines
+# page, but it is NOT a grant and must never be recorded as one.
+#
+# A grant is signed, names the keys it covers, and required a person to compare
+# a fingerprint on two screens. A tailnet adoption has none of that: the trust
+# came from tailnet membership, which somebody established elsewhere. Writing
+# it into `issued` would make the page say a fingerprint was checked when none
+# was, and the fingerprint check is the entire second factor.
+#
+# So it gets its own list, surfaces beside grants with `via` saying which kind
+# it is, and revokes through the same door.
+
+def adopt(host: str, *, keys: Iterable[str] = (), node: str = "",
+          root: Path | None = None) -> dict[str, Any]:
+    """Record that a tailnet machine receives this store. Idempotent."""
+    name = str(host).strip()
+    if not name:
+        raise LinkError("Which machine?")
+    state = _read_grants(root)
+    adopted = state.setdefault("tailnet", [])
+    for entry in adopted:
+        if entry.get("host") == name:
+            entry["seen"] = _stamp(_now())
+            entry["keys"] = sorted({*entry.get("keys", []), *[str(k) for k in keys]})
+            entry.pop("revoked", None)
+            _write_grants(state, root)
+            return dict(entry)
+    entry = {
+        "host": name,
+        "node": str(node or ""),
+        "keys": sorted({str(k) for k in keys}),
+        "adopted": _stamp(_now()),
+        "seen": _stamp(_now()),
+    }
+    adopted.append(entry)
+    _write_grants(state, root)
+    _record("link", sorted(entry["keys"]), granted=True,
+            reason=f"adopted tailnet machine {name}")
+    return dict(entry)
+
+
+def forget(host: str, *, root: Path | None = None) -> dict[str, Any]:
+    """Stop counting a tailnet machine as holding this store.
+
+    Like `revoke`, this does not unsend anything. The store is already on that
+    machine; what changes is that PassBook stops saying it belongs there.
+    """
+    name = str(host).strip()
+    state = _read_grants(root)
+    for entry in state.get("tailnet", []):
+        if entry.get("host") == name:
+            entry["revoked"] = _stamp(_now())
+            _write_grants(state, root)
+            _record("unlink", sorted(entry.get("keys", [])), granted=True,
+                    reason=f"forgot tailnet machine {name}")
+            return {"host": name, "revoked": True,
+                    "rotate": sorted(entry.get("keys", []))}
+    raise LinkError(f"No tailnet machine called {name!r} is recorded here.")
+
+
+def adopted(*, root: Path | None = None) -> list[dict[str, Any]]:
+    return [dict(entry) for entry in _read_grants(root).get("tailnet", [])]
+
+
 def grants(*, root: Path | None = None) -> dict[str, Any]:
     """What this machine has lent and borrowed. Key names only."""
     state = _read_grants(root)
@@ -650,10 +717,27 @@ def grants(*, root: Path | None = None) -> dict[str, Any]:
             "active": not expired and not entry.get("revoked"),
         }
 
+    def shape_tailnet(entry: Mapping[str, Any]) -> dict[str, Any]:
+        return {
+            "role": "lent",
+            "via": "tailnet",
+            "host": entry.get("host", ""),
+            "did": "",
+            "fingerprint": "",
+            "keys": sorted(entry.get("keys", [])),
+            "expires": "",
+            "revoked": bool(entry.get("revoked")),
+            "active": not entry.get("revoked"),
+            "adopted": entry.get("adopted", ""),
+            "seen": entry.get("seen", ""),
+        }
+
     return {
         "did": describe_identity(root=root)["did"] if available() else "",
-        "lent": [shape(item, "lent") for item in state["issued"]],
-        "borrowed": [shape(item, "borrowed") for item in state["accepted"]],
+        "lent": [{**shape(item, "lent"), "via": "grant"} for item in state["issued"]],
+        "borrowed": [{**shape(item, "borrowed"), "via": "grant"}
+                     for item in state["accepted"]],
+        "tailnet": [shape_tailnet(item) for item in state.get("tailnet", [])],
     }
 
 

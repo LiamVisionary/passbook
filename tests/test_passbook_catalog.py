@@ -185,3 +185,35 @@ def test_agents_seen_finds_who_actually_asked(machine):
     passbook_stamp.stamp(op="read", keys=["OPENAI_API_KEY"], app="some-agent-nobody-configured",
                          granted=True, reason="test")
     assert "some-agent-nobody-configured" in catalog.agents_seen()
+
+
+def test_one_vendors_keys_do_not_split_across_groups(machine):
+    """STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET landed in different groups
+    while role suffixes were being stripped. Splitting a family is worse than a
+    group being coarse: a coarse group is still one place to look."""
+    assert catalog.infer_group("STRIPE_SECRET_KEY") == "Stripe"
+    assert catalog.infer_group("STRIPE_WEBHOOK_SECRET") == "Stripe"
+    assert catalog.infer_group("STRIPE_PUBLISHABLE_KEY") == "Stripe"
+
+
+def test_a_name_that_is_only_a_role_names_no_family(machine):
+    assert catalog.infer_group("API_KEY") == catalog.UNGROUPED
+    assert catalog.infer_group("TOKEN") == catalog.UNGROUPED
+
+
+def test_every_surface_files_a_key_in_the_same_group(machine):
+    """`group_of` answers "what family does this name imply", `groups` answers
+    "where is it filed" — and a singleton family is filed under Ungrouped. Two
+    surfaces asking different functions disagreed about ADMIN_TOKEN."""
+    policy = access.read_policy()
+    names = passbook.key_names()
+    arranged = catalog.groups(names, policy)
+    filed = catalog.effective_groups(names, policy)
+
+    for group, members in arranged.items():
+        for member in members:
+            assert filed[member] == group
+
+    grid = catalog.matrix(names, ["ci"], policy)
+    for row in grid["rows"]:
+        assert row["group"] == filed[row["key"]]

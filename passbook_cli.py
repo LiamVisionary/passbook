@@ -1211,6 +1211,34 @@ def machine_state() -> dict:
         state["access"] = {"available": False, "detail": "Access modes are not installed."}
 
     try:
+        import passbook_access
+        import passbook_catalog
+
+        policy = passbook_access.read_policy()
+        names = passbook.key_names()
+        # Only the restricted keys travel. Every key's audience would be 279
+        # identical "all" entries, which is a payload the surface has to filter
+        # before it can render anything.
+        restricted = {}
+        for name in names:
+            rule = passbook_access.audience_for(name, policy)
+            if rule["mode"] != "all":
+                restricted[name] = rule
+        state["catalog"] = {
+            "available": True,
+            "ungrouped": passbook_catalog.UNGROUPED,
+            "groups": passbook_catalog.groups(names, policy),
+            "group_of": passbook_catalog.effective_groups(names, policy),
+            "audiences": restricted,
+            "agents": passbook_catalog.agents_seen(policy=policy),
+            "modes": list(passbook_access.AUDIENCE_MODES),
+        }
+    except ImportError:
+        state["catalog"] = {"available": False, "groups": {}, "group_of": {},
+                            "audiences": {}, "agents": [],
+                            "detail": "Grouping is not installed."}
+
+    try:
         import passbook_broker
 
         broker = passbook_broker.status()

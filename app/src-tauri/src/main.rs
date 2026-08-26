@@ -199,6 +199,66 @@ fn reveal_key(name: String) -> Result<String, String> {
     Ok(run(&["reveal", name.trim()])?.trim_end_matches('\n').to_string())
 }
 
+// ── organising the store: groups, audiences, the matrix ────────────────────
+//
+// These change who can read what, so they go through the same CLI every other
+// surface uses rather than editing the policy file directly. A second writer
+// with its own idea of the format is how two surfaces start disagreeing about
+// who has access.
+
+/// Pin keys to a group. An empty group returns them to inference from the name.
+#[tauri::command]
+fn set_key_group(group: String, names: Vec<String>) -> Result<Value, String> {
+    if names.is_empty() {
+        return Err("Which keys?".into());
+    }
+    let mut args: Vec<&str> = vec!["group", "set", group.trim()];
+    for name in &names {
+        args.push(name.trim());
+    }
+    run(&args)?;
+    state()
+}
+
+/// Say who a key is for: everyone, only these agents, or everyone except these.
+#[tauri::command]
+fn set_key_audience(name: String, mode: String, agents: Vec<String>) -> Result<Value, String> {
+    if name.trim().is_empty() {
+        return Err("Which key?".into());
+    }
+    let mut args: Vec<&str> = vec!["agents", "set", name.trim()];
+    match mode.as_str() {
+        "all" => args.push("--everyone"),
+        "include" => args.push("--only"),
+        "exclude" => args.push("--block"),
+        other => return Err(format!("unknown audience: {other}")),
+    }
+    if mode != "all" {
+        if agents.is_empty() {
+            return Err("Name at least one agent.".into());
+        }
+        for agent in &agents {
+            args.push(agent.trim());
+        }
+    }
+    run(&args)?;
+    state()
+}
+
+/// Which agents can read which keys. Fetched on demand: a full grid over a
+/// large store is not something to ship with every background refresh.
+#[tauri::command]
+fn access_matrix(agents: Vec<String>) -> Result<Value, String> {
+    let mut args: Vec<&str> = vec!["matrix", "--json"];
+    if !agents.is_empty() {
+        args.push("--agent");
+        for agent in &agents {
+            args.push(agent.trim());
+        }
+    }
+    run_json(&args)
+}
+
 // ── the vault: profiles, sign-in, and sealing ──────────────────────────────
 //
 // A sealed store is unreadable until somebody signs in, so these are the
@@ -323,7 +383,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             state, set_mode, unlock, lock, resolve, broker, revoke, add_key, remove_key, reveal_key,
             key_history, vault_state, vault_signin, vault_signout, vault_create_profile,
-            vault_use_profile, vault_seal, vault_unseal
+            vault_use_profile, vault_seal, vault_unseal, set_key_group, set_key_audience,
+            access_matrix
         ])
         .run(tauri::generate_context!())
         .expect("PassBook failed to start");

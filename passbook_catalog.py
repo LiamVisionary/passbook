@@ -43,6 +43,7 @@ import passbook_access as access
 
 __all__ = [
     "UNGROUPED",
+    "effective_groups",
     "agents_seen",
     "group_of",
     "groups",
@@ -55,16 +56,13 @@ __all__ = [
 
 UNGROUPED = "Ungrouped"
 
-# Suffixes that describe what a value *is* rather than what it belongs to.
-# Stripping them turns OPENAI_API_KEY and OPENAI_BASE_URL into one family
-# instead of two.
-_ROLE_SUFFIXES = (
-    "API_KEY", "SECRET_KEY", "ACCESS_KEY", "PRIVATE_KEY", "PUBLIC_KEY",
-    "CLIENT_SECRET", "CLIENT_ID", "ACCOUNT_ID", "PROJECT_ID", "ZONE_ID",
-    "BASE_URL", "ENDPOINT", "WEBHOOK_URL", "REFRESH_TOKEN", "ACCESS_TOKEN",
-    "API_TOKEN", "AUTH_TOKEN", "PASSWORD", "USERNAME", "TOKEN", "SECRET",
-    "KEY", "URL", "HOST", "PORT", "REGION", "MODEL", "ID",
-)
+# Words that describe what a value *is* rather than whose it is. A key whose
+# first word is one of these is naming a role, not a vendor, so it has no family.
+_ROLE_WORDS = frozenset({
+    "API", "SECRET", "ACCESS", "PRIVATE", "PUBLIC", "CLIENT", "AUTH", "TOKEN",
+    "KEY", "PASSWORD", "USERNAME", "URL", "HOST", "PORT", "REGION", "MODEL",
+    "ID", "ENDPOINT", "WEBHOOK", "BASE", "DEFAULT", "ENABLE", "ENABLED", "DISABLE",
+})
 
 # Prefixes that say how a value is *delivered* rather than whose it is.
 _NOISE_PREFIXES = ("NEXT_PUBLIC_", "VITE_", "REACT_APP_", "PUBLIC_",
@@ -74,8 +72,12 @@ _NOISE_PREFIXES = ("NEXT_PUBLIC_", "VITE_", "REACT_APP_", "PUBLIC_",
 def infer_group(name: str) -> str:
     """The family a key name is already announcing it belongs to.
 
-    Never guesses beyond the name: a key with nothing to strip is its own
-    family, which reads better than forcing it into a bucket it does not fit.
+    The vendor is the first word, once any delivery prefix is off the front.
+    Nothing cleverer: an earlier version stripped role suffixes too, so
+    STRIPE_SECRET_KEY became "Stripe" while STRIPE_WEBHOOK_SECRET became
+    "Stripe Webhook" and the two keys for one vendor landed in different groups.
+    Splitting a family is a worse failure than a group being a little coarse,
+    because a coarse group is still one place to look.
     """
     text = str(name).strip().upper()
     if not text:
@@ -84,11 +86,11 @@ def infer_group(name: str) -> str:
         if text.startswith(prefix) and len(text) > len(prefix):
             text = text[len(prefix):]
             break
-    for suffix in _ROLE_SUFFIXES:
-        if text.endswith("_" + suffix) and len(text) > len(suffix) + 1:
-            return text[: -(len(suffix) + 1)].strip("_").title().replace("_", " ") or UNGROUPED
-    head = re.split(r"_", text)[0]
-    return head.title() if head else UNGROUPED
+    head = text.split("_", 1)[0]
+    # A name that is nothing but a role — API_KEY, TOKEN — names no family.
+    if not head or head in _ROLE_WORDS:
+        return UNGROUPED
+    return head.title()
 
 
 def group_of(name: str, policy: Mapping[str, Any]) -> str:
@@ -139,6 +141,21 @@ def groups(names: Iterable[str], policy: Mapping[str, Any], *, minimum: int = 2)
         members.sort()
     ordered = sorted(out, key=lambda g: (g == UNGROUPED, g.lower()))
     return {group: out[group] for group in ordered}
+
+
+def effective_groups(names: Iterable[str], policy: Mapping[str, Any], *, minimum: int = 2) -> dict[str, str]:
+    """Key -> the group it is actually filed under. One answer, everywhere.
+
+    `group_of` returns the family a name implies, which is not the same thing:
+    a family of one collapses into `Ungrouped` when the store is arranged. Two
+    surfaces asking different functions therefore disagreed — the key list filed
+    ADMIN_TOKEN under Ungrouped while the access matrix tagged it "Admin".
+    """
+    filed: dict[str, str] = {}
+    for group, members in groups(names, policy, minimum=minimum).items():
+        for member in members:
+            filed[member] = group
+    return filed
 
 
 def suggest_groups(names: Iterable[str], *, minimum: int = 2) -> dict[str, list[str]]:
@@ -196,6 +213,7 @@ def matrix(
     """
     keys = sorted({str(n) for n in names})
     who = sorted({str(a) for a in agents if str(a).strip()})
+    filed = effective_groups(keys, policy)
     rows = []
     for key in keys:
         audience = access.audience_for(key, policy)
@@ -209,7 +227,7 @@ def matrix(
             }
         rows.append({
             "key": key,
-            "group": group_of(key, policy),
+            "group": filed.get(key, UNGROUPED),
             "audience": audience,
             "agents": cells,
             "granted_to": sorted(a for a, c in cells.items() if c["outcome"] == "grant"),

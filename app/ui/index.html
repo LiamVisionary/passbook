@@ -167,6 +167,45 @@
   }
   .search:focus { outline: none; border-color: var(--accent); }
   .err { color: var(--warn); }
+
+  /* Groups on the Keys page */
+  .grouphead { display:flex; align-items:center; gap:.5rem; padding:.55rem .35rem .35rem;
+    margin-top:.5rem; cursor:pointer; user-select:none; border-top:1px solid var(--line); }
+  .grouphead:first-child { border-top:0; margin-top:0; }
+  .grouphead:hover .gname { color:var(--ink); }
+  .grouphead:focus-visible { outline:2px solid var(--accent); outline-offset:2px; border-radius:6px; }
+  .caret { width:.9rem; color:var(--dim); font-size:.75rem; }
+  .gname { font-weight:600; font-size:.82rem; letter-spacing:.02em; color:var(--dim); }
+  .gcount { font-size:.7rem; color:var(--dim); background:var(--chip); border-radius:99px;
+    padding:.05rem .45rem; }
+  .grestricted { font-size:.7rem; color:var(--accent); margin-left:auto; }
+
+  /* Audience */
+  .aud { display:flex; align-items:center; gap:.5rem; }
+  .aud .restricted { color:var(--accent); }
+  .audedit { border:1px solid var(--line); border-radius:8px; padding:.6rem .7rem;
+    margin-top:.4rem; background:var(--chip); }
+  .audmodes { display:flex; gap:.35rem; flex-wrap:wrap; margin:.45rem 0; }
+  .audlist { display:flex; flex-wrap:wrap; gap:.6rem; margin:.4rem 0; }
+  .audlist label { display:flex; align-items:center; gap:.3rem; font-size:.78rem; }
+
+  /* The matrix */
+  .chips { display:flex; flex-wrap:wrap; gap:.35rem; margin:.5rem 0; }
+  .chip { font-size:.72rem; background:var(--chip); border-radius:99px; padding:.12rem .5rem; }
+  .matrixwrap { overflow-x:auto; margin-top:.5rem; }
+  table.matrix { border-collapse:collapse; width:100%; font-size:.78rem; }
+  table.matrix th, table.matrix td { text-align:left; padding:.35rem .5rem;
+    border-bottom:1px solid var(--line); white-space:nowrap; }
+  table.matrix thead th { color:var(--dim); font-weight:600; font-size:.72rem; }
+  .kname { max-width:22rem; overflow:hidden; text-overflow:ellipsis; }
+  .gtag { font-size:.66rem; color:var(--dim); margin-left:.4rem; }
+  td.cell { text-align:center; font-size:.72rem; }
+  td.cell.yes { color:var(--ok, #2f7d4f); }
+  td.cell.no { color:var(--danger, #b3261e); font-weight:600; }
+  td.cell.ask { color:var(--accent); }
+  .snippet { background:var(--chip); border-radius:6px; padding:.5rem .6rem;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.75rem;
+    overflow-x:auto; margin:.4rem 0; }
 </style>
 
 <nav id="nav"></nav>
@@ -186,7 +225,8 @@
     never:  ["Never", "Always refused."],
   };
   const PAGES = [
-    ["keys", "Keys"], ["vault", "Vault"], ["access", "Access"], ["machines", "Machines"],
+    ["keys", "Keys"], ["vault", "Vault"], ["access", "Access"], ["agents", "Agents"],
+    ["machines", "Machines"],
     ["broker", "Broker"], ["record", "Record"],
   ];
 
@@ -196,6 +236,11 @@
   // and is allowed to be missing on an older CLI without blanking the window.
   let vault = null;
   let vaultForm = { profile: "", label: "" };
+  // Which groups are folded shut, and the lazily-fetched access grid. A grid
+  // over a few hundred keys is not something to ship with every 5s refresh.
+  let collapsed = {};
+  let grid = null, gridOnlyRestricted = false;
+  let audienceFor = null;   // the key whose audience is being edited
   // Which row is mid-edit. The background refresh must not wipe a half-typed
   // value out from under someone, so polling pauses while this is set.
   let revealed = {};    // key -> true once its value has been fetched and shown
@@ -328,7 +373,77 @@
         ${shown ? "" : "readonly"} spellcheck="false" autocapitalize="off"
         placeholder="${shown ? "empty" : ""}" />
       <div class="sub">${usedLine(k)}</div>
+      ${audienceBlock(k)}
       ${history[k] ? historyBlock(k) : ""}
+    </div>`;
+  }
+
+  /** Key rows, arranged by group.
+   *
+   *  A few hundred keys as one flat list is a list nobody reads. Groups are
+   *  inferred from the names people already use, so this costs nobody any
+   *  tagging — and a search collapses back to a flat list, because when you are
+   *  hunting one key the headings are in the way.
+   */
+  function groupedKeys(keys) {
+    if (!keys.length) return "";
+    const cat = state.catalog;
+    if (!cat?.available || query.trim()) return keys.map((k) => keyRow(k)).join("");
+
+    const shown = new Set(keys);
+    const buckets = [];
+    for (const [group, members] of Object.entries(cat.groups || {})) {
+      const here = members.filter((m) => shown.has(m));
+      if (here.length) buckets.push([group, here]);
+    }
+    if (buckets.length < 2) return keys.map((k) => keyRow(k)).join("");
+
+    return buckets.map(([group, members]) => {
+      const shut = collapsed[group];
+      const restricted = members.filter((m) => cat.audiences?.[m]).length;
+      return `<div class="grouphead" data-group="${esc(group)}" role="button" tabindex="0"
+                aria-expanded="${!shut}">
+          <span class="caret">${shut ? "▸" : "▾"}</span>
+          <span class="gname">${esc(group)}</span>
+          <span class="gcount">${members.length}</span>
+          ${restricted ? `<span class="grestricted">${restricted} restricted</span>` : ""}
+        </div>
+        ${shut ? "" : members.map((k) => keyRow(k)).join("")}`;
+    }).join("");
+  }
+
+  /** Who a key is for, as a line under the row — and the control to change it. */
+  function audienceBlock(k) {
+    const cat = state.catalog;
+    if (!cat?.available) return "";
+    const rule = cat.audiences?.[k];
+    const editing = audienceFor === k;
+    const label = !rule ? "every agent"
+      : rule.mode === "include" ? `only ${rule.agents.join(", ")}`
+      : `all except ${rule.agents.join(", ")}`;
+
+    if (!editing) {
+      return `<div class="sub aud">
+        <span class="${rule ? "restricted" : ""}">Readable by ${esc(label)}</span>
+        <button class="icon" data-aud="${esc(k)}">Change</button>
+      </div>`;
+    }
+    const known = cat.agents || [];
+    return `<div class="audedit">
+      <div class="sub">Who may read <span class="mono">${esc(k)}</span>?</div>
+      <div class="audmodes">
+        <button class="act ${!rule ? "primary" : ""}" data-audset="${esc(k)}" data-mode="all">Every agent</button>
+        <button class="act ${rule?.mode === "include" ? "primary" : ""}" data-audset="${esc(k)}" data-mode="include">Only chosen</button>
+        <button class="act ${rule?.mode === "exclude" ? "primary" : ""}" data-audset="${esc(k)}" data-mode="exclude">All except</button>
+      </div>
+      ${known.length ? `<div class="audlist">
+        ${known.map((a) => `<label><input type="checkbox" data-audagent="${esc(a)}"
+          ${rule?.agents?.includes(a) ? "checked" : ""} /> ${esc(a)}</label>`).join("")}
+      </div>` : `<p class="note">No agents have asked for a credential yet, so there is
+        nobody to choose. They appear here once they do.</p>`}
+      <p class="note">Excluding an agent is final: it is refused whatever the access
+      mode says, and no approval or unlock overrides it.</p>
+      <button class="act" data-audcancel="1">Done</button>
     </div>`;
   }
 
@@ -350,7 +465,7 @@
           <input id="v" type="password" placeholder="value" />
           <button class="act primary" id="addgo" ${busy ? "disabled" : ""}>Add</button>
         </div>
-        ${keys.map((k) => keyRow(k)).join("")
+        ${groupedKeys(keys)
           || `<div class="empty">${query.trim()
                 ? `Nothing matches “${esc(query)}”.` : "No keys yet."}</div>`}
         <p class="note">${esc(s.path || "")}${s.writes_to && s.writes_to !== s.path
@@ -525,6 +640,97 @@
     </div>`;
   }
 
+  /** The grid: every key against every agent that has actually asked.
+   *
+   *  The agents listed are read out of the access ledger, not just the ones
+   *  somebody remembered to configure — those are usually the interesting ones.
+   */
+  function agentsPage() {
+    const cat = state.catalog;
+    if (!cat?.available) {
+      return `<h2>Agents</h2>
+        <p class="lede">Grouping is not installed on this machine.</p>
+        <div class="group"><p class="note">Run <code>passbook install</code>, then reopen.</p></div>`;
+    }
+    const known = cat.agents || [];
+    const restricted = Object.keys(cat.audiences || {});
+
+    const summary = `
+      <div class="group">
+        <div class="row">
+          <div class="grow"><strong>${known.length}</strong> agent${known.length === 1 ? "" : "s"}
+            have asked this machine for a credential.</div>
+          <span class="tag ${restricted.length ? "on" : "off"}">${restricted.length} restricted</span>
+        </div>
+        ${known.length ? `<div class="chips">${known.map((a) =>
+          `<span class="chip mono">${esc(a)}</span>`).join("")}</div>`
+          : `<p class="note">None yet. An agent appears here the first time it asks —
+             including ones you never configured, which is the point.</p>`}
+        <p class="note">An agent's name is a claim it makes when it connects, not a
+        proof. It decides policy and fills the record; it is not a password.</p>
+      </div>`;
+
+    const mcp = `
+      <div class="group">
+        <h3>Give an agent access</h3>
+        <p class="note">PassBook speaks MCP, so an agent can list what exists and ask
+        for one credential at a time — checked and recorded — instead of you pasting
+        keys into a chat.</p>
+        <pre class="snippet">claude mcp add passbook -- passbook mcp</pre>
+        <p class="note">For anything else, point it at <code>passbook mcp</code> over stdio.</p>
+      </div>`;
+
+    if (!grid) {
+      return `<h2>Agents</h2>
+        <p class="lede">Which agents can read which credentials.</p>
+        ${summary}
+        <div class="group">
+          <div class="row"><div class="grow">Build the grid to see every key against
+            every agent.</div>
+            <button class="act primary" data-grid="1" ${busy ? "disabled" : ""}>Show the matrix</button></div>
+        </div>
+        ${mcp}`;
+    }
+
+    const rows = grid.rows.filter((r) =>
+      !gridOnlyRestricted || r.audience.mode !== "all"
+      || Object.values(r.agents).some((c) => c.outcome !== "grant"));
+
+    return `<h2>Agents</h2>
+      <p class="lede">Which agents can read which credentials.</p>
+      ${summary}
+      <div class="group">
+        <div class="row">
+          <div class="grow">${rows.length} key${rows.length === 1 ? "" : "s"} ×
+            ${grid.agents.length} agent${grid.agents.length === 1 ? "" : "s"}</div>
+          <button class="act ${gridOnlyRestricted ? "primary" : ""}" data-gridfilter="1">
+            ${gridOnlyRestricted ? "Showing restricted" : "Show all"}</button>
+          <button class="act" data-grid="1">Refresh</button>
+        </div>
+        <div class="matrixwrap">
+          <table class="matrix">
+            <thead><tr><th>Key</th>${grid.agents.map((a) =>
+              `<th class="mono">${esc(a)}</th>`).join("")}</tr></thead>
+            <tbody>
+              ${rows.map((r) => `<tr>
+                <td class="mono kname">${esc(r.key)}
+                  <span class="gtag">${esc(r.group)}</span></td>
+                ${grid.agents.map((a) => {
+                  const cell = r.agents[a];
+                  const cls = { grant: "yes", refuse: "no", ask: "ask" }[cell.outcome];
+                  const text = { grant: "yes", refuse: "no", ask: "asks" }[cell.outcome];
+                  return `<td class="cell ${cls}" title="${esc(cell.why)}">${text}</td>`;
+                }).join("")}
+              </tr>`).join("")}
+            </tbody>
+          </table>
+        </div>
+        ${rows.length ? "" : `<div class="empty">Nothing is restricted — every agent
+          can read every key.</div>`}
+      </div>
+      ${mcp}`;
+  }
+
   function accessPage() {
     const a = state.access || {};
     const pending = state.broker?.pending || [];
@@ -629,7 +835,8 @@
   function paint() {
     if (!state) return;
     paintNav();
-    const body = { keys: keysPage, vault: vaultPage, access: accessPage, machines: machinesPage,
+    const body = { keys: keysPage, vault: vaultPage, access: accessPage, agents: agentsPage,
+                   machines: machinesPage,
                    broker: brokerPage, record: recordPage }[page]();
     main.innerHTML = lockBanner() + body + (notice ? `<p class="note err">${esc(notice)}</p>` : "");
 
@@ -637,6 +844,48 @@
       page = b.dataset.goto; notice = ""; paint();
     });
     main.querySelectorAll("[data-signout]").forEach((b) => b.onclick = () => callVault("vault_signout"));
+
+    main.querySelectorAll("[data-group]").forEach((b) => {
+      const toggle = () => {
+        const name = b.dataset.group;
+        collapsed[name] = !collapsed[name];
+        paint();
+      };
+      b.onclick = toggle;
+      b.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } };
+    });
+
+    main.querySelectorAll("[data-aud]").forEach((b) => b.onclick = () => {
+      audienceFor = b.dataset.aud; paint();
+    });
+    main.querySelectorAll("[data-audcancel]").forEach((b) => b.onclick = () => {
+      audienceFor = null; paint();
+    });
+    main.querySelectorAll("[data-audset]").forEach((b) => b.onclick = async () => {
+      const mode = b.dataset.mode;
+      const chosen = [...main.querySelectorAll("[data-audagent]")]
+        .filter((x) => x.checked).map((x) => x.dataset.audagent);
+      if (mode !== "all" && !chosen.length) {
+        notice = "Tick at least one agent first."; paint(); return;
+      }
+      busy = true; paint();
+      try {
+        state = await invoke("set_key_audience",
+          { name: b.dataset.audset, mode, agents: mode === "all" ? [] : chosen });
+        notice = ""; audienceFor = null; grid = null;
+      } catch (e) { notice = String(e); }
+      finally { busy = false; paint(); }
+    });
+
+    main.querySelectorAll("[data-grid]").forEach((b) => b.onclick = async () => {
+      busy = true; paint();
+      try { grid = await invoke("access_matrix", { agents: [] }); notice = ""; }
+      catch (e) { notice = String(e); }
+      finally { busy = false; paint(); }
+    });
+    main.querySelectorAll("[data-gridfilter]").forEach((b) => b.onclick = () => {
+      gridOnlyRestricted = !gridOnlyRestricted; paint();
+    });
     main.querySelectorAll("[data-use]").forEach((b) => b.onclick = () =>
       callVault("vault_use_profile", { label: b.dataset.use }));
 
@@ -768,7 +1017,7 @@
   setInterval(async () => {
     // A background refresh must not wipe a value someone is mid-edit on.
     const focused = document.activeElement;
-    if (busy || confirming) return;
+    if (busy || confirming || audienceFor) return;
     if (focused?.classList?.contains("val") || focused?.classList?.contains("search")) return;
     // A half-typed password must survive the refresh for the same reason a
     // half-typed value does.

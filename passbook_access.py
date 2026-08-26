@@ -42,11 +42,16 @@ import re
 import secrets
 from datetime import datetime, time as clock, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, MutableMapping
 
 import passbook
 
 __all__ = [
+    "AUDIENCE_MODES",
+    "audience_allows",
+    "audience_for",
+    "key_entry",
+    "set_audience",
     "GRANT_MODES",
     "POLICY_FILENAME",
     "SESSIONS_FILENAME",
@@ -71,7 +76,7 @@ __all__ = [
 
 POLICY_FILENAME = "passbook-policy.json"
 SESSIONS_FILENAME = "passbook-sessions.json"
-POLICY_VERSION = 2
+POLICY_VERSION = 3
 
 GRANT_MODES = ("always", "ask", "window", "never")
 DEFAULT_MODE = "always"
@@ -161,7 +166,8 @@ def upgrade_policy(loaded: Mapping[str, Any]) -> dict[str, Any]:
     an older PassBook against the same store — it is translated on read.
     """
     if not isinstance(loaded, dict):
-        return {"version": POLICY_VERSION, "default": {"mode": DEFAULT_MODE}, "apps": {}}
+        return {"version": POLICY_VERSION, "default": {"mode": DEFAULT_MODE},
+                "apps": {}, "keys": {}, "groups": {}}
 
     legacy = str(loaded.get("mode") or "")
     if legacy in {"audit", "deny"} or int(loaded.get("version") or 1) < POLICY_VERSION:
@@ -182,13 +188,23 @@ def upgrade_policy(loaded: Mapping[str, Any]) -> dict[str, Any]:
             # `audit` granted everything; `deny` granted only what was listed.
             "default": {"mode": "never" if legacy == "deny" else DEFAULT_MODE},
             "apps": apps,
+            "keys": loaded.get("keys") if isinstance(loaded.get("keys"), dict) else {},
+            "groups": loaded.get("groups") if isinstance(loaded.get("groups"), dict) else {},
         }
 
-    return {
+    current = {
         "version": POLICY_VERSION,
         "default": loaded.get("default") if isinstance(loaded.get("default"), dict) else {"mode": DEFAULT_MODE},
         "apps": loaded.get("apps") if isinstance(loaded.get("apps"), dict) else {},
+        "keys": loaded.get("keys") if isinstance(loaded.get("keys"), dict) else {},
+        "groups": loaded.get("groups") if isinstance(loaded.get("groups"), dict) else {},
     }
+    # Anything a newer PassBook wrote is carried through untouched, so an older
+    # one reading and rewriting the same store does not quietly delete it. The
+    # write side does the same; forward compatibility only works on both.
+    for section, value in loaded.items():
+        current.setdefault(str(section), value)
+    return current
 
 
 def read_policy(root: Path | None = None) -> dict[str, Any]:
@@ -200,15 +216,29 @@ def read_policy(root: Path | None = None) -> dict[str, Any]:
     try:
         return upgrade_policy(json.loads(policy_path(root).read_text(encoding="utf-8")))
     except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-        return {"version": POLICY_VERSION, "default": {"mode": DEFAULT_MODE}, "apps": {}}
+        return {"version": POLICY_VERSION, "default": {"mode": DEFAULT_MODE},
+                "apps": {}, "keys": {}, "groups": {}}
 
 
 def write_policy(policy: Mapping[str, Any], root: Path | None = None) -> Path:
-    return _write_private(policy_path(root), {
+    """Persist a policy. Every section, or a caller's edit vanishes silently.
+
+    This listed its sections literally and so dropped `keys` and `groups` the
+    moment they existed: `agents set` printed the new audience, wrote a file
+    without it, and the next read said "every agent" again.
+    """
+    written = {
         "version": POLICY_VERSION,
         "default": policy.get("default") or {"mode": DEFAULT_MODE},
         "apps": policy.get("apps") or {},
-    })
+        "keys": policy.get("keys") or {},
+        "groups": policy.get("groups") or {},
+    }
+    # Anything a newer PassBook added and this one does not know about is kept
+    # rather than silently deleted by an older machine sharing the same store.
+    for section, value in policy.items():
+        written.setdefault(str(section), value)
+    return _write_private(policy_path(root), written)
 
 
 def mode_for(app: str, key: str, policy: Mapping[str, Any]) -> dict[str, Any]:
@@ -234,6 +264,90 @@ def mode_for(app: str, key: str, policy: Mapping[str, Any]) -> dict[str, Any]:
         if isinstance(source, dict) and source.get("mode") in GRANT_MODES:
             return source
     return {"mode": DEFAULT_MODE}
+
+
+# ── who a key is for ───────────────────────────────────────────────────────
+#
+# The modes above answer "how is this app handled". That is the right question
+# when you are configuring one app, and the wrong one when you are looking at
+# one credential and asking who can see it — which is the question people
+# actually ask about a production database password.
+#
+# So a key carries its own audience, in one of three shapes:
+#
+#   all                every agent, which is the default and what a machine
+#                      that has never configured this does today
+#   include [...]      only these, and nothing else
+#   exclude [...]      everyone except these
+#
+# An audience is a hard bound, checked before any mode. A key that excludes an
+# agent is not "ask" for that agent — it is no, and no amount of approving
+# prompts changes it. That is what makes it safe to hand someone the shape of
+# their whole store and let them exclude the three keys that matter.
+
+AUDIENCE_MODES = ("all", "include", "exclude")
+
+
+def key_entry(key: str, policy: Mapping[str, Any]) -> dict[str, Any]:
+    """Everything the policy records about one key. Never a value."""
+    keys = policy.get("keys")
+    if not isinstance(keys, dict):
+        return {}
+    entry = keys.get(str(key))
+    return entry if isinstance(entry, dict) else {}
+
+
+def audience_for(key: str, policy: Mapping[str, Any]) -> dict[str, Any]:
+    """A key's audience, normalised. Anything unreadable degrades to `all`.
+
+    Degrading open rather than shut is deliberate: a corrupt or hand-edited
+    entry must not silently cut every agent off from a credential, because the
+    failure would look like an outage somewhere else entirely.
+    """
+    raw = key_entry(key, policy).get("agents", "all")
+    if isinstance(raw, str):
+        return {"mode": "all", "agents": []} if raw.strip().lower() in {"", "all", "*"} else {
+            "mode": "include", "agents": [raw.strip()]}
+    if isinstance(raw, list):
+        return {"mode": "include", "agents": sorted({str(a).strip() for a in raw if str(a).strip()})}
+    if isinstance(raw, dict):
+        for mode in ("include", "exclude"):
+            listed = raw.get(mode)
+            if isinstance(listed, list):
+                names = sorted({str(a).strip() for a in listed if str(a).strip()})
+                if names:
+                    return {"mode": mode, "agents": names}
+    return {"mode": "all", "agents": []}
+
+
+def audience_allows(app: str, key: str, policy: Mapping[str, Any]) -> dict[str, Any]:
+    """May this agent see this key at all, before any mode is considered?"""
+    rule = audience_for(key, policy)
+    name = str(app).strip()
+    if rule["mode"] == "all":
+        return {"allowed": True, "why": "every agent"}
+    if rule["mode"] == "include":
+        if name in rule["agents"]:
+            return {"allowed": True, "why": f"{name} is on this key's list"}
+        return {"allowed": False,
+                "why": f"this key is limited to {', '.join(rule['agents'])}"}
+    if name in rule["agents"]:
+        return {"allowed": False, "why": f"{name} is excluded from this key"}
+    return {"allowed": True, "why": "not excluded"}
+
+
+def set_audience(key: str, mode: str, agents: Iterable[str], policy: MutableMapping[str, Any]) -> dict[str, Any]:
+    """Set a key's audience in place. Returns the normalised rule."""
+    mode = str(mode).strip().lower()
+    if mode not in AUDIENCE_MODES:
+        raise ValueError(f"audience must be one of {', '.join(AUDIENCE_MODES)}")
+    names = sorted({str(a).strip() for a in agents if str(a).strip()})
+    if mode != "all" and not names:
+        raise ValueError(f"`{mode}` needs at least one agent name")
+    keys = policy.setdefault("keys", {})
+    entry = keys.setdefault(str(key), {})
+    entry["agents"] = "all" if mode == "all" else {mode: names}
+    return audience_for(key, policy)
 
 
 # ── time windows ───────────────────────────────────────────────────────────
@@ -420,6 +534,12 @@ def decide_key(app: str, key: str, policy: Mapping[str, Any], *, root: Path | No
     Returns an outcome and the reason for it, because "denied" with no cause is
     the thing that makes people disable a policy rather than fix it.
     """
+    # The audience is a bound, not a preference: if this key is not for this
+    # agent, no mode and no unlock can produce a grant.
+    audience = audience_allows(app, key, policy)
+    if not audience["allowed"]:
+        return {"outcome": "refuse", "mode": "never", "why": audience["why"], "audience": True}
+
     rule = mode_for(app, key, policy)
     mode = rule.get("mode", DEFAULT_MODE)
 

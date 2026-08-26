@@ -14,7 +14,7 @@ cd src-tauri && cargo tauri dev
 Nothing on this machine needs the app installed to use the store. An app that
 vendors `passbook.py` reads it directly; the CLI works alone; a policy has no
 force without the broker. This is the surface with the strongest guarantees, not
-a gate in front of everything else — and there are tests in `packages/passbook`
+a gate in front of everything else — and there are tests in the repository root
 that fail if that stops being true.
 
 Approvals in particular are deliberately answerable from three places: here, the
@@ -42,6 +42,6 @@ be visible to `ps` for as long as the process lived.
 ## Signing
 
 It cannot be distributed yet: this machine has no Developer ID Application
-certificate. See `packages/passbook/SIGNING.md`, which also explains why this
+certificate. See [`SIGNING.md`](../SIGNING.md), which also explains why this
 app — being a bundle — is the only PassBook surface whose identity can ever be
 *enforced* rather than merely claimed.

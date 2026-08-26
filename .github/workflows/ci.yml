@@ -64,9 +64,9 @@ jobs:
           import importlib
           # The module list in pyproject went stale once and shipped a tool with
           # no vault. This fails the build rather than the user's machine.
-          for name in ("passbook", "passbook_access", "passbook_broker", "passbook_cli",
-                       "passbook_keystore", "passbook_link", "passbook_peer",
-                       "passbook_seal", "passbook_stamp", "passbook_vault"):
+          for name in ("passbook", "passbook_access", "passbook_broker", "passbook_catalog",
+                       "passbook_cli", "passbook_keystore", "passbook_link", "passbook_mcp",
+                       "passbook_peer", "passbook_seal", "passbook_stamp", "passbook_vault"):
               importlib.import_module(name)
           print("all modules import from the installed wheel")
           PY

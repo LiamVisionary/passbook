@@ -2,6 +2,38 @@
 
 All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
+## [Unreleased]
+
+### Agents
+- **An MCP server** (`passbook mcp`). Any MCP client — and, through ACP's MCP
+  passthrough, any ACP editor — learns on connect what this machine holds, what
+  it may read, and how to ask. `list_credentials` returns names and groups and
+  never values; `get_credential` returns exactly one, checked and recorded.
+- The agent's name arrives as a claim in the handshake and is used for policy
+  and the ledger, never as authentication. Documented as such.
+- A copy-and-paste block in the README that sets a machine up end to end through
+  whatever agent you already use.
+
+### Organising a large store
+- **Groups**, inferred from the names you already use, because tagging three
+  hundred keys by hand never finishes. A family becomes a group once two keys
+  share it; anything set by hand wins.
+- **Audiences** — `all` (the default), `include`, or `exclude` — answering "who
+  is this key for" rather than "how is this app handled". An audience is a bound
+  that outranks every mode, unlock and approval.
+- **`passbook matrix`**, every key against every agent that has actually asked,
+  read out of the ledger rather than only the ones you configured.
+
+### Fixed
+- `write_policy` listed its sections literally and so dropped anything new: an
+  audience was printed, written without, and gone on the next read. Both the
+  read and write paths now carry sections they do not recognise, so an older
+  PassBook sharing a store cannot delete a newer one's data.
+- The MCP server enforces audiences itself. `passbook.request()` falls back to
+  reading the file when no broker is running — right for a plaintext store on a
+  machine with no daemon, and wrong at that door, where it would have handed an
+  agent a key the owner had excluded.
+
 ## [1.0.0] — 2026-08-26
 
 First public release.

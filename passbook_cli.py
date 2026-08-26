@@ -740,6 +740,178 @@ def cmd_passkey_enrol(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_mcp(args: argparse.Namespace) -> int:
+    """Speak MCP on stdio, so any agent can find these credentials."""
+    try:
+        import passbook_mcp
+    except ImportError:
+        return _fail("MCP support is not installed on this machine.", "Run:  passbook install")
+    return passbook_mcp.serve()
+
+
+def _catalog():
+    try:
+        import passbook_catalog
+
+        return passbook_catalog
+    except ImportError:
+        return None
+
+
+def cmd_group(args: argparse.Namespace) -> int:
+    """How the store is arranged, and what it suggests arranging."""
+    catalog = _catalog()
+    if catalog is None:
+        return _fail("Grouping is not installed on this machine.", "Run:  passbook install")
+    import passbook_access as access
+
+    policy = access.read_policy()
+    names = passbook.key_names()
+    arranged = catalog.groups(names, policy)
+    if getattr(args, "json", False):
+        print(json.dumps(arranged, indent=2))
+        return 0
+    loose = arranged.get(catalog.UNGROUPED, [])
+    named = {g: m for g, m in arranged.items() if g != catalog.UNGROUPED}
+    for group, members in named.items():
+        print(f"{group}  ({len(members)})")
+        if args.verbose:
+            for name in members:
+                print(f"    {name}")
+    if loose:
+        print(f"\n{catalog.UNGROUPED}  ({len(loose)})")
+        if args.verbose:
+            for name in loose:
+                print(f"    {name}")
+    print(f"\n{len(names)} keys in {len(named)} groups"
+          + (f", {len(loose)} ungrouped" if loose else ""))
+    return 0
+
+
+def cmd_group_set(args: argparse.Namespace) -> int:
+    catalog = _catalog()
+    if catalog is None:
+        return 1
+    import passbook_access as access
+
+    policy = access.read_policy()
+    held = set(passbook.key_names())
+    missing = [k for k in args.keys if k not in held]
+    if missing:
+        return _fail(f"Not in this store: {', '.join(missing)}")
+    for key in args.keys:
+        catalog.set_group(key, args.group, policy)
+    access.write_policy(policy)
+    where = args.group or "inferred from the name"
+    print(f"{len(args.keys)} key(s) -> {where}")
+    return 0
+
+
+def cmd_agents(args: argparse.Namespace) -> int:
+    """Who each key is for. The inverse of `policy`, which is per-app."""
+    catalog = _catalog()
+    import passbook_access as access
+
+    policy = access.read_policy()
+    names = passbook.key_names()
+    if args.key:
+        if args.key not in names:
+            return _fail(f"Not in this store: {args.key}")
+        rule = access.audience_for(args.key, policy)
+        if getattr(args, "json", False):
+            print(json.dumps(rule, indent=2))
+            return 0
+        if rule["mode"] == "all":
+            print(f"{args.key}: every agent")
+        else:
+            print(f"{args.key}: {rule['mode']} {', '.join(rule['agents'])}")
+        return 0
+
+    restricted = [(n, access.audience_for(n, policy)) for n in names]
+    restricted = [(n, r) for n, r in restricted if r["mode"] != "all"]
+    if getattr(args, "json", False):
+        print(json.dumps({n: r for n, r in restricted}, indent=2))
+        return 0
+    if not restricted:
+        print(f"All {len(names)} keys are readable by every agent (the default).")
+        print("Narrow one with:  passbook agents set KEY --only AGENT")
+        return 0
+    for name, rule in restricted:
+        print(f"  {name}: {rule['mode']} {', '.join(rule['agents'])}")
+    print(f"\n{len(restricted)} of {len(names)} keys are restricted.")
+    return 0
+
+
+def cmd_agents_set(args: argparse.Namespace) -> int:
+    import passbook_access as access
+
+    policy = access.read_policy()
+    if args.key not in passbook.key_names():
+        return _fail(f"Not in this store: {args.key}")
+    if args.everyone:
+        mode, agents = "all", []
+    elif args.only:
+        mode, agents = "include", args.only
+    elif args.block:
+        mode, agents = "exclude", args.block
+    else:
+        return _fail("Say who.", "Use --everyone, --only AGENT [...], or --block AGENT [...]")
+    try:
+        rule = access.set_audience(args.key, mode, agents, policy)
+    except ValueError as error:
+        return _fail(str(error))
+    access.write_policy(policy)
+    if rule["mode"] == "all":
+        print(f"{args.key}: every agent")
+    else:
+        print(f"{args.key}: {rule['mode']} {', '.join(rule['agents'])}")
+    return 0
+
+
+def cmd_matrix(args: argparse.Namespace) -> int:
+    """Which agents can read which keys, as a grid you can actually scan."""
+    catalog = _catalog()
+    if catalog is None:
+        return _fail("The matrix needs the catalogue module.", "Run:  passbook install")
+    import passbook_access as access
+
+    policy = access.read_policy()
+    names = passbook.key_names()
+    agents = args.agent or catalog.agents_seen(policy=policy)
+    if not agents:
+        print("No agents have asked for a credential yet, and none are configured.")
+        print("Name one to preview:  passbook matrix --agent claude-code")
+        return 0
+    if args.group:
+        names = [n for n in names if catalog.group_of(n, policy).lower() == args.group.lower()]
+    grid = catalog.matrix(names, agents, policy)
+    if getattr(args, "json", False):
+        print(json.dumps(grid, indent=2))
+        return 0
+
+    width = max([len(n) for n in grid["keys"]] + [3])
+    width = min(width, 38)
+    header = " " * (width + 2) + "  ".join(a[:10].ljust(10) for a in grid["agents"])
+    print(header)
+    print("-" * len(header))
+    shown = 0
+    for row in grid["rows"]:
+        if args.restricted and row["audience"]["mode"] == "all" and all(
+                c["outcome"] == "grant" for c in row["agents"].values()):
+            continue
+        cells = []
+        for agent in grid["agents"]:
+            outcome = row["agents"][agent]["outcome"]
+            cells.append({"grant": "yes", "refuse": "NO", "ask": "ask"}[outcome].ljust(10))
+        print(f"{row['key'][:width].ljust(width)}  " + "  ".join(cells))
+        shown += 1
+    if not shown:
+        print("(every key is readable by every agent — nothing is restricted yet)")
+    print(f"\n{shown} key(s) x {len(grid['agents'])} agent(s).  yes = granted, "
+          f"ask = waits for you, NO = refused")
+    return 0
+
+
 def cmd_signin(args: argparse.Namespace) -> int:
     import passbook_broker
 
@@ -1625,6 +1797,44 @@ def build_parser() -> argparse.ArgumentParser:
     passkey_enrol.add_argument("--password-stdin", dest="password_stdin", action="store_true",
                                help="read the vault password from stdin, after the PRF secret")
     passkey_enrol.set_defaults(json=False, func=cmd_passkey_enrol)
+
+    mcp = subs.add_parser("mcp", help="speak MCP on stdio so any agent can find these credentials")
+    mcp.set_defaults(func=cmd_mcp)
+
+    group_cmd = subs.add_parser("group", help="how the store is arranged")
+    group_cmd.add_argument("--json", action="store_true")
+    group_cmd.add_argument("-v", "--verbose", action="store_true", help="list the keys in each group")
+    group_cmd.set_defaults(func=cmd_group)
+    group_subs = group_cmd.add_subparsers(dest="group_command")
+    group_set = group_subs.add_parser("set", help="pin keys to a group; empty group returns to inference")
+    group_set.add_argument("group")
+    group_set.add_argument("keys", nargs="+", metavar="KEY")
+    group_set.set_defaults(json=False, verbose=False, func=cmd_group_set)
+
+    # No positional on the parent: an optional positional beside subparsers makes
+    # `agents set KEY` ambiguous, and argparse resolves it by trying to parse the
+    # key as a subcommand.
+    agents_cmd = subs.add_parser("agents", help="who each key is for")
+    agents_cmd.add_argument("--json", action="store_true")
+    agents_cmd.set_defaults(key="", func=cmd_agents)
+    agents_subs = agents_cmd.add_subparsers(dest="agents_command")
+
+    agents_show = agents_subs.add_parser("show", help="the audience for one key")
+    agents_show.add_argument("key")
+    agents_show.set_defaults(json=False, func=cmd_agents)
+    agents_set = agents_subs.add_parser("set", help="limit or open up one key")
+    agents_set.add_argument("key")
+    agents_set.add_argument("--everyone", action="store_true", help="the default: every agent")
+    agents_set.add_argument("--only", nargs="+", metavar="AGENT", help="only these agents")
+    agents_set.add_argument("--block", nargs="+", metavar="AGENT", help="every agent except these")
+    agents_set.set_defaults(json=False, func=cmd_agents_set)
+
+    matrix = subs.add_parser("matrix", help="which agents can read which keys")
+    matrix.add_argument("--agent", nargs="+", default=[], help="only these agents")
+    matrix.add_argument("--group", default="", help="only this group")
+    matrix.add_argument("--restricted", action="store_true", help="hide rows where everything is granted")
+    matrix.add_argument("--json", action="store_true")
+    matrix.set_defaults(func=cmd_matrix)
 
     signout = subs.add_parser("signout", help="lock the vault; credentials go dark again")
     signout.set_defaults(func=cmd_signout)

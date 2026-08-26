@@ -236,7 +236,7 @@ def test_a_version_one_policy_still_reads(machine):
 
     policy = access.read_policy()
 
-    assert policy["version"] == 2
+    assert policy["version"] == access.POLICY_VERSION
     assert policy["default"]["mode"] == "never", "v1 deny meant: only what is listed"
     assert access.mode_for("studio", "ALLOWED_KEY", policy)["mode"] == "always"
     assert access.mode_for("studio", "OTHER_KEY", policy)["mode"] == "never"

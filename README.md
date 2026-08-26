@@ -20,6 +20,8 @@ Nothing forks, so nothing ever has to be merged.
 - `passbook_vault.py` — optional: profiles, sign-in, and encryption that travels
 - `passbook_keystore.py` — optional: per-OS key storage for unattended machines
 - `passbook_access.py` — optional: which app may read which key, and when
+- `passbook_catalog.py` — optional: groups, audiences, and the access matrix
+- `passbook_mcp.py` — optional: an MCP server, so agents can find all this
 - `passbook_broker.py` — optional: one door for reads, and a record of them
 - `passbook_stamp.py` — optional: a tamper-evident record of who read what
 - `passbook_link.py` — optional: lending named keys to a second machine
@@ -28,6 +30,105 @@ Nothing forks, so nothing ever has to be merged.
 - `bin/passbook` — the command line
 - `app/` — a native desktop front end (Tauri), which holds no logic of its own
 - `AGENT_PROMPT.md` — paste into a coding agent to put a project on PassBook
+
+## Set it up with an agent
+
+Paste this into Claude Code, Codex, Cursor, Copilot, ChatGPT — anything that can
+run commands on your machine. It installs PassBook, wires the agent into it, and
+leaves the machine in a working state.
+
+````text
+Set up PassBook on this machine for me, end to end.
+
+PassBook is one credential store per machine, shared by every app that opts in,
+so an API key gets pasted once instead of once per project. Repo:
+https://github.com/LiamVisionary/passbook
+
+Do all of this, and tell me what you find at each step:
+
+1. Install it. Prefer a tool installer so it gets its own environment:
+      uv tool install "passbook @ git+https://github.com/LiamVisionary/passbook.git"
+   or, if uv is not available:
+      pipx install "passbook @ git+https://github.com/LiamVisionary/passbook.git"
+   Do NOT pipe a remote script into a shell for this — it is a credential
+   manager, and I want to be able to read what I installed.
+
+2. Confirm it works and show me the output of:
+      passbook status
+   It prints where the store is, how many keys it holds, and which apps use it.
+   It never prints a value.
+
+3. If the store is empty, do not invent keys. Tell me which ones this project
+   needs by name, and I will add them with `passbook add NAME` (which prompts
+   without echoing).
+
+4. Register PassBook as an MCP server for yourself, so you can read credentials
+   through a checked, recorded door instead of me pasting them into the chat.
+   The command is `passbook mcp` and it speaks MCP over stdio. Add it to
+   whichever config file you use — figure out the right one for yourself, and
+   show me the change before you make it. For most clients it looks like:
+      {"mcpServers": {"passbook": {"command": "passbook", "args": ["mcp"]}}}
+
+5. Restart yourself if that is what it takes to load the server, then call
+   `list_credentials` and show me the groups and the count. Do not call
+   `get_credential` yet.
+
+6. Tell me, in one short list:
+   - how many credentials this machine holds
+   - which groups they fall into
+   - anything you think should be restricted to fewer agents, and why
+
+Rules while you do this:
+- Never print a credential value into the chat, a file, a commit, or a log.
+- Never run `passbook reveal` unless I ask for that exact key.
+- If anything is refused, tell me what it said instead of working around it.
+````
+
+Once that is done, the agent asks for credentials by name and every request is
+checked against your policy and recorded. You can see who asked for what with
+`passbook access`, and who is allowed what with `passbook matrix`.
+
+### Wiring it up by hand
+
+`passbook mcp` speaks MCP over stdio, so the config is the same shape everywhere:
+
+```json
+{
+  "mcpServers": {
+    "passbook": { "command": "passbook", "args": ["mcp"] }
+  }
+}
+```
+
+Claude Code will also take it in one line:
+
+```bash
+claude mcp add passbook -- passbook mcp
+```
+
+The Agent Client Protocol, which sits between editors and agents, passes MCP
+servers through to the agent — so this one server reaches ACP editors too
+without a second thing to configure.
+
+### What the agent gets
+
+| Tool | Returns |
+| --- | --- |
+| `list_credentials` | Names, groups, and whether *this* agent may read each. Never values. |
+| `get_credential` | One value, by name, checked against policy and recorded. |
+| `check_credentials` | Whether named keys exist, without reading them. |
+| `vault_status` | Whether the store is encrypted and currently unlocked. |
+
+On connect the server also hands the agent instructions telling it to list
+before reading, ask only for what it needs, and never print a value. That is a
+nudge for honest agents, not a control — see below.
+
+**The agent's name is a claim.** It arrives in the MCP handshake and nothing
+proves it, exactly as with the broker. It is used for policy and for the ledger,
+never as authentication. What it buys is the common case rather than the
+adversarial one: an agent asks for three keys instead of helping itself to your
+environment, you can see which agent asked for what, and a key that is none of
+an agent's business can be marked so.
 
 ## Install
 
@@ -220,6 +321,63 @@ sign in, so encrypting one protects nothing and breaks the build. `secure`
 prints every key it is leaving readable, and why, before it does anything.
 
 Add your own with `--skip`, for a feature flag some boot hook reads.
+
+## Keeping a large store legible
+
+A store with a few hundred keys is a flat list nobody reads, and a policy nobody
+reviews. Three commands exist for that.
+
+**Groups** arrange the store. They are inferred from the names you already use,
+because any scheme that needs you to tag three hundred keys by hand is a scheme
+that never gets finished:
+
+```bash
+passbook group            # what is in here, arranged
+passbook group -v         # ...with the keys in each
+passbook group set "Payments" STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET
+```
+
+`OPENAI_API_KEY` and `OPENAI_BASE_URL` are already telling you they belong
+together. A family only becomes a group once two keys share it — a group of one
+is a flat list wearing a costume — and anything you set by hand always wins.
+
+**Audiences** say who a key is for. This is the question people actually ask
+about a production password, and it is the inverse of the per-app modes below:
+
+```bash
+passbook agents                                   # every restricted key
+passbook agents show ADMIN_TOKEN                  # one key
+passbook agents set ADMIN_TOKEN --only passbook-app
+passbook agents set TRADING_KEY --block claude-code cursor
+passbook agents set ANALYTICS_KEY --everyone      # back to the default
+```
+
+Every key is readable by every agent until you say otherwise, which is what a
+machine that has never configured this does today. An audience is a **bound**,
+not a preference: a key that excludes an agent is refused for that agent no
+matter what mode, unlock or approval says otherwise. That is what makes it safe
+to hand someone the shape of their whole store and let them fence off the three
+keys that matter.
+
+**The matrix** is the view that makes all of it reviewable:
+
+```bash
+passbook matrix                    # every agent that has ever asked
+passbook matrix --restricted       # only the rows where something is refused
+passbook matrix --group Payments
+```
+
+```
+                      ci          claude-cod
+--------------------------------------------
+ADMIN_TOKEN           yes         NO
+CLOUDFLARE_API_TOKEN  yes         yes
+OPENAI_API_KEY        yes         yes
+```
+
+The agents listed are the ones that have actually asked, read out of the access
+ledger — not just the ones you remembered to configure. Those are usually the
+interesting ones.
 
 ## The broker
 

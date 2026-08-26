@@ -170,6 +170,43 @@ def cmd_check(args: argparse.Namespace) -> int:
     return 0
 
 
+def _write_values(values, *, overwrite: bool, exact: bool = False,
+                  app: str = "passbook-cli") -> dict | None:
+    """Write values, keeping a sealed store sealed. None means it was refused.
+
+    A store is either encrypted or it is not; half of each is a state nobody
+    chose and nothing reports. Before this, writing to a sealed store put
+    plaintext beside the ciphertext, because only the broker holds the key and
+    `set_values` writes what it is handed.
+
+    So: sealed store and an open vault seals on the way in. Sealed store and a
+    shut vault REFUSES, rather than quietly writing the one value in this store
+    that anybody can read.
+    """
+    if not _sealed_store_present():
+        return passbook.set_values(values, overwrite=overwrite, exact=exact)
+    try:
+        import passbook_broker
+    except ImportError:
+        return passbook.set_values(values, overwrite=overwrite, exact=exact)
+
+    held = set(passbook.key_names())
+    answer = passbook_broker.seal_values(values, app=app)
+    if answer.get("ok"):
+        sealed = answer.get("sealed") or []
+        # `set_values` distinguishes these and callers print them; the sealing
+        # path has to say the same thing or a new key reads as "replaced".
+        return {"path": answer.get("path", ""),
+                "added": sorted(k for k in sealed if k not in held),
+                "updated": sorted(k for k in sealed if k in held),
+                "kept": [], "sealed": sorted(sealed)}
+    _fail(
+        "This store is encrypted, and the value could not be sealed: "
+        + str(answer.get("error", "the vault is shut")),
+        "Sign in first, so the new value is stored the same way as the rest:  passbook signin")
+    return None
+
+
 def _confirm_change(kind: str, keys, *, reason: str = "") -> bool:
     """Stop and ask, when the policy says this kind of change needs asking.
 
@@ -293,7 +330,9 @@ def cmd_add(args: argparse.Namespace) -> int:
             "modify", existing, reason="replace an existing credential"):
         return 1
     try:
-        result = passbook.set_values(values, overwrite=args.replace)
+        result = _write_values(values, overwrite=args.replace, app="passbook-add")
+        if result is None:
+            return 1
     except passbook.ContainerisedHomeError as error:
         return _fail(str(error))
     except ValueError as error:
@@ -1521,7 +1560,10 @@ def cmd_import(args: argparse.Namespace) -> int:
               f"Use --overwrite to replace them.", file=sys.stderr)
 
     try:
-        result = passbook.set_values(incoming, overwrite=args.overwrite, exact=True)
+        result = _write_values(incoming, overwrite=args.overwrite, exact=True,
+                               app="passbook-import")
+        if result is None:
+            return 1
     except (ValueError, OSError, passbook.ContainerisedHomeError) as error:
         return _fail(str(error))
 
@@ -1529,12 +1571,8 @@ def cmd_import(args: argparse.Namespace) -> int:
     added, updated = result.get("added", []), result.get("updated", [])
     print(f"Imported into {result.get('path')}: {len(added)} added, "
           f"{len(updated)} updated, {len(result.get('kept', []))} kept.")
-    # A store that was sealed before an import is now part-sealed and
-    # part-plaintext, which is not a state anyone chose.
-    if (added or updated) and _sealed_store_present():
-        print("\nThis store is encrypted, and the imported values went in as plaintext.",
-              file=sys.stderr)
-        print("Seal them too:  passbook seal", file=sys.stderr)
+    if result.get("sealed"):
+        print(f"They went in sealed, like the rest of this store.")
     return 0
 
 

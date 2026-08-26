@@ -363,6 +363,62 @@ def _unsealer(values: dict[str, str]) -> dict[str, str]:
     return passbook_vault.unseal_mapping(values, dek, profile_id=profile)
 
 
+def _seal_values(payload: Mapping[str, Any], root: Path | None,
+                 caller: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Write named values into the store, sealed with the data key held here.
+
+    The gap this fills: a sealed store had no way to accept a new value and stay
+    sealed. `set_values` writes what it is given, and only the broker holds the
+    key, so anything writing to a sealed store wrote plaintext beside the
+    ciphertext and left the store half and half — a state nobody chose and
+    nothing reports.
+
+    That is not a theoretical wart. Fleet env replication writes peer values
+    straight into the file, so a machine that sealed its store had it quietly
+    unsealed one key at a time by its own peers.
+
+    Values arrive over the same 0600 socket a sign-in uses and leave as
+    ciphertext. Refused when the vault is shut, because sealing without the key
+    would mean inventing one.
+    """
+    try:
+        import passbook_vault
+    except ImportError:
+        return {"ok": False, "error": "this build has no vault support"}
+
+    incoming = payload.get("values")
+    if not isinstance(incoming, dict) or not incoming:
+        return {"ok": False, "error": "no values to seal"}
+
+    dek, profile = _held_dek()
+    if dek is None:
+        return {"ok": False, "error": "the vault is shut, so nothing can be sealed"}
+
+    app = str(payload.get("app") or "passbook")
+    sealed: dict[str, str] = {}
+    for name, value in incoming.items():
+        name = str(name)
+        if not isinstance(value, str) or not value:
+            continue
+        # Already sealed by someone else's key is not something to re-wrap: it
+        # would be wrapped around a blob rather than a secret.
+        if passbook_vault.is_sealed(value) or passbook_vault.is_sealed_v1(value):
+            continue
+        sealed[name] = passbook_vault.seal_value(name, value, dek, profile_id=profile)
+    if not sealed:
+        return {"ok": True, "sealed": [], "detail": "nothing needed sealing"}
+
+    try:
+        result = passbook.set_values(sealed, overwrite=True, exact=True,
+                                     workspace_id=str(payload.get("workspace") or ""))
+    except Exception as error:  # noqa: BLE001 — surface, never crash the daemon
+        return {"ok": False, "error": str(error)}
+
+    _record("write", sorted(sealed), app=app, granted=True,
+            reason=f"sealed {len(sealed)} value(s) on write")
+    return {"ok": True, "sealed": sorted(sealed), "path": result.get("path", "")}
+
+
 def _confirm(payload: Mapping[str, Any], root: Path | None,
              caller: Mapping[str, Any] | None) -> dict[str, Any]:
     """Hold a CHANGE until a person approves it.
@@ -587,6 +643,8 @@ def _handle(payload: Mapping[str, Any], root: Path | None = None,
         if closed["closed"]:
             _record("lock", ["*"], app="passbook-cli", granted=True, reason="unlock ended early")
         return {"ok": True, **closed}
+    if operation == "seal_values":
+        return _seal_values(payload, root, caller)
     if operation == "confirm":
         return _confirm(payload, root, caller)
     if operation == "signin":
@@ -809,6 +867,21 @@ def request_through_broker(
         return None
     granted = answer.get("granted")
     return granted if isinstance(granted, dict) else {}
+
+
+def seal_values(values: Mapping[str, str], *, app: str = "passbook",
+                workspace_id: str = "", root: Path | None = None) -> dict[str, Any]:
+    """Write values into the store sealed, using the key the broker holds.
+
+    Returns `{"ok": False, ...}` when there is no broker or the vault is shut,
+    and a caller must treat that as "could not seal" rather than "did not need
+    to" — writing the plaintext instead is exactly the bug this exists to stop.
+    """
+    answer = _ask({"op": "seal_values", "app": app, "workspace": workspace_id,
+                   "values": dict(values)}, root=root, timeout=30.0)
+    if answer is None:
+        return {"ok": False, "error": "no broker is running, so nothing could be sealed"}
+    return answer
 
 
 def confirm_change(kind: str, keys: Iterable[str], *, app: str, reason: str = "",

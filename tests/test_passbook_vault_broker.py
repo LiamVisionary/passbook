@@ -127,3 +127,82 @@ def test_signing_in_is_recorded(sealed):
     refused = [r for r in rows if r.get("op") == "signin" and not r.get("granted")]
     assert refused, "a refused sign-in left no trace"
     assert PASSWORD not in repr(rows)
+
+
+# ── writing into a sealed store ────────────────────────────────────────────
+#
+# The gap these close cost 192 of 262 sealed keys on a real machine. Fleet env
+# replication wrote peer values straight into the file, and because only the
+# broker holds the key, every one of those writes landed as plaintext beside the
+# ciphertext — unsealing the store one key at a time, with nothing about it
+# looking like a failure.
+
+def _raw(home: Path) -> dict[str, str]:
+    """The file as it sits on disk, opened by nobody."""
+    return passbook.parse_env_text((home / ".env").read_text(encoding="utf-8"))
+
+
+def test_a_value_written_through_the_broker_lands_sealed(sealed):
+    home, _ = sealed
+    passbook_broker.signin(password=PASSWORD)
+
+    answer = passbook_broker.seal_values({"GAMMA": "c-value"})
+
+    assert answer["ok"] is True
+    assert answer["sealed"] == ["GAMMA"]
+    assert vault.is_sealed(_raw(home)["GAMMA"])
+    # And it is the same secret, not merely something encrypted.
+    assert passbook.request(["GAMMA"], app="test")["GAMMA"] == "c-value"
+
+
+def test_the_store_does_not_end_up_half_encrypted(sealed):
+    home, _ = sealed
+    passbook_broker.signin(password=PASSWORD)
+
+    passbook_broker.seal_values({"GAMMA": "c-value", "DELTA": "d-value"})
+
+    on_disk = _raw(home)
+    assert all(vault.is_sealed(value) for value in on_disk.values()), \
+        "a sealed store that accepts a plaintext write is neither sealed nor not"
+
+
+def test_a_shut_vault_refuses_rather_than_writing_plaintext(sealed):
+    """The important half. Writing the plaintext instead would be 'helpful' and
+    would silently undo the encryption the owner asked for."""
+    home, _ = sealed
+    before = _raw(home)
+
+    answer = passbook_broker.seal_values({"GAMMA": "c-value"})
+
+    assert answer["ok"] is False
+    assert "shut" in answer["error"]
+    assert _raw(home) == before
+    assert "GAMMA" not in _raw(home)
+
+
+def test_an_already_sealed_value_is_not_wrapped_twice(sealed):
+    home, profile = sealed
+    passbook_broker.signin(password=PASSWORD)
+    already = _raw(home)["ALPHA"]
+
+    answer = passbook_broker.seal_values({"ALPHA": already})
+
+    assert answer["sealed"] == []
+    assert _raw(home)["ALPHA"] == already
+    assert passbook.request(["ALPHA"], app="test")["ALPHA"] == "a-value"
+
+
+def test_sealing_a_write_is_recorded_by_name(sealed):
+    home, _ = sealed
+    passbook_broker.signin(password=PASSWORD)
+    passbook_broker.seal_values({"GAMMA": "c-value"}, app="some-agent")
+
+    import passbook_stamp
+
+    rows = passbook_stamp.read_stamps(root=home)
+    writes = [row for row in rows if row.get("op") == "write"]
+    assert writes, "a value entering the store is worth a row"
+    assert "GAMMA" in writes[-1]["keys"]
+    # Names, never values.
+    ledger = (home / passbook_stamp.PROOF_FILENAME).read_text(encoding="utf-8")
+    assert "c-value" not in ledger

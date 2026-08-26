@@ -269,6 +269,51 @@ fn set_key_group(group: String, names: Vec<String>) -> Result<Value, String> {
     state()
 }
 
+/// Set the reach of several keys at once.
+///
+/// The CLI loops and reports per key, so one key owned by another workspace
+/// refuses without stopping the rest — and its refusal comes back verbatim,
+/// because "denied" with no cause is what makes people stop using a control.
+#[tauri::command]
+fn set_keys_scope(names: Vec<String>, scope: String) -> Result<Value, String> {
+    if names.is_empty() {
+        return Err("Nothing selected.".into());
+    }
+    let flag = match scope.as_str() {
+        "workspace" => "--workspace",
+        "machine" => "--machine",
+        "tailnet" => "--tailnet",
+        other => return Err(format!("unknown scope: {other}")),
+    };
+    let mut args: Vec<&str> = vec!["scope", "set"];
+    for name in &names {
+        args.push(name.trim());
+    }
+    args.push(flag);
+    // A partial refusal is not a failure of the whole action: whatever changed
+    // has changed, and the window needs the new state either way.
+    let outcome = run(&args);
+    let refreshed = state()?;
+    match outcome {
+        Ok(_) => Ok(refreshed),
+        Err(detail) => Ok(serde_json::json!({ "state": refreshed, "partial": detail })),
+    }
+}
+
+/// Delete several keys at once. The window asks first.
+#[tauri::command]
+fn remove_keys(names: Vec<String>) -> Result<Value, String> {
+    if names.is_empty() {
+        return Err("Nothing selected.".into());
+    }
+    let mut args: Vec<&str> = vec!["remove"];
+    for name in &names {
+        args.push(name.trim());
+    }
+    run(&args)?;
+    state()
+}
+
 /// How far a key reaches: this workspace, the machine, or the tailnet.
 ///
 /// The CLI refuses when this workspace does not own the key, and that refusal is
@@ -469,7 +514,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             state, set_mode, unlock, lock, resolve, broker, revoke, add_key, remove_key, reveal_key,
             key_history, vault_state, vault_signin, vault_signout, vault_create_profile,
-            vault_use_profile, vault_seal, vault_unseal, vault_secure, set_key_group, set_key_audience, set_key_scope,
+            vault_use_profile, vault_seal, vault_unseal, vault_secure, set_key_group, set_key_audience, set_key_scope, set_keys_scope, remove_keys,
             access_matrix, oauth_state, oauth_refresh, oauth_disconnect, oauth_connect
         ])
         .run(tauri::generate_context!())

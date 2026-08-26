@@ -438,3 +438,67 @@ def test_releasing_a_key_that_is_not_there_says_so(root):
     result = vault.unseal_store(dek, profile_id=pid, root=root, only=["NOT_A_KEY"])
     assert not result["ok"] and result["absent"] == ["NOT_A_KEY"]
     assert result["opened"] == []
+
+
+def test_writing_to_a_sealed_store_updates_rather_than_duplicating(root):
+    """`set_values` asked "is this key here?" of a read that DROPS values it
+    cannot open, so a writer without the key saw every sealed name as absent and
+    appended a second line. PassBook then read the new value (last line wins)
+    while anything regexing the file read the stale sealed one (first match) —
+    two readers, two answers, one file."""
+    pid = _profile(root)
+    dek = vault.unlock_with_password(pid, PASSWORD, root=root)
+    vault.seal_store(dek, profile_id=pid, root=root)
+    passbook.set_unsealer(None)          # a process that cannot open the store
+    try:
+        passbook.set_values({"OPENAI_API_KEY": "rewritten"}, overwrite=True)
+    finally:
+        passbook.set_unsealer(None)
+
+    text = (root / ".env").read_text(encoding="utf-8")
+    lines = [l for l in text.splitlines() if l.startswith("OPENAI_API_KEY=")]
+    assert len(lines) == 1, f"the key was duplicated: {lines}"
+    assert lines[0] == "OPENAI_API_KEY=rewritten"
+
+
+def test_no_key_ever_appears_twice_after_a_seal_and_a_write(root):
+    pid = _profile(root)
+    dek = vault.unlock_with_password(pid, PASSWORD, root=root)
+    vault.seal_store(dek, profile_id=pid, root=root)
+    vault.unseal_store(dek, profile_id=pid, root=root, only=["OTHER"])
+    vault.seal_store(dek, profile_id=pid, root=root)
+
+    names = [l.split("=", 1)[0] for l in (root / ".env").read_text().splitlines()
+             if l and not l.startswith("#") and "=" in l]
+    assert len(names) == len(set(names)), f"duplicate keys: {sorted(set(n for n in names if names.count(n) > 1))}"
+
+
+def test_a_shadowed_duplicate_is_found_and_removed(root):
+    """Readers disagree about a duplicated key: PassBook takes the last line,
+    a tool regexing the file takes the first."""
+    path = root / ".env"
+    path.write_text("A_KEY=old\nOTHER=x\nA_KEY=new\n", encoding="utf-8")
+
+    found = passbook.duplicate_keys(path)
+    assert found == {"A_KEY": [1, 3]}
+
+    result = passbook.drop_duplicate_lines(path)
+    assert result["removed"] == {"A_KEY": [1]}
+    text = path.read_text(encoding="utf-8")
+    assert text.splitlines() == ["OTHER=x", "A_KEY=new"]
+    assert passbook.duplicate_keys(path) == {}
+
+
+def test_tidying_refuses_if_it_would_change_a_value(root, monkeypatch):
+    """A repair that quietly altered a credential would be worse than the mess."""
+    path = root / ".env"
+    path.write_text("A_KEY=one\nA_KEY=two\n", encoding="utf-8")
+    monkeypatch.setattr(passbook, "parse_env_text",
+                        lambda text: {"A_KEY": "one" if "\n" in text.strip() else "two"})
+    with pytest.raises(ValueError, match="would change a value"):
+        passbook.drop_duplicate_lines(path)
+
+
+def test_a_clean_file_needs_no_repair(root):
+    assert passbook.duplicate_keys(root / ".env") == {}
+    assert passbook.drop_duplicate_lines(root / ".env")["removed"] == {}

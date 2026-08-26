@@ -212,6 +212,13 @@
   select.scope:hover { color:var(--ink); }
   .scope.locked { font-size:.74rem; color:var(--dim); background:var(--chip);
     border-radius:5px; padding:.12rem .4rem; }
+
+  input.pick { margin:0 .1rem 0 0; accent-color:var(--accent); cursor:pointer; }
+  .bulkbar { display:flex; flex-wrap:wrap; align-items:center; gap:.5rem;
+    padding:.55rem .7rem; margin:.4rem 0 .2rem; border:1px solid var(--accent);
+    border-radius:8px; background:var(--chip); position:sticky; top:0; z-index:2; }
+  .bulkbar .warn { color:var(--danger, #b3261e); font-size:.8rem; }
+  .bulkbar .note { flex-basis:100%; margin:0; }
 </style>
 
 <nav id="nav"></nav>
@@ -250,6 +257,8 @@
   // Sign-ins are fetched separately: they can be slow to answer when the
   // broker is mid-renewal, and the key list should not wait on that.
   let signins = null, connecting = {};
+  // Which keys are ticked, and whether a bulk delete is awaiting a yes.
+  let picked = {}, bulkConfirm = false;
   let audienceFor = null;   // the key whose audience is being edited
   // Which row is mid-edit. The background refresh must not wipe a half-typed
   // value out from under someone, so polling pauses while this is set.
@@ -364,6 +373,8 @@
     const pending = confirming === k;
     return `<div class="keyrow">
       <div class="head">
+        <input type="checkbox" class="pick" data-pick="${esc(k)}"
+          ${picked[k] ? "checked" : ""} aria-label="Select ${esc(k)}" />
         <span class="mono">${esc(k)}</span>
         ${pending ? `
           <span class="sub">Remove it? Another app may be using it.</span>
@@ -385,6 +396,41 @@
       <div class="sub">${usedLine(k)}</div>
       ${audienceBlock(k)}
       ${history[k] ? historyBlock(k) : ""}
+    </div>`;
+  }
+
+  const chosen = () => Object.keys(picked).filter((k) => picked[k]);
+
+  /** What you can do to a handful of keys at once.
+   *
+   *  Only appears once something is ticked. Scoping many keys and removing many
+   *  keys are the two jobs worth doing in bulk; both are one-by-one otherwise,
+   *  and a store of a few hundred makes that unbearable.
+   */
+  function bulkBar(shown) {
+    const on = chosen();
+    if (!on.length) return "";
+    const cat = state.catalog;
+    const locked = on.filter((k) => cat?.scopes?.[k] && !cat.scopes[k].may_change);
+    return `<div class="bulkbar">
+      <span class="grow"><strong>${on.length}</strong> selected</span>
+      ${bulkConfirm ? `
+        <span class="warn">Remove ${on.length} key${on.length === 1 ? "" : "s"}?
+          Other apps on this machine may be using ${on.length === 1 ? "it" : "them"}.</span>
+        <button class="act primary" data-bulkgo ${busy ? "disabled" : ""}>Remove them</button>
+        <button class="act" data-bulkcancel>Cancel</button>
+      ` : `
+        <select class="scope" data-bulkscope ${busy ? "disabled" : ""}>
+          <option value="">Set reach…</option>
+          ${(cat?.scope_options || []).map((s) =>
+            `<option value="${s}">${esc(SCOPE_WORDS[s] || s)}</option>`).join("")}
+        </select>
+        <button class="act danger" data-bulkremove ${busy ? "disabled" : ""}>Remove</button>
+        <button class="act" data-bulkclear>Clear</button>
+      `}
+      ${locked.length && !bulkConfirm ? `<div class="note">${locked.length} of these
+        ${locked.length === 1 ? "is" : "are"} owned by another workspace — their reach
+        will not change.</div>` : ""}
     </div>`;
   }
 
@@ -504,6 +550,7 @@
           <input id="v" type="password" placeholder="value" />
           <button class="act primary" id="addgo" ${busy ? "disabled" : ""}>Add</button>
         </div>
+        ${bulkBar(keys)}
         ${groupedKeys(keys)
           || `<div class="empty">${query.trim()
                 ? `Nothing matches “${esc(query)}”.` : "No keys yet."}</div>`}
@@ -998,6 +1045,45 @@ passbook oauth connect google:work</pre>
       b.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } };
     });
 
+    main.querySelectorAll("[data-pick]").forEach((b) => b.onchange = () => {
+      const k = b.dataset.pick;
+      if (b.checked) picked[k] = true; else delete picked[k];
+      bulkConfirm = false;
+      paint();
+    });
+    main.querySelectorAll("[data-bulkclear]").forEach((b) => b.onclick = () => {
+      picked = {}; bulkConfirm = false; paint();
+    });
+    main.querySelectorAll("[data-bulkremove]").forEach((b) => b.onclick = () => {
+      bulkConfirm = true; paint();
+    });
+    main.querySelectorAll("[data-bulkcancel]").forEach((b) => b.onclick = () => {
+      bulkConfirm = false; paint();
+    });
+    main.querySelectorAll("[data-bulkgo]").forEach((b) => b.onclick = async () => {
+      const names = chosen();
+      busy = true; paint();
+      try { state = await invoke("remove_keys", { names });
+            notice = ""; picked = {}; bulkConfirm = false; grid = null; }
+      catch (e) { notice = String(e); }
+      finally { busy = false; paint(); }
+    });
+    main.querySelectorAll("[data-bulkscope]").forEach((s) => s.onchange = async () => {
+      const scope = s.value;
+      if (!scope) return;
+      const names = chosen();
+      busy = true; paint();
+      try {
+        const answer = await invoke("set_keys_scope", { names, scope });
+        // A partial refusal comes back with the new state and the reason; the
+        // keys that did change have changed, so show both.
+        if (answer && answer.partial) { state = answer.state; notice = answer.partial; }
+        else { state = answer; notice = ""; }
+        grid = null;
+      } catch (e) { notice = String(e); }
+      finally { busy = false; paint(); }
+    });
+
     main.querySelectorAll("[data-scope]").forEach((s) => s.onchange = async () => {
       busy = true; paint();
       try { state = await invoke("set_key_scope", { name: s.dataset.scope, scope: s.value });
@@ -1168,7 +1254,8 @@ passbook oauth connect google:work</pre>
   setInterval(async () => {
     // A background refresh must not wipe a value someone is mid-edit on.
     const focused = document.activeElement;
-    if (busy || confirming || audienceFor || Object.keys(connecting).length) return;
+    if (busy || confirming || audienceFor || bulkConfirm
+        || Object.keys(picked).length || Object.keys(connecting).length) return;
     if (focused?.classList?.contains("val") || focused?.classList?.contains("search")) return;
     // A half-typed password must survive the refresh for the same reason a
     // half-typed value does.

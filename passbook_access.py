@@ -297,15 +297,20 @@ def mode_for(app: str, key: str, policy: Mapping[str, Any]) -> dict[str, Any]:
 # which is not sharing — it is giving it away.
 
 SCOPES = ("workspace", "machine", "tailnet")
-DEFAULT_SCOPE = "machine"
+# The widest reach, because that is what the standard already promises: one
+# store per machine, shared by every app that opts in, and lendable to a linked
+# machine on purpose. A key narrows when somebody narrows it, and until then it
+# behaves the way a store with no workspaces configured always has.
+DEFAULT_SCOPE = "tailnet"
 
 
 def scope_for(key: str, policy: Mapping[str, Any]) -> dict[str, Any]:
     """A key's reach and who decides it. Unreadable entries read as the default.
 
-    The default is `machine` because that is what a store with no workspaces
-    configured has always done — every app on the machine sharing one file. A
-    key only narrows when somebody narrows it.
+    The default is the widest reach. A store with no workspaces configured has
+    always been one file shared by every app on the machine, and linking exists
+    so a key can be lent onward deliberately; starting narrow would quietly
+    change what an existing store means. A key narrows when somebody narrows it.
     """
     entry = key_entry(key, policy)
     raw = str(entry.get("scope", "") or "").strip().lower()

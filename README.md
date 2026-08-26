@@ -417,8 +417,8 @@ is a flat list wearing a costume — and anything you set by hand always wins.
 ```bash
 passbook scope                                  # what is narrowed, and who owns it
 passbook scope set CLIENT_SECRET --workspace    # this workspace only
-passbook scope set OPENAI_API_KEY --machine     # every workspace here (the default)
-passbook scope set DEPLOY_KEY --tailnet         # …and lendable to linked machines
+passbook scope set OPENAI_API_KEY --machine     # every workspace here
+passbook scope set DEPLOY_KEY --tailnet         # …and lendable to linked machines (the default)
 ```
 
 **Only the workspace a key came from can change its reach.** A workspace you

@@ -308,6 +308,19 @@ def cmd_status(args: argparse.Namespace) -> int:
     # right before someone tries to seal or link and finds out the hard way.
     ready = _has_crypto(sys.executable)
     print(f"sealing and linking: {'ready' if ready else 'not set up — run `passbook install`'}")
+
+    # A duplicate makes two readers disagree about one key, so say so here —
+    # with the fix, not just the complaint.
+    duplicates = passbook.duplicate_keys()
+    if duplicates:
+        if getattr(args, "repair", False):
+            result = passbook.drop_duplicate_lines()
+            print(result["detail"])
+        else:
+            for key, where in sorted(duplicates.items()):
+                print(f"duplicate: {key} on lines {', '.join(str(n) for n in where)}"
+                      f" — readers that take the first match see line {where[0]}")
+            print("Fix with:  passbook status --repair")
     if state["home_is_container"]:
         return _fail(f"\n{state['detail']}")
     return 0
@@ -1149,27 +1162,43 @@ def cmd_scope(args: argparse.Namespace) -> int:
 
 
 def cmd_scope_set(args: argparse.Namespace) -> int:
+    """Set the reach of one key or many. A refused key does not stop the rest."""
     import passbook_access as access
 
     policy = access.read_policy()
-    if args.key not in passbook.key_names():
-        return _fail(f"Not in this store: {args.key}")
+    here = passbook.workspace()
+    held = set(passbook.key_names())
     scope = ("workspace" if args.workspace else "machine" if args.machine
              else "tailnet" if args.tailnet else "")
     if not scope:
         return _fail("How far?", "Use --workspace, --machine or --tailnet.")
-    try:
-        rule = access.set_scope(args.key, scope, policy, workspace=passbook.workspace())
-    except PermissionError as error:
-        return _fail(str(error),
-                     "A key's reach is decided by the workspace it came from.")
-    except ValueError as error:
-        return _fail(str(error))
-    access.write_policy(policy)
-    print(f"{args.key}: {SCOPE_WORDS[rule['scope']]}")
-    if rule["scope"] != "workspace" and rule["owner"]:
-        print(f"Only the {rule['owner']} workspace can change this again.")
-    return 0
+
+    changed, missing, refused = [], [], []
+    for name in args.keys:
+        if name not in held:
+            missing.append(name)
+            continue
+        try:
+            access.set_scope(name, scope, policy, workspace=here)
+            changed.append(name)
+        except PermissionError as error:
+            refused.append((name, str(error)))
+        except ValueError as error:
+            return _fail(str(error))
+    if changed:
+        access.write_policy(policy)
+
+    if changed:
+        print(f"{len(changed)} key(s) -> {SCOPE_WORDS[scope]}")
+        for name in changed:
+            print(f"   {name}")
+    for name, why in refused:
+        print(f"{name}: {why}", file=sys.stderr)
+    if missing:
+        print(f"Not in this store: {', '.join(missing)}", file=sys.stderr)
+    if refused:
+        print("A key's reach is decided by the workspace it came from.", file=sys.stderr)
+    return 0 if changed and not refused and not missing else (0 if changed else 1)
 
 
 def cmd_matrix(args: argparse.Namespace) -> int:
@@ -2051,6 +2080,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     status = subs.add_parser("status", help="where the store is, how many keys, which apps")
     status.add_argument("--json", action="store_true")
+    status.add_argument("--repair", action="store_true",
+                        help="remove shadowed duplicate lines, keeping the last")
     status.set_defaults(func=cmd_status)
 
     access = subs.add_parser("access", help="the tamper-evident record of credential reads")
@@ -2222,8 +2253,8 @@ def build_parser() -> argparse.ArgumentParser:
     scope_show = scope_subs.add_parser("show", help="one key's reach")
     scope_show.add_argument("key")
     scope_show.set_defaults(json=False, func=cmd_scope)
-    scope_set = scope_subs.add_parser("set", help="set a key's reach; only its own workspace may")
-    scope_set.add_argument("key")
+    scope_set = scope_subs.add_parser("set", help="set the reach of one key or many")
+    scope_set.add_argument("keys", nargs="+", metavar="KEY")
     scope_set.add_argument("--workspace", action="store_true", help="this workspace only")
     scope_set.add_argument("--machine", action="store_true", help="every workspace on this machine")
     scope_set.add_argument("--tailnet", action="store_true",

@@ -35,6 +35,8 @@ __all__ = [
     "ContainerisedHomeError",
     "apply",
     "describe",
+    "drop_duplicate_lines",
+    "duplicate_keys",
     "ensure",
     "env_path",
     "key_names",
@@ -540,6 +542,69 @@ def key_names(environ: Mapping[str, str] | None = None) -> list[str]:
 # ── writing ────────────────────────────────────────────────────────────────
 
 
+def duplicate_keys(path: Path | str | None = None, environ: Mapping[str, str] | None = None) -> dict[str, list[int]]:
+    """Key names that appear on more than one line, and where.
+
+    A duplicate is worse than untidy. `parse_env_text` takes the last line, and
+    so does every conforming reader — but a tool that regexes the file for one
+    name takes the FIRST match, and the two then disagree about the same key.
+    One appeared here for real: a writer that could not open a sealed store
+    appended rather than replaced, and a boot hook went on reading the stale
+    line above.
+    """
+    target = Path(path).expanduser() if path is not None else env_path(environ)
+    try:
+        lines = target.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return {}
+    seen: dict[str, list[int]] = {}
+    for number, raw in enumerate(lines, start=1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].strip()
+        if "=" not in line:
+            continue
+        key = line.split("=", 1)[0].strip()
+        if _KEY.match(key):
+            seen.setdefault(key, []).append(number)
+    return {key: where for key, where in seen.items() if len(where) > 1}
+
+
+def drop_duplicate_lines(path: Path | str | None = None, environ: Mapping[str, str] | None = None) -> dict[str, Any]:
+    """Keep the last line for each key and remove the earlier ones.
+
+    The last line is what every conforming reader already used, so this changes
+    no value — it only stops a first-match reader seeing something different.
+    """
+    target = Path(path).expanduser() if path is not None else env_path(environ)
+    duplicates = duplicate_keys(target)
+    if not duplicates:
+        return {"path": str(target), "removed": {}, "detail": "No duplicate keys."}
+    doomed = {line for where in duplicates.values() for line in where[:-1]}
+    lines = target.read_text(encoding="utf-8").splitlines()
+    kept = [raw for number, raw in enumerate(lines, start=1) if number not in doomed]
+    before = parse_env_text("\n".join(lines))
+    after = parse_env_text("\n".join(kept))
+    if before != after:
+        # Refuse rather than change a value while claiming to tidy the file.
+        raise ValueError("removing the earlier lines would change a value; nothing was written")
+    _atomic_write(target, "\n".join(kept) + "\n")
+    _tighten(target, 0o600)
+    return {"path": str(target),
+            "removed": {key: where[:-1] for key, where in duplicates.items()},
+            "detail": f"Removed {len(doomed)} shadowed line(s) for {len(duplicates)} key(s)."}
+
+
+def _key_names_on_disk(path: Path) -> set[str]:
+    """Every key name the file holds, opened or not."""
+    try:
+        return set(parse_env_text(Path(path).read_text(encoding="utf-8")))
+    except (OSError, UnicodeDecodeError):
+        return set()
+
+
 def _atomic_write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     _tighten(path.parent, ROOT_MODE)
@@ -597,14 +662,22 @@ def set_values(
 
     path = target_path(workspace_id, environ)
     existing = _read(path)
+    # Whether a key is already in the file is a question about NAMES, and
+    # `_read` answers with values — dropping any it cannot open. A process
+    # writing to a sealed store it cannot read therefore saw every sealed key as
+    # absent and APPENDED a second line for it, leaving the sealed one orphaned
+    # above. `parse_env_text` takes the last line so PassBook still read the new
+    # value, but a consumer that regexes the file takes the FIRST match and read
+    # the stale sealed one instead. Two readers, two answers, from one file.
+    present = _key_names_on_disk(path)
     added, updated, kept = [], [], []
     for key, value in values.items():
         text = str(value) if exact else str(value).strip()
         if not text.strip():
             continue
-        if key not in existing:
+        if key not in present:
             added.append(key)
-        elif overwrite and existing[key] != text:
+        elif overwrite and existing.get(key) != text:
             updated.append(key)
         else:
             kept.append(key)

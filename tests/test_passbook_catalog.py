@@ -222,9 +222,13 @@ def test_every_surface_files_a_key_in_the_same_group(machine):
 # ── how far a key reaches, and who decides ─────────────────────────────────
 
 
-def test_a_key_reaches_the_whole_machine_by_default(machine):
+def test_a_key_reaches_as_far_as_possible_by_default(machine):
+    """The widest reach: a store with no workspaces configured has always been
+    one file shared by every app, and starting narrow would quietly change what
+    an existing store means."""
     policy = access.read_policy()
-    assert access.scope_for("ADMIN_TOKEN", policy)["scope"] == "machine"
+    assert access.scope_for("ADMIN_TOKEN", policy)["scope"] == "tailnet"
+    assert access.DEFAULT_SCOPE == "tailnet"
     assert access.decide_key("app", "ADMIN_TOKEN", policy, workspace="anything")["outcome"] == "grant"
 
 

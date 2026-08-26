@@ -118,17 +118,23 @@
      seeing from every page, so it sits at the foot of the source list. */
   .navfoot {
     -webkit-app-region: no-drag; margin-top: auto;
-    display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
-    padding: 8px 9px; border: 1px solid var(--line); border-radius: 9px;
-    background: var(--card); color: var(--ink1); font: inherit; cursor: default;
+    display: flex; align-items: center; gap: 4px; width: 100%;
+    padding: 5px 6px 5px 9px; border: 1px solid var(--line); border-radius: 9px;
+    background: var(--card); color: var(--ink1);
   }
   .navfoot:hover { border-color: var(--line2); }
-  .navfoot:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .navfoot-main {
+    display: flex; align-items: center; gap: 9px; flex: 1; min-width: 0;
+    text-align: left; border: 0; background: transparent; color: inherit;
+    font: inherit; cursor: default; padding: 3px 0;
+  }
+  .navfoot-main:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 6px; }
+  .navlock { width: 26px; height: 26px; flex-basis: 26px; }
   .navfoot .col { display: flex; flex-direction: column; min-width: 0; flex: 1; }
   .navfoot-t { font-size: 12px; font-weight: 600; }
   .navfoot-s { font-size: 11px; color: var(--ink3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .navfoot.open svg { color: var(--good); }
-  .navfoot.shut svg { color: var(--warn); }
+  .navfoot.open .navfoot-main svg { color: var(--good); }
+  .navfoot.shut .navfoot-main svg { color: var(--warn); }
 
   /* ── content ─────────────────────────────────────────────────────────── */
   main { flex: 1; overflow-y: auto; padding: 30px 28px 32px; -webkit-app-region: drag; }
@@ -190,6 +196,15 @@
   button.act.primary:hover { filter: brightness(1.07); }
   button.act.danger { color: var(--warn); }
   button.act.danger:hover { background: var(--warn-soft); }
+  /* The button that removes a credential was styled `primary` — the same blue
+     as Add and Save, which is how an app says "this is the one you want". A
+     destructive confirmation should never wear the recommended colour. */
+  button.act.destructive {
+    background: var(--warn); border-color: var(--warn); color: #fff; font-weight: 600;
+  }
+  button.act.destructive:hover { background: var(--warn); filter: brightness(1.08); }
+  .confirming { background: var(--warn-soft); border-radius: 8px; padding: 6px 8px; margin: -2px 0; }
+  .confirming .sub { color: var(--warn); margin: 0; }
   button.act:disabled { opacity: .45; }
   button.act:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
@@ -267,6 +282,20 @@
   }
   .iconbtn:hover { background: var(--sel); color: var(--ink1); }
   .iconbtn.on { background: var(--accent-soft); color: var(--accent); }
+  /* A notice at the far end of the page is not feedback for a button press —
+     the eye is on the button. It turns into a tick where it stands. */
+  .iconbtn.done { background: var(--good-soft); color: var(--good); }
+  .iconbtn.done svg { animation: pop .22s ease-out; }
+  .iconbtn:active { transform: scale(0.92); }
+  @keyframes pop {
+    0%   { transform: scale(.55); opacity: 0; }
+    60%  { transform: scale(1.14); opacity: 1; }
+    100% { transform: scale(1); opacity: 1; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .iconbtn.done svg { animation: none; }
+    .iconbtn:active { transform: none; }
+  }
   .iconbtn.danger:hover { background: var(--warn-soft); color: var(--warn); }
   .iconbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   /* Kept for the few text buttons that still read better as words. */
@@ -382,7 +411,9 @@
     padding: 9px 14px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
     background: var(--accent-soft); position: sticky; top: 0; z-index: 2; }
   .bulkbar .grow { flex: 1; min-width: 0; }
-  .bulkbar .warn { color: var(--warn); font-size: 12px; }
+  .bulkbar .warn { color: var(--warn); font-size: 12px;
+    display: inline-flex; align-items: center; gap: 6px; }
+  .bulkbar.confirm { background: var(--warn-soft); }
   .bulkbar .note { flex-basis: 100%; margin: 0; padding: 4px 0 0; }
 </style>
 
@@ -482,6 +513,11 @@
   // anybody just set an error at the far bottom of a long list — which reads
   // as a dead button. They pick a mode now; Save commits it.
   let audienceFor = null, audienceDraft = null;
+  // Which buttons are showing a tick, and the timer that clears each one. The
+  // timer is held so a second press restarts it rather than the first press's
+  // timer wiping the second one's tick.
+  let copied = {};
+  const copiedTimers = {};
   // Which row is mid-edit. The background refresh must not wipe a half-typed
   // value out from under someone, so polling pauses while this is set.
   let revealed = {};    // key -> true once its value has been fetched and shown
@@ -600,14 +636,19 @@
     const detail = open
       ? profileLabel(v.signed_in_profile) + (v.expires_in ? ` · ${humanTime(v.expires_in)} left` : "")
       : (v.fully_sealed ? "Nothing can read it" : "Values still readable");
-    return `<button class="navfoot ${open ? "open" : "shut"}" data-page="vault"
-      title="${open ? "Signed in" : "Sign in to the vault"}">
-      ${icon(open ? "unlock" : "lock", "navicon")}
-      <span class="col">
-        <span class="navfoot-t">${open ? "Vault open" : "Vault locked"}</span>
-        <span class="navfoot-s">${esc(detail)}</span>
-      </span>
-    </button>`;
+    const where = state?.catalog?.workspace || state?.store?.workspace || "";
+    return `<div class="navfoot ${open ? "open" : "shut"}">
+      <button class="navfoot-main" data-page="switch"
+        title="Workspace and sign-in">
+        ${icon(open ? "unlock" : "lock", "navicon")}
+        <span class="col">
+          <span class="navfoot-t">${open ? "Vault open" : "Vault locked"}</span>
+          <span class="navfoot-s">${esc(where ? `${where} \u00b7 ${detail}` : detail)}</span>
+        </span>
+      </button>
+      ${open ? `<button class="iconbtn navlock" data-locknow title="Lock and switch workspace"
+        aria-label="Lock and switch workspace">${icon("lock")}</button>` : ""}
+    </div>`;
   }
 
   function paintNav() {
@@ -624,6 +665,13 @@
       ${navFoot()}`;
     nav.querySelectorAll("[data-page]").forEach((b) =>
       b.onclick = () => { page = b.dataset.page; paint(); });
+    // Lock and go straight to the screen you would need next. Locking and then
+    // leaving someone on the Keys page is how a lock button gets pressed twice.
+    nav.querySelectorAll("[data-locknow]").forEach((b) => b.onclick = async () => {
+      page = "switch";
+      revealed = {}; values = {}; history = {};
+      await callVault("vault_signout");
+    });
   }
 
   // Mirrors the HivemindOS agent-env card: name and actions on one line, the
@@ -639,15 +687,18 @@
         <span class="named"><span class="mono">${esc(k)}</span>
           ${shown || pending ? "" : `<span class="masked" title="Hidden">••••••••••</span>`}</span>
         ${pending ? `
-          <span class="sub">Remove it? Another app may be using it.</span>
-          <button class="act primary" data-rmgo="${esc(k)}" ${busy ? "disabled" : ""}>Remove</button>
+          <span class="confirming"><span class="sub">Remove it? Another app may be using it,
+            and the value is not recoverable from here.</span></span>
           <button class="act" data-cancel="1">Cancel</button>
+          <button class="act destructive" data-rmgo="${esc(k)}" ${busy ? "disabled" : ""}>
+            ${icon("trash")} Remove</button>
         ` : `
           <button class="iconbtn ${shown ? "on" : ""}" data-reveal="${esc(k)}"
             title="${shown ? "Hide value" : "Reveal value"}"
             aria-label="${shown ? "Hide value" : "Reveal value"}">${icon(shown ? "eyeOff" : "eye")}</button>
-          <button class="iconbtn" data-copy="${esc(k)}" title="Copy value"
-            aria-label="Copy value">${icon("copy")}</button>
+          <button class="iconbtn ${copied[k] ? "done" : ""}" data-copy="${esc(k)}"
+            title="${copied[k] ? "Copied" : "Copy value"}"
+            aria-label="${copied[k] ? "Copied" : "Copy value"}">${icon(copied[k] ? "check" : "copy")}</button>
           <button class="iconbtn ${history[k] ? "on" : ""}" data-hist="${esc(k)}"
             title="Who has used this key" aria-label="Who has used this key">${icon("history")}</button>
           <button class="iconbtn danger" data-remove="${esc(k)}" title="Remove"
@@ -659,6 +710,23 @@
       ${audienceBlock(k, usedLine(k))}
       ${history[k] ? historyBlock(k) : ""}
     </div>`;
+  }
+
+  /** Show a tick on one button for a moment, then put it back.
+   *
+   *  Held in state rather than done to the element, because a paint replaces
+   *  every node — a class set on the button would be gone by the next tick of
+   *  the background refresh.
+   */
+  function markCopied(mark) {
+    if (!mark) return;
+    copied[mark] = true;
+    clearTimeout(copiedTimers[mark]);
+    copiedTimers[mark] = setTimeout(() => {
+      delete copied[mark];
+      delete copiedTimers[mark];
+      paint();
+    }, 1400);
   }
 
   const chosen = () => Object.keys(picked).filter((k) => picked[k]);
@@ -674,13 +742,15 @@
     if (!on.length) return "";
     const cat = state.catalog;
     const locked = on.filter((k) => cat?.scopes?.[k] && !cat.scopes[k].may_change);
-    return `<div class="bulkbar">
+    return `<div class="bulkbar ${bulkConfirm ? "confirm" : ""}">
       <span class="grow"><strong>${on.length}</strong> selected</span>
       ${bulkConfirm ? `
-        <span class="warn">Remove ${on.length} key${on.length === 1 ? "" : "s"}?
-          Other apps on this machine may be using ${on.length === 1 ? "it" : "them"}.</span>
-        <button class="act primary" data-bulkgo ${busy ? "disabled" : ""}>Remove them</button>
+        <span class="warn">${icon("alert")} Remove ${on.length} key${on.length === 1 ? "" : "s"}?
+          Other apps on this machine may be using ${on.length === 1 ? "it" : "them"},
+          and ${on.length === 1 ? "it is" : "they are"} not recoverable from here.</span>
         <button class="act" data-bulkcancel>Cancel</button>
+        <button class="act destructive" data-bulkgo ${busy ? "disabled" : ""}>
+          ${icon("trash")} Remove ${on.length}</button>
       ` : `
         <select class="scope" data-bulkscope ${busy ? "disabled" : ""}>
           <option value="">Set reach…</option>
@@ -1195,6 +1265,83 @@ passbook oauth connect google:work</pre>
       ${mcp}`;
   }
 
+  /** Which workspace this machine acts for, and the way back in.
+   *
+   *  Locking and choosing a workspace belong on one screen because they are one
+   *  moment: you step away from a client's credentials, or you step into them.
+   *  Splitting them puts the sign-in on a page you reach by remembering it.
+   */
+  function switchPage() {
+    const cat = state.catalog || {};
+    const rows = cat.workspace_rows || [];
+    const here = cat.workspace || state.store?.workspace || "";
+    const pinned = cat.workspace_pinned;
+    const v = vault;
+
+    const list = rows.length ? rows.map((row) => `
+      <div class="row">
+        ${avatar(row.label || row.id)}
+        <div class="grow">
+          <div><strong>${esc(row.label || row.id)}</strong>${row.active ? " \u00b7 active" : ""}</div>
+          <div class="sub mono">${esc(row.id)}${row.inherits ? ""
+            : " \u00b7 does not inherit the machine store"}</div>
+        </div>
+        ${row.active
+          ? `<span class="tag on">Here</span>`
+          : `<button class="act" data-workspace="${esc(row.id)}" ${busy || pinned ? "disabled" : ""}>
+               Switch</button>`}
+      </div>`).join("")
+      : `<div class="empty">This machine has no workspaces \u2014 everything lives in the
+         machine store.</div>`;
+
+    const signIn = !v?.supported ? "" : v.unlocked ? `
+      <div class="group">
+        <div class="row">
+          <span class="statustile good">${icon("unlock")}</span>
+          <div class="grow"><strong>Signed in</strong> as
+            ${esc(profileLabel(v.signed_in_profile))}${v.expires_in
+              ? `, ${humanTime(v.expires_in)} left` : ""}.</div>
+          <button class="act" data-signout ${busy ? "disabled" : ""}>${icon("lock")} Lock</button>
+        </div>
+        <p class="note">Locking closes the vault for everything on this machine, not just
+        this window. Anything mid-request gets refused rather than served stale.</p>
+      </div>`
+      : `
+      <div class="group">
+        <h3>Sign in</h3>
+        ${(v.profiles || []).length > 1 ? `
+          <div class="addrow two">
+            <select id="sw-profile">
+              ${v.profiles.map((p) => `<option value="${esc(p.id)}"${
+                p.id === (vaultForm.profile || v.active) ? " selected" : ""}>${esc(p.label)}</option>`).join("")}
+            </select>
+          </div>` : ""}
+        <div class="addrow two">
+          <input id="sw-pw" type="password" placeholder="Vault password" />
+          <button class="act primary" id="sw-go" ${busy ? "disabled" : ""}>${icon("unlock")} Sign in</button>
+        </div>
+        ${(v.profiles || []).length ? "" : `<p class="note">No profile on this machine yet.
+          Set one up on the Vault page.</p>`}
+      </div>`;
+
+    return `
+      <h2>Workspace</h2>
+      <p class="lede">Which set of credentials this machine is working with, and
+      whether anything can read them.</p>
+      ${signIn}
+      <div class="group">
+        <h3>Workspaces</h3>
+        ${list}
+        ${pinned ? `<p class="note">HIVE_WORKSPACE is set in this app's environment, so it is
+          pinned to <span class="mono">${esc(here)}</span> and switching is turned off here.
+          A pinned process is pinned deliberately \u2014 usually an agent working for one
+          client \u2014 and a switch made in this window should not quietly re-point it.</p>`
+          : `<p class="note">Switching writes HivemindOS's own workspace manifest, so both
+          apps agree on which one is active. Keys stay where they are; what changes is which
+          store this machine reads first and where a new key is written.</p>`}
+      </div>`;
+  }
+
   function accessPage() {
     const a = state.access || {};
     const pending = state.broker?.pending || [];
@@ -1269,8 +1416,10 @@ passbook oauth connect google:work</pre>
           <span class="statustile plain">${icon("monitor")}</span>
           <div class="grow"><div class="mono">${esc(l.fingerprint || "—")}</div>
             <div class="sub">Both ends read this aloud before a key moves.</div></div>
-          ${l.fingerprint ? `<button class="iconbtn" data-copytext="${esc(l.fingerprint)}"
-            title="Copy fingerprint" aria-label="Copy fingerprint">${icon("copy")}</button>` : ""}
+          ${l.fingerprint ? `<button class="iconbtn ${copied.__fingerprint ? "done" : ""}"
+            data-copytext="${esc(l.fingerprint)}" data-copymark="__fingerprint"
+            title="${copied.__fingerprint ? "Copied" : "Copy fingerprint"}"
+            aria-label="Copy fingerprint">${icon(copied.__fingerprint ? "check" : "copy")}</button>` : ""}
         </div>
       </div>
       <div class="group">
@@ -1353,6 +1502,9 @@ passbook oauth connect google:work</pre>
   }
 
   const PAGE_ICON = Object.fromEntries(PAGES.map(([id, , glyph]) => [id, glyph]));
+  // Reached from the source list's foot rather than from the list itself: it is
+  // where you go to leave or to come back, not a section you browse.
+  PAGE_ICON.switch = "building";
 
   /** Give the page its heading tile and every empty state a glyph.
    *
@@ -1388,7 +1540,7 @@ passbook oauth connect google:work</pre>
     paintNav();
     const body = { keys: keysPage, vault: vaultPage, signins: signinsPage,
                    access: accessPage, agents: agentsPage,
-                   machines: machinesPage,
+                   machines: machinesPage, switch: switchPage,
                    broker: brokerPage, record: recordPage }[page]();
     main.innerHTML = lockBanner() + body + noticeBar();
     dressPage();
@@ -1397,6 +1549,13 @@ passbook oauth connect google:work</pre>
       page = b.dataset.goto; notice = ""; paint();
     });
     main.querySelectorAll("[data-signout]").forEach((b) => b.onclick = () => callVault("vault_signout"));
+    main.querySelectorAll("[data-workspace]").forEach((b) => b.onclick = async () => {
+      busy = true; paint();
+      try { state = await invoke("set_workspace", { name: b.dataset.workspace });
+            notice = ""; grid = null; picked = {}; revealed = {}; values = {}; }
+      catch (e) { notice = String(e); }
+      finally { busy = false; await refreshVault(); paint(); }
+    });
 
     main.querySelectorAll("[data-oarefresh]").forEach((b) => b.onclick = () =>
       callSignin("oauth_refresh", { id: b.dataset.oarefresh }));
@@ -1537,6 +1696,7 @@ passbook oauth connect google:work</pre>
       if (button) button.onclick = run;
     };
     wire("si-go", () => signIn("si-pw", "si-profile"));
+    wire("sw-go", () => signIn("sw-pw", "sw-profile"));
     wire("si-go2", () => signIn("si-pw2", null));
     wire("seal-go", () => callVault("vault_seal", { password: pwd("seal-pw") }));
     wire("seal-go2", () => callVault("vault_seal", { password: pwd("sl-pw") }));
@@ -1549,7 +1709,7 @@ passbook oauth connect google:work</pre>
     // Enter submits the password field it is in, because a password field that
     // needs a mouse to submit is one people retype.
     [["si-pw", "si-go"], ["si-pw2", "si-go2"], ["seal-pw", "seal-go"],
-     ["sec-pw", "sec-go"], ["np-pw", "np-create"]].forEach(([field, button]) => {
+     ["sec-pw", "sec-go"], ["np-pw", "np-create"], ["sw-pw", "sw-go"]].forEach(([field, button]) => {
       const input = document.getElementById(field);
       if (input) input.onkeydown = (e) => { if (e.key === "Enter") document.getElementById(button)?.click(); };
     });
@@ -1583,7 +1743,7 @@ passbook oauth connect google:work</pre>
       paint();
     });
     main.querySelectorAll("[data-copytext]").forEach((b) => b.onclick = async () => {
-      try { await navigator.clipboard.writeText(b.dataset.copytext); notice = "Fingerprint copied."; }
+      try { await navigator.clipboard.writeText(b.dataset.copytext); markCopied(b.dataset.copymark); }
       catch (e) { notice = String(e); }
       paint();
     });
@@ -1592,7 +1752,8 @@ passbook oauth connect google:work</pre>
       try {
         const v = values[k] ?? await invoke("reveal_key", { name: k });
         await navigator.clipboard.writeText(v);
-        notice = `${k} copied.`;
+        markCopied(k);
+        notice = "";
       } catch (e) { notice = String(e); }
       paint();
     });

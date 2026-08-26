@@ -436,6 +436,54 @@ def test_an_invalid_workspace_id_is_refused(hive, monkeypatch):
         passbook.workspace()
 
 
+def test_switching_the_active_workspace_writes_hivemindos_manifest(hive, monkeypatch):
+    monkeypatch.delenv("HIVE_WORKSPACE", raising=False)
+    _manifest(hive, [{"id": "one", "name": "One"}, {"id": "two"}], active="one")
+
+    was = passbook.set_active_workspace("two")
+
+    assert was == "one"
+    assert passbook.workspace() == "two"
+    # The same file HivemindOS reads, not a second registry beside it.
+    payload = json.loads((hive / "workspaces.json").read_text(encoding="utf-8"))
+    assert payload["activeWorkspaceId"] == "two"
+    # Everything else in the manifest survives the write.
+    assert [entry["id"] for entry in payload["workspaces"]] == ["one", "two"]
+    assert payload["workspaces"][0]["name"] == "One"
+
+
+def test_switching_to_an_unknown_workspace_is_refused(hive, monkeypatch):
+    monkeypatch.delenv("HIVE_WORKSPACE", raising=False)
+    _manifest(hive, [{"id": "one"}], active="one")
+
+    with pytest.raises(ValueError, match="no workspace called"):
+        passbook.set_active_workspace("nope")
+    with pytest.raises(ValueError, match="not a valid workspace id"):
+        passbook.set_active_workspace("../escape")
+    assert passbook.workspace() == "one"
+
+
+def test_a_pinned_process_keeps_its_workspace_when_the_manifest_moves(hive, monkeypatch):
+    """HIVE_WORKSPACE is a deliberate pin, usually an agent working for one
+    client. A person switching the desktop app must not re-point it."""
+    _manifest(hive, [{"id": "one"}, {"id": "two"}], active="one")
+    monkeypatch.setenv("HIVE_WORKSPACE", "one")
+    assert passbook.workspace_pinned() is True
+
+    passbook.set_active_workspace("two")
+
+    assert passbook.workspace() == "one"
+    payload = json.loads((hive / "workspaces.json").read_text(encoding="utf-8"))
+    assert payload["activeWorkspaceId"] == "two"
+
+
+def test_a_workspace_label_falls_back_to_its_id(hive, monkeypatch):
+    _manifest(hive, [{"id": "one", "name": "Main shared brain"}, {"id": "two"}], active="one")
+    assert passbook.workspace_label("one") == "Main shared brain"
+    assert passbook.workspace_label("two") == "two"
+    assert passbook.workspace_label("never-heard-of-it") == "never-heard-of-it"
+
+
 # ── 11. access stamps (optional companion) ─────────────────────────────────
 
 import passbook_seal  # noqa: E402

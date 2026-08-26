@@ -1237,6 +1237,55 @@ def cmd_scope_set(args: argparse.Namespace) -> int:
     return 0 if changed and not refused and not missing else (0 if changed else 1)
 
 
+def cmd_workspace(args: argparse.Namespace) -> int:
+    """Which workspace this machine is acting for, and what else it has."""
+    here = passbook.workspace()
+    names = passbook.workspaces()
+    if args.json:
+        print(json.dumps({
+            "active": here,
+            "pinned": passbook.workspace_pinned(),
+            "workspaces": [{"id": name, "label": passbook.workspace_label(name),
+                            "active": name == here,
+                            "inherits": passbook.workspace_inherits(name)}
+                           for name in names],
+        }, indent=2))
+        return 0
+    if passbook.workspace_pinned():
+        print(f"acting for: {here}  (pinned by HIVE_WORKSPACE, not the manifest)")
+    else:
+        print(f"acting for: {here or '(none configured)'}")
+    for name in names:
+        label = passbook.workspace_label(name)
+        mark = "*" if name == here else " "
+        extra = "" if passbook.workspace_inherits(name) else "  (does not inherit the machine store)"
+        print(f" {mark} {name}{'' if label == name else f'  — {label}'}{extra}")
+    if not names:
+        print("This machine has no workspaces; everything lives in the machine store.")
+    return 0
+
+
+def cmd_workspace_use(args: argparse.Namespace) -> int:
+    """Switch the machine's active workspace."""
+    try:
+        was = passbook.set_active_workspace(args.name)
+    except ValueError as error:
+        known = ", ".join(passbook.workspaces()) or "none"
+        return _fail(str(error), f"On this machine: {known}")
+    except OSError as error:
+        return _fail(f"Could not write the workspace manifest: {error}")
+    if was == args.name:
+        print(f"Already acting for {args.name}.")
+    else:
+        print(f"Now acting for {args.name}{f' (was {was})' if was else ''}.")
+    if passbook.workspace_pinned():
+        # Saying nothing here would leave someone staring at a command that
+        # reported success while this shell went on using the old workspace.
+        print("HIVE_WORKSPACE is set in this environment, so THIS shell still acts for "
+              f"{passbook.workspace()}. Unset it to follow the manifest.", file=sys.stderr)
+    return 0
+
+
 def cmd_matrix(args: argparse.Namespace) -> int:
     """Which agents can read which keys, as a grid you can actually scan."""
     catalog = _catalog()
@@ -1605,6 +1654,14 @@ def machine_state() -> dict:
             "available": True,
             "workspace": here,
             "workspaces": passbook.workspaces(),
+            # The window offers to switch workspaces, so it needs the names a
+            # person recognises and whether switching would do anything at all.
+            "workspace_rows": [
+                {"id": name, "label": passbook.workspace_label(name),
+                 "active": name == here, "inherits": passbook.workspace_inherits(name)}
+                for name in passbook.workspaces()
+            ],
+            "workspace_pinned": passbook.workspace_pinned(),
             "scopes": scopes,
             "scope_options": list(passbook_access.SCOPES),
             "default_scope": passbook_access.DEFAULT_SCOPE,
@@ -2301,6 +2358,20 @@ def build_parser() -> argparse.ArgumentParser:
     scope_set.add_argument("--tailnet", action="store_true",
                            help="as machine, and lendable to linked machines")
     scope_set.set_defaults(json=False, key="", func=cmd_scope_set)
+
+    workspace_cmd = subs.add_parser("workspace", help="which workspace this machine acts for")
+    workspace_cmd.add_argument("--json", action="store_true")
+    workspace_cmd.set_defaults(func=cmd_workspace)
+    workspace_subs = workspace_cmd.add_subparsers(dest="workspace_command")
+    workspace_list = workspace_subs.add_parser("list", help="every workspace on this machine")
+    workspace_list.add_argument("--json", action="store_true")
+    workspace_list.set_defaults(func=cmd_workspace)
+    workspace_show = workspace_subs.add_parser("show", help="the active workspace")
+    workspace_show.add_argument("--json", action="store_true")
+    workspace_show.set_defaults(func=cmd_workspace)
+    workspace_use = workspace_subs.add_parser("use", help="switch the active workspace")
+    workspace_use.add_argument("name")
+    workspace_use.set_defaults(json=False, func=cmd_workspace_use)
 
     matrix = subs.add_parser("matrix", help="which agents can read which keys")
     matrix.add_argument("--agent", nargs="+", default=[], help="only these agents")

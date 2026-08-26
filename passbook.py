@@ -169,6 +169,56 @@ def workspaces(environ: Mapping[str, str] | None = None) -> list[str]:
     return sorted(named)
 
 
+def set_active_workspace(name: str, environ: Mapping[str, str] | None = None) -> str:
+    """Point the machine's active workspace at `name`, and say what it was.
+
+    Written into HivemindOS's own `workspaces.json`, not a PassBook-side copy —
+    for the same reason `workspace_manifest` reads it rather than inventing a
+    registry. Two records of which workspace is active would disagree the first
+    time either app changed one, and the disagreement would be invisible: each
+    app would be showing the truth as it knew it.
+
+    `HIVE_WORKSPACE` still wins for a process that sets it. An agent pinned to a
+    client's workspace is pinned for a reason, and a person switching the
+    desktop app's workspace should not silently re-point that agent.
+    """
+    name = str(name or "").strip()
+    if not _WORKSPACE.match(name):
+        raise ValueError(f"{name!r} is not a valid workspace id")
+    known = set(workspaces(environ)) | {ROOT_WORKSPACE_ID}
+    if name not in known:
+        raise ValueError(f"There is no workspace called {name!r} on this machine.")
+    payload = dict(workspace_manifest(environ))
+    was = str(payload.get("activeWorkspaceId") or "").strip()
+    if was == name:
+        return was
+    payload["activeWorkspaceId"] = name
+    path = root(environ) / WORKSPACES_MANIFEST
+    _atomic_write(path, json.dumps(payload, indent=2) + "\n")
+    return was
+
+
+def workspace_pinned(environ: Mapping[str, str] | None = None) -> bool:
+    """Is this process pinned by `HIVE_WORKSPACE` rather than the manifest?
+
+    A surface that offers to switch workspaces has to know, or it offers a
+    control that appears to do nothing: the manifest changes, and the pinned
+    process goes on acting for the workspace it was pinned to.
+    """
+    source = os.environ if environ is None else environ
+    return bool(str(source.get(WORKSPACE_ENV_VAR, "")).strip())
+
+
+def workspace_label(name: str, environ: Mapping[str, str] | None = None) -> str:
+    """The human name HivemindOS gave a workspace, else the id itself."""
+    for entry in workspace_manifest(environ).get("workspaces") or []:
+        if isinstance(entry, dict) and str(entry.get("id") or "") == name:
+            label = str(entry.get("name") or entry.get("label") or "").strip()
+            if label:
+                return label
+    return name
+
+
 def workspace_inherits(name: str, environ: Mapping[str, str] | None = None) -> bool:
     """Does this workspace also see the machine-wide store?
 

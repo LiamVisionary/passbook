@@ -460,6 +460,19 @@ fn vault_use_profile(label: String) -> Result<Value, String> {
     vault_state()
 }
 
+/// Switch which workspace this machine acts for.
+///
+/// Written into HivemindOS's own manifest by the CLI, not a PassBook-side copy,
+/// so the two apps cannot disagree about which workspace is active.
+#[tauri::command]
+fn set_workspace(name: String) -> Result<Value, String> {
+    if name.trim().is_empty() {
+        return Err("Which workspace?".into());
+    }
+    run(&["workspace", "use", name.trim()])?;
+    state()
+}
+
 /// Profile, seal, broker and sign-in in one go — the whole first run.
 ///
 /// These four are never useful apart, and asking for the same password four
@@ -515,7 +528,8 @@ fn main() {
             state, set_mode, unlock, lock, resolve, broker, revoke, add_key, remove_key, reveal_key,
             key_history, vault_state, vault_signin, vault_signout, vault_create_profile,
             vault_use_profile, vault_seal, vault_unseal, vault_secure, set_key_group, set_key_audience, set_key_scope, set_keys_scope, remove_keys,
-            access_matrix, oauth_state, oauth_refresh, oauth_disconnect, oauth_connect
+            access_matrix, oauth_state, oauth_refresh, oauth_disconnect, oauth_connect,
+            set_workspace
         ])
         .run(tauri::generate_context!())
         .expect("PassBook failed to start");

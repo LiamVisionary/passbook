@@ -1699,6 +1699,18 @@ def cmd_sync(args: argparse.Namespace) -> int:
     plan = passbook_sync.plan_pull(local, local_meta, payloads)
     allowed, withheld = passbook_sync.sendable({k: "" for k in raw})
 
+    # A peer holding OUR ciphertext cannot open it, now or ever: the data key
+    # never leaves this machine. Push-missing cannot fix that — the peer has
+    # the key, so nothing is missing — so repair is its own verb and overwrites.
+    repairs: dict[str, dict] = {}
+    if args.repair:
+        openable = {k: v for k, v in local.items()
+                    if isinstance(v, str) and not passbook_vault.is_sealed(v)}
+        for host, got in payloads:
+            fix = passbook_sync.plan_repair(got, openable)
+            if fix["broken"]:
+                repairs[host] = fix
+
     # Record the machines that receive this store, so the Machines page stops
     # saying "no linked machines" while four of them hold it. Recorded as
     # `tailnet` rather than as grants: no fingerprint was compared, and the
@@ -1728,6 +1740,10 @@ def cmd_sync(args: argparse.Namespace) -> int:
             "mayReplicate": len(allowed),
             "withheldByReach": sorted(withheld),
             "adopted": adopted,
+            "repairs": {host: {"broken": len(fix["broken"]),
+                               "repairable": len(fix["repair"]),
+                               "cannotOpen": len(fix["cannotOpen"])}
+                        for host, fix in repairs.items()},
         }, indent=2))
         return 0
 
@@ -1746,6 +1762,28 @@ def cmd_sync(args: argparse.Namespace) -> int:
             print(f"\n{label}: {len(names)}")
             for key in sorted(names)[:10]:
                 print(f"  - {key}")
+    if args.repair:
+        if not repairs:
+            print("\nNo peer is holding unopenable ciphertext.")
+        for host, fix in sorted(repairs.items()):
+            print(f"\n{host}: {len(fix['broken'])} key(s) held as ciphertext it cannot open")
+            print(f"  repairable from here : {len(fix['repair'])}")
+            if fix["cannotOpen"]:
+                print(f"  this machine cannot open either: {len(fix['cannotOpen'])}")
+            if fix["withheldByPolicy"]:
+                print(f"  withheld by reach    : {len(fix['withheldByPolicy'])}")
+            if not args.apply:
+                continue
+            peer = next(p for p in peers if p["host"] == host)
+            ok, why = passbook_sync.push(host, peer["port"], fix["repair"],
+                                         address=peer["address"])
+            if ok:
+                print(f"  repaired {len(fix['repair'])} key(s) on {host}")
+            else:
+                print(f"  could not repair {host}: {why}", file=sys.stderr)
+        if repairs and not args.apply:
+            print("\nNothing was sent. Add --apply to repair.")
+
     if adopted:
         print(f"\nrecorded on the Machines page: {len(adopted)} machine(s)")
     print(f"\nreach: {len(allowed)} key(s) may replicate, {len(withheld)} withheld")
@@ -2253,6 +2291,9 @@ def machine_state() -> dict:
             "projects_seen": passbook_access.projects_seen(policy),
             "project": passbook.project(),
             "agents": passbook_catalog.agents_seen(policy=policy),
+            # How often each has asked, so a one-off from a test is
+            # distinguishable from a daemon that asks every minute.
+            "agent_activity": passbook_catalog.agent_activity(),
             "modes": list(passbook_access.AUDIENCE_MODES),
         }
     except ImportError:
@@ -3068,6 +3109,8 @@ def build_parser() -> argparse.ArgumentParser:
     sync_cmd = subs.add_parser("sync", help="what replication would move between this machine and its peers")
     sync_cmd.add_argument("--apply", action="store_true",
                           help="actually pull what the plan lists (default is a dry run)")
+    sync_cmd.add_argument("--repair", action="store_true",
+                          help="find peers holding ciphertext they cannot open, and offer to replace it")
     sync_cmd.add_argument("--no-adopt", dest="no_adopt", action="store_true",
                           help="do not record the peers on the Machines page")
     sync_cmd.add_argument("--json", action="store_true")

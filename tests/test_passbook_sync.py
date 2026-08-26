@@ -215,3 +215,37 @@ def test_a_stale_peers_blob_cannot_replace_a_good_local_value():
         ("stale-peer", payload({"K": "hive-sealed:v2:AAAA"}, {"K": NEWER}))])
     assert plan["apply"] == {}
     assert plan["refusedSealedFromPeer"] == ["K"]
+
+
+# ── repairing a peer that holds our ciphertext ─────────────────────────────
+
+def test_a_peer_holding_our_ciphertext_is_planned_for_repair():
+    """259 blobs on each of three live machines, byte-identical to ours."""
+    plan = sync.plan_repair(payload({"K": "hive-sealed:v2:AAAA", "FINE": "value"}),
+                            {"K": "the-real-secret", "FINE": "value"})
+    assert plan["broken"] == ["K"]
+    assert plan["repair"] == {"K": "the-real-secret"}
+
+
+def test_a_key_this_machine_also_cannot_open_is_not_repairable():
+    plan = sync.plan_repair(payload({"K": "hive-sealed:v2:AAAA"}),
+                            {"K": "hive-sealed:v2:BBBB"})
+    assert plan["repair"] == {}
+    assert plan["cannotOpen"] == ["K"]
+
+
+def test_repair_still_respects_a_narrowed_reach():
+    import passbook_access
+
+    policy = {"version": passbook_access.POLICY_VERSION,
+              "keys": {"MINE": {"scope": "workspace"}}}
+    plan = sync.plan_repair(payload({"MINE": "hive-sealed:v2:AAAA"}),
+                            {"MINE": "secret"}, policy=policy)
+    assert plan["repair"] == {}
+    assert plan["withheldByPolicy"] == ["MINE"]
+
+
+def test_push_refuses_to_send_ciphertext():
+    ok, why = sync.push("peer", "8798", {"K": "hive-sealed:v2:AAAA"})
+    assert ok is False
+    assert "plaintext" in why

@@ -168,7 +168,25 @@ def suggest_groups(names: Iterable[str], *, minimum: int = 2) -> dict[str, list[
             if count >= minimum and group != UNGROUPED}
 
 
-def agents_seen(*, root: Path | None = None, policy: Mapping[str, Any] | None = None) -> list[str]:
+# PassBook's own commands, and the hive-env wrappers that are the same store
+# under older names. They appear in the RECORD, because the record must show
+# every read — but they are not agents, and the Agents page is for deciding
+# which agents may read which keys.
+#
+# `passbook-run` asking for a credential is you running PassBook. Offering to
+# restrict it is offering to restrict yourself, and a picker full of your own
+# tooling buries the four callers that a decision could sensibly be made about.
+FIRST_PARTY_PREFIXES = ("passbook", "hive-env-")
+FIRST_PARTY = frozenset({"passbook"})
+
+
+def is_first_party(app: str) -> bool:
+    name = str(app).strip().lower()
+    return name in FIRST_PARTY or name.startswith(FIRST_PARTY_PREFIXES)
+
+
+def agents_seen(*, root: Path | None = None, policy: Mapping[str, Any] | None = None,
+                include_tooling: bool = False) -> list[str]:
     """Every agent this machine knows about — configured, or seen asking.
 
     Reading the ledger matters as much as reading the policy: the agents worth
@@ -196,7 +214,42 @@ def agents_seen(*, root: Path | None = None, policy: Mapping[str, Any] | None = 
                 found.add(app)
     except Exception:  # noqa: BLE001 — no ledger yet is not an error
         pass
+    if not include_tooling:
+        # An agent explicitly named in a policy stays visible whatever it is
+        # called: somebody wrote that rule deliberately and hiding the subject
+        # of it would make the rule unexplainable.
+        configured = {str(a) for a in (policy.get("apps") or {})}
+        for key_rule in (policy.get("keys") or {}).values():
+            if isinstance(key_rule, dict) and isinstance(key_rule.get("agents"), dict):
+                for listed in key_rule["agents"].values():
+                    if isinstance(listed, list):
+                        configured.update(str(a) for a in listed)
+        found = {app for app in found
+                 if not is_first_party(app) or app in configured}
     return sorted(found)
+
+
+def agent_activity(*, root: Path | None = None, limit: int = 4000) -> dict[str, int]:
+    """How many times each caller has asked, from the record.
+
+    A name alone cannot be judged. `fleet-health-watchdog` at 468 asks and
+    `probe` at 1 are both "an agent that asked this machine for a credential",
+    and only one of them is a thing to make a decision about. Showing the count
+    is better than guessing which names are noise and hiding them: the store's
+    own history says which is which, and a one-off from a test still deserves
+    to be seen rather than quietly filtered.
+    """
+    counts: Counter[str] = Counter()
+    try:
+        import passbook_stamp
+
+        for row in passbook_stamp.read_stamps(limit=limit, root=root):
+            app = str(row.get("app") or "").strip()
+            if app and app != "unknown":
+                counts[app] += 1
+    except Exception:  # noqa: BLE001 — no ledger yet is not an error
+        return {}
+    return dict(counts)
 
 
 def matrix(

@@ -253,6 +253,62 @@ def fetch(host: str, port: str, *, address: str = "",
 
 # ── the merge ──────────────────────────────────────────────────────────────
 
+def plan_repair(peer_payload: Mapping[str, Any], local_values: Mapping[str, str], *,
+                policy: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Keys where a peer holds ciphertext that this machine can replace.
+
+    A peer serving `hive-sealed:` is holding a blob sealed under some other
+    machine's data key — usually this one's, from before sync learned to open
+    values on the way out. That key never leaves the machine that made it, so
+    the peer cannot open the blob, now or ever. Every agent there asking for
+    that credential gets a string that passes every "looks like a token" check
+    and fails at the far end for a reason that names nothing.
+
+    Push-missing cannot fix it: the peer HAS the key, so nothing is missing.
+    The only repair is to overwrite, which is why this is its own verb rather
+    than something a normal pass does quietly.
+    """
+    theirs = peer_payload.get("values") if isinstance(peer_payload.get("values"), dict) else {}
+    broken = [key for key, value in theirs.items() if _looks_sealed(value)]
+    allowed, withheld = sendable({k: local_values.get(k, "") for k in broken}, policy=policy)
+    fixable = {key: local_values[key] for key in allowed
+               if local_values.get(key) and not _looks_sealed(local_values[key])}
+    return {
+        "broken": sorted(broken),
+        "repair": fixable,
+        "cannotOpen": sorted(k for k in allowed if k not in fixable),
+        "withheldByPolicy": sorted(withheld),
+    }
+
+
+def push(host: str, port: str, values: Mapping[str, str], *, address: str = "",
+         timeout: float = WIRE_TIMEOUT) -> tuple[bool, str]:
+    """Send values to a peer's collector. Plaintext on the wire, by contract.
+
+    Refuses to send ciphertext even if a caller asks: a blob is exactly what
+    this is repairing, and sending one would be the bug reintroducing itself.
+    """
+    blobs = [key for key, value in values.items() if _looks_sealed(value)]
+    if blobs:
+        return False, f"refusing to send {len(blobs)} sealed value(s); the wire carries plaintext"
+    if not values:
+        return True, ""
+    payload = json.dumps({"scope": "shared", "runtime": "passbook",
+                          "entries": dict(values)}).encode("utf-8")
+    where = address or host
+    request = urllib.request.Request(
+        f"http://{where}:{port}/env", data=payload,
+        headers={"content-type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            answer = json.loads(response.read().decode("utf-8") or "{}")
+    except Exception as error:  # noqa: BLE001 — an unreachable peer is not a crash
+        return False, str(error)
+    if answer.get("ok") is True:
+        return True, ""
+    return False, str(answer.get("error") or "the collector refused it")
+
+
 def plan_pull(local_values: Mapping[str, Any], local_meta: Mapping[str, float],
               payloads: Iterable[tuple[str, Mapping[str, Any]]]) -> dict[str, Any]:
     """What a pull WOULD change, given local state and what peers offered.

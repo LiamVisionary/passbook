@@ -390,6 +390,8 @@
 
   /* The matrix */
   .chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 14px 12px; }
+  .asks { color: var(--ink3); font-weight: 600; font-size: 10px;
+    font-variant-numeric: tabular-nums; }
   .chip { font-size: 11.5px; background: var(--chip2); border-radius: 99px;
     padding: 3px 10px; color: var(--ink2);
     display: inline-flex; align-items: center; gap: 5px; }
@@ -1425,12 +1427,24 @@ passbook oauth connect google:work</pre>
           <span class="tag ${restricted.length ? "info" : ""}">${restricted.length
             ? `${restricted.length} restricted` : "nothing restricted"}</span>
         </div>
-        ${known.length ? `<div class="chips">${known.map((a) =>
-          `<span class="chip mono">${esc(a)}</span>`).join("")}</div>`
+        ${known.length ? `<div class="chips">${[...known].sort((a, b) =>
+            ((cat.agent_activity || {})[b] || 0) - ((cat.agent_activity || {})[a] || 0)
+          ).map((a) => {
+            const asks = (cat.agent_activity || {})[a] || 0;
+            // A name alone cannot be judged: a daemon asking every minute and a
+            // one-off from a test read identically without this.
+            return `<span class="chip mono" title="${asks} recorded read${asks === 1 ? "" : "s"}">${esc(a)}
+              <span class="asks">${asks}</span></span>`;
+          }).join("")}</div>`
           : `<p class="note">None yet. An agent appears here the first time it asks —
              including ones you never configured, which is the point.</p>`}
         <p class="note">An agent's name is a claim it makes when it connects, not a
-        proof. It decides policy and fills the record; it is not a password.</p>
+        proof. It decides policy and fills the record; it is not a password. The
+        number beside each is how many reads it has on record \u2014 a name with one
+        is usually a test that ran once, not something to write a rule about.</p>
+        <p class="note">PassBook's own commands are not listed. <code>passbook run</code>
+        asking for a credential is you running PassBook, and restricting it would be
+        restricting yourself. They are all in the Record.</p>
       </div>`;
 
     const mcp = `

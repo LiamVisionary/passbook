@@ -9,6 +9,12 @@ Ship three apps and you get three credential stores. The same OpenAI key gets
 pasted three times, revoked in one place, and still works in the other two.
 PassBook fixes that by agreeing on a path instead of building a sync protocol.
 
+![The PassBook app: one machine's credentials arranged into groups, with two keys restricted to particular agents](docs/app-keys.png)
+
+There is a desktop app, and it holds no logic of its own — every question it
+answers goes through the same command line an agent or a script would use. What
+you see below, you can do from a terminal.
+
 Because every app resolves the same file with the same rule, **provisioning and
 linking are the same operation**. The first app that needs credentials creates
 the canonical store; every app installed after it finds that file and adopts it.
@@ -291,6 +297,8 @@ passbook unseal      # put everything back in the clear, permanently
 The way out is deliberately as visible as the way in. An encryption you cannot
 reverse is one nobody turns on.
 
+![The Vault page: the store encrypted, signed in with a password and a passkey, and the button that decrypts it back](docs/app-vault.png)
+
 ### How it holds the key
 
 A value is encrypted under a per-profile **data key** that is never written
@@ -378,6 +386,11 @@ OPENAI_API_KEY        yes         yes
 The agents listed are the ones that have actually asked, read out of the access
 ledger — not just the ones you remembered to configure. Those are usually the
 interesting ones.
+
+![The Agents page: every key against every agent that has asked, with two keys refused](docs/app-agents.png)
+
+The same grid is in the app, and so is the one line that gives an agent access
+in the first place.
 
 ## The broker
 

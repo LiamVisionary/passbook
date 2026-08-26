@@ -206,3 +206,30 @@ def test_sealing_a_write_is_recorded_by_name(sealed):
     # Names, never values.
     ledger = (home / passbook_stamp.PROOF_FILENAME).read_text(encoding="utf-8")
     assert "c-value" not in ledger
+
+
+def test_a_sealed_key_can_still_be_deleted(sealed):
+    """`remove_values` asked `_read` whether a key was there, and `_read`
+    answers with VALUES — dropping every sealed one outside the broker, which
+    is every process except the broker itself. So removal reported "not in the
+    store" and left the key exactly where it was.
+
+    Deleting a credential is the half you least want silently failing: you
+    believe it is gone, and it is still readable by anything that signs in."""
+    home, _ = sealed
+    assert "ALPHA" in _raw(home)
+
+    result = passbook.remove_values(["ALPHA"])
+
+    assert result["removed"] == ["ALPHA"]
+    assert result["absent"] == []
+    assert "ALPHA" not in _raw(home)
+    # The rest of the store is untouched and still sealed.
+    assert vault.is_sealed(_raw(home)["BETA"])
+
+
+def test_removing_a_key_that_really_is_absent_still_says_so(sealed):
+    home, _ = sealed
+    result = passbook.remove_values(["NEVER_EXISTED"])
+    assert result["removed"] == []
+    assert result["absent"] == ["NEVER_EXISTED"]

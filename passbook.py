@@ -829,9 +829,15 @@ def remove_values(
 
     path = target_path(workspace_id, environ)
     wanted = {str(key).strip() for key in keys if str(key).strip()}
-    existing = _read(path)
-    removed = sorted(wanted & set(existing))
-    absent = sorted(wanted - set(existing))
+    # Whether a key is in the file is a question about NAMES, and `_read`
+    # answers with VALUES — dropping every sealed one outside the broker, which
+    # is every process except the broker itself. So on a sealed store this saw
+    # nothing, reported "not in the store", and left the key exactly where it
+    # was. `set_values` had the same bug and the same fix; this is its sibling,
+    # and deleting a credential is the half you least want silently failing.
+    present = _key_names_on_disk(path)
+    removed = sorted(wanted & present)
+    absent = sorted(wanted - present)
     if not removed:
         return {"path": str(path), "removed": [], "absent": absent}
 

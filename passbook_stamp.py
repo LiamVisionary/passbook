@@ -72,6 +72,9 @@ OPERATIONS = frozenset({
     # Opening and closing the vault. A refused sign-in is the row an intrusion
     # would show up in first, so it matters more than most of the ones above.
     "signin", "signout",
+    # An OAuth grant renewed on the caller's behalf. Worth its own row: a
+    # refresh that starts failing is the earliest sign a sign-in has died.
+    "refresh",
 })
 
 

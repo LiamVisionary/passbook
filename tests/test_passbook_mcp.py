@@ -208,7 +208,9 @@ def test_serve_speaks_line_delimited_json_over_stdio(machine):
     replies = [json.loads(line) for line in out.getvalue().splitlines() if line.strip()]
     # The notification must not produce a reply.
     assert [r["id"] for r in replies] == [1, 2]
-    assert len(replies[1]["result"]["tools"]) == 4
+    # Against the real list, not a number — a hardcoded count breaks every
+    # time a tool is added and says nothing about the loop being tested.
+    assert [t["name"] for t in replies[1]["result"]["tools"]] == [t["name"] for t in mcp.TOOLS]
 
 
 def test_malformed_json_is_answered_not_fatal(machine):

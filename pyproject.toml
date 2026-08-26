@@ -52,6 +52,7 @@ passbook-history = "passbook_cli:main"
 passbook-install = "passbook_cli:main"
 passbook-link = "passbook_cli:main"
 passbook-mcp = "passbook_cli:main"
+passbook-oauth = "passbook_cli:main"
 passbook-group = "passbook_cli:main"
 passbook-agents = "passbook_cli:main"
 passbook-matrix = "passbook_cli:main"
@@ -88,6 +89,7 @@ py-modules = [
     "passbook_keystore",
     "passbook_link",
     "passbook_mcp",
+    "passbook_oauth",
     "passbook_peer",
     "passbook_seal",
     "passbook_stamp",

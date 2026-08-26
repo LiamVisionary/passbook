@@ -225,7 +225,8 @@
     never:  ["Never", "Always refused."],
   };
   const PAGES = [
-    ["keys", "Keys"], ["vault", "Vault"], ["access", "Access"], ["agents", "Agents"],
+    ["keys", "Keys"], ["vault", "Vault"], ["signins", "Sign-ins"], ["access", "Access"],
+    ["agents", "Agents"],
     ["machines", "Machines"],
     ["broker", "Broker"], ["record", "Record"],
   ];
@@ -240,6 +241,9 @@
   // over a few hundred keys is not something to ship with every 5s refresh.
   let collapsed = {};
   let grid = null, gridOnlyRestricted = false;
+  // Sign-ins are fetched separately: they can be slow to answer when the
+  // broker is mid-renewal, and the key list should not wait on that.
+  let signins = null, connecting = {};
   let audienceFor = null;   // the key whose audience is being edited
   // Which row is mid-edit. The background refresh must not wipe a half-typed
   // value out from under someone, so polling pauses while this is set.
@@ -645,6 +649,80 @@
    *  The agents listed are read out of the access ledger, not just the ones
    *  somebody remembered to configure — those are usually the interesting ones.
    */
+  const STATE_TAG = {
+    connected:    ["on",  "Live"],
+    expiring:     ["on",  "Renewing"],
+    expired:      ["off", "Expired"],
+    "no-refresh": ["off", "No refresh"],
+    disconnected: ["off", "Signed out"],
+  };
+
+  async function refreshSignins() {
+    try { signins = await invoke("oauth_state"); }
+    catch { signins = null; }
+  }
+
+  async function callSignin(name, args = {}) {
+    busy = true; paint();
+    try { signins = await invoke(name, args); notice = ""; }
+    catch (e) { notice = String(e); }
+    finally { busy = false; paint(); }
+  }
+
+  /** Accounts this machine is signed in to, and whether they still work.
+   *
+   *  An OAuth grant is a credential with a clock on it. The broker renews one
+   *  when something reads it, so "expired" here is a statement about right now
+   *  rather than a problem — what actually needs a person is a grant with no
+   *  refresh token, or one the provider has revoked.
+   */
+  function signinsPage() {
+    const list = signins;
+    if (list === null) {
+      return `<h2>Sign-ins</h2><p class="lede">Reading…</p>`;
+    }
+
+    const rows = list.length ? list.map((s) => {
+      const [tone, label] = STATE_TAG[s.state] || ["off", s.state];
+      const waiting = connecting[s.id];
+      return `<div class="row">
+        <div class="grow">
+          <strong class="mono">${esc(s.id)}</strong>
+          <div class="note">${esc(s.detail)}</div>
+        </div>
+        <span class="tag ${tone}">${esc(label)}</span>
+        ${waiting
+          ? `<span class="note">waiting for the browser…</span>`
+          : `${s.has_refresh ? `<button class="act" data-oarefresh="${esc(s.id)}"
+                ${busy ? "disabled" : ""}>Renew</button>` : ""}
+             <button class="act" data-oaconnect="${esc(s.id)}" ${busy ? "disabled" : ""}>
+               ${s.state === "disconnected" ? "Sign in" : "Sign in again"}</button>
+             <button class="act danger" data-oaforget="${esc(s.id)}" ${busy ? "disabled" : ""}>Forget</button>`}
+      </div>`;
+    }).join("") : `<div class="empty">No sign-ins yet.</div>`;
+
+    return `<h2>Sign-ins</h2>
+      <p class="lede">Accounts this machine holds, kept alive so agents never see a dead token.</p>
+      <div class="group">
+        ${rows}
+        <p class="note">A sign-in's tokens live in this store like any other credential —
+        sealed with it, held to the same access rules, and in the same record. What is
+        different is the clock: the broker renews one on the way past when something
+        reads it, so an agent never has to handle refresh, and a grant does not die
+        just because the app that created it is closed.</p>
+      </div>
+      <div class="group">
+        <h3>Add a sign-in</h3>
+        <p class="note">Register a client with the provider, then describe it here.
+        Nothing is connected until you sign in.</p>
+        <pre class="snippet">passbook oauth add google work --client-id &lt;your client id&gt;
+passbook oauth connect google:work</pre>
+        <p class="note">No vendor's own client id ships with PassBook. Some CLIs sign in
+        with a client they registered for themselves, and borrowing one is between you
+        and that vendor's terms — not something this app should decide for you.</p>
+      </div>`;
+  }
+
   function agentsPage() {
     const cat = state.catalog;
     if (!cat?.available) {
@@ -835,7 +913,8 @@
   function paint() {
     if (!state) return;
     paintNav();
-    const body = { keys: keysPage, vault: vaultPage, access: accessPage, agents: agentsPage,
+    const body = { keys: keysPage, vault: vaultPage, signins: signinsPage,
+                   access: accessPage, agents: agentsPage,
                    machines: machinesPage,
                    broker: brokerPage, record: recordPage }[page]();
     main.innerHTML = lockBanner() + body + (notice ? `<p class="note err">${esc(notice)}</p>` : "");
@@ -844,6 +923,28 @@
       page = b.dataset.goto; notice = ""; paint();
     });
     main.querySelectorAll("[data-signout]").forEach((b) => b.onclick = () => callVault("vault_signout"));
+
+    main.querySelectorAll("[data-oarefresh]").forEach((b) => b.onclick = () =>
+      callSignin("oauth_refresh", { id: b.dataset.oarefresh }));
+    main.querySelectorAll("[data-oaforget]").forEach((b) => b.onclick = () =>
+      callSignin("oauth_disconnect", { id: b.dataset.oaforget }));
+    main.querySelectorAll("[data-oaconnect]").forEach((b) => b.onclick = async () => {
+      const id = b.dataset.oaconnect;
+      connecting[id] = true; paint();
+      try { await invoke("oauth_connect", { id }); notice = ""; }
+      catch (e) { notice = String(e); connecting[id] = false; paint(); return; }
+      // The browser half happens outside this window, so poll rather than wait.
+      const until = Date.now() + 185000;
+      const tick = async () => {
+        await refreshSignins();
+        const done = (signins || []).find((s) => s.id === id);
+        if (done?.state === "connected" || Date.now() > until) {
+          delete connecting[id]; paint(); return;
+        }
+        setTimeout(tick, 2000);
+      };
+      setTimeout(tick, 2000);
+    });
 
     main.querySelectorAll("[data-group]").forEach((b) => {
       const toggle = () => {
@@ -1010,19 +1111,19 @@
         <code>withGlobalTauri</code> must be enabled in tauri.conf.json.</p>`;
       return;
     }
-    try { state = await invoke("state"); await refreshVault(); paint(); }
+    try { state = await invoke("state"); await refreshVault(); await refreshSignins(); paint(); }
     catch (e) { main.innerHTML = `<h2>PassBook</h2><p class="lede err">${esc(String(e))}</p>`; }
   }
   boot();
   setInterval(async () => {
     // A background refresh must not wipe a value someone is mid-edit on.
     const focused = document.activeElement;
-    if (busy || confirming || audienceFor) return;
+    if (busy || confirming || audienceFor || Object.keys(connecting).length) return;
     if (focused?.classList?.contains("val") || focused?.classList?.contains("search")) return;
     // A half-typed password must survive the refresh for the same reason a
     // half-typed value does.
     if (focused?.type === "password") return;
-    try { state = await invoke("state"); await refreshVault(); paint(); } catch {}
+    try { state = await invoke("state"); await refreshVault(); await refreshSignins(); paint(); } catch {}
   }, 5000);
 })();
 </script>

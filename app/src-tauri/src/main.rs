@@ -199,6 +199,55 @@ fn reveal_key(name: String) -> Result<String, String> {
     Ok(run(&["reveal", name.trim()])?.trim_end_matches('\n').to_string())
 }
 
+// ── sign-ins ───────────────────────────────────────────────────────────────
+//
+// An OAuth grant is a credential with a clock on it. The window shows whether
+// each one is still live and can renew or forget one; connecting opens a
+// browser, so it is spawned rather than awaited — a Tauri command that blocked
+// for three minutes waiting on a person would freeze the window.
+
+#[tauri::command]
+fn oauth_state() -> Result<Value, String> {
+    run_json(&["oauth", "--json"])
+}
+
+#[tauri::command]
+fn oauth_refresh(id: String) -> Result<Value, String> {
+    if id.trim().is_empty() {
+        return Err("Which sign-in?".into());
+    }
+    run(&["oauth", "refresh", id.trim()])?;
+    oauth_state()
+}
+
+#[tauri::command]
+fn oauth_disconnect(id: String) -> Result<Value, String> {
+    if id.trim().is_empty() {
+        return Err("Which sign-in?".into());
+    }
+    run(&["oauth", "remove", id.trim(), "--yes"])?;
+    oauth_state()
+}
+
+/// Start a browser sign-in. Returns as soon as it is running; the window polls
+/// `oauth_state` to find out how it went.
+#[tauri::command]
+fn oauth_connect(id: String) -> Result<Value, String> {
+    use std::process::Stdio;
+
+    if id.trim().is_empty() {
+        return Err("Which sign-in?".into());
+    }
+    passbook_command()
+        .args(["oauth", "connect", id.trim()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("Could not start the sign-in: {error}"))?;
+    Ok(Value::Bool(true))
+}
+
 // ── organising the store: groups, audiences, the matrix ────────────────────
 //
 // These change who can read what, so they go through the same CLI every other
@@ -384,7 +433,7 @@ fn main() {
             state, set_mode, unlock, lock, resolve, broker, revoke, add_key, remove_key, reveal_key,
             key_history, vault_state, vault_signin, vault_signout, vault_create_profile,
             vault_use_profile, vault_seal, vault_unseal, set_key_group, set_key_audience,
-            access_matrix
+            access_matrix, oauth_state, oauth_refresh, oauth_disconnect, oauth_connect
         ])
         .run(tauri::generate_context!())
         .expect("PassBook failed to start");

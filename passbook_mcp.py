@@ -129,6 +129,34 @@ TOOLS = [
         },
     },
     {
+        "name": "list_sign_ins",
+        "title": "List OAuth sign-ins",
+        "description": (
+            "Accounts this machine is signed in to — ChatGPT, Google, and so on — "
+            "and whether each is still live. Never returns a token."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "get_oauth_token",
+        "title": "Get a live access token",
+        "description": (
+            "A working access token for one sign-in, by id. It is renewed first if "
+            "it is close to expiry, so what you get back is live — you do not need "
+            "to handle refresh yourself. Checked against policy and recorded, like "
+            "any other credential. If it comes back refused, the owner needs to "
+            "sign in again; retrying will not help."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string", "description": "The sign-in's id, e.g. google:work."},
+                "reason": {"type": "string", "description": "Why you need it. Recorded."},
+            },
+            "required": ["id"],
+        },
+    },
+    {
         "name": "vault_status",
         "title": "Is the store unlocked",
         "description": (
@@ -300,11 +328,86 @@ def _tool_vault_status(arguments: Mapping[str, Any], state: Mapping[str, Any]) -
     }
 
 
+def _oauth_module():
+    try:
+        import passbook_oauth
+
+        return passbook_oauth
+    except ImportError:
+        return None
+
+
+def _tool_list_sign_ins(arguments: Mapping[str, Any], state: Mapping[str, Any]) -> dict[str, Any]:
+    module = _oauth_module()
+    if module is None:
+        return {"supported": False, "sign_ins": [],
+                "detail": "This machine has no sign-in support installed."}
+    listed = module.describe(root=state.get("root"), app=_client_name(state))
+    return {
+        "supported": True,
+        "sign_ins": [{k: v for k, v in entry.items() if k != "keys"} for entry in listed],
+        "live": [e["id"] for e in listed if e["state"] in {"connected", "expiring", "expired"}],
+        "detail": ("No sign-ins on this machine." if not listed
+                   else f"{len(listed)} sign-in(s)."),
+    }
+
+
+def _tool_get_oauth_token(arguments: Mapping[str, Any], state: Mapping[str, Any]) -> dict[str, Any]:
+    module = _oauth_module()
+    if module is None:
+        return {"refused": True, "why": "this machine has no sign-in support installed"}
+    identifier = str(arguments.get("id") or "").strip()
+    if not identifier:
+        raise ValueError("id is required")
+    root = state.get("root")
+    try:
+        grant = module.find_grant(identifier, root=root)
+    except module.GrantError as error:
+        return {"id": identifier, "token": None, "refused": True, "why": str(error)}
+
+    keys = module.grant_keys(grant)
+    agent = _client_name(state)
+    # The audience is a bound at every door, and a sign-in is no exception: an
+    # agent excluded from the access-token key is excluded from the token.
+    access = _access()
+    if access is not None:
+        verdict = access.decide_key(agent, keys["access_token"], access.read_policy(root), root=root)
+        if verdict["outcome"] == "refuse":
+            _record(agent, keys["access_token"], granted=False, reason=verdict["why"], root=root)
+            return {"id": identifier, "token": None, "refused": True, "why": verdict["why"]}
+
+    # One request, for the keys this grant actually has. Asking for all four
+    # names logged a DENIED row on every success, because `account` is optional
+    # and `request` reports a batch as denied when anything in it is missing —
+    # so a working token fetch left an audit trail that read like a refusal.
+    held = set(passbook.key_names())
+    present = [name for name in keys.values() if name in held]
+    if keys["access_token"] not in present:
+        present.append(keys["access_token"])
+    # Going through `request` is what triggers the broker's refresh, so the
+    # token that comes back is live rather than whatever was last written.
+    values = passbook.request(
+        present, app=agent,
+        reason=str(arguments.get("reason") or "")[:200] or f"sign-in {identifier}")
+    token = values.get(keys["access_token"], "")
+    shape = module.status(grant, values)
+    if not token:
+        _record(agent, keys["access_token"], granted=False, reason=shape["detail"], root=root)
+        return {"id": identifier, "token": None, "refused": True,
+                "why": shape["detail"],
+                "advice": "Ask the owner to run `passbook oauth connect " + identifier + "`."}
+    _record(agent, keys["access_token"], granted=True, reason="oauth token", root=root)
+    return {"id": identifier, "token": token, "expires_in": shape["expires_in"],
+            "state": shape["state"], "account": values.get(keys.get("account", ""), "")}
+
+
 HANDLERS: dict[str, Callable[[Mapping[str, Any], Mapping[str, Any]], dict[str, Any]]] = {
     "list_credentials": _tool_list_credentials,
     "get_credential": _tool_get_credential,
     "check_credentials": _tool_check_credentials,
     "vault_status": _tool_vault_status,
+    "list_sign_ins": _tool_list_sign_ins,
+    "get_oauth_token": _tool_get_oauth_token,
 }
 
 

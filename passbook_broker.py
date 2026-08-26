@@ -394,6 +394,89 @@ def _vault_status(root: Path | None) -> dict[str, Any]:
             "profiles": state["profiles"], "active": state["active"]}
 
 
+# ── keeping sign-ins alive ─────────────────────────────────────────────────
+#
+# An OAuth access token dies on a timer. Whatever created the grant usually
+# refreshes it — while that thing is running. The broker is running whenever any
+# app on this machine can read a credential at all, which makes it the one place
+# where "the token is always live" can actually be true.
+#
+# So a request that names a grant's access-token key renews it first, if it is
+# close enough to expiry to matter. The caller gets a working token and never
+# learns that anything happened.
+
+_REFRESH_LOCK = threading.Lock()
+_REFRESHING: dict[str, threading.Event] = {}
+
+
+def _refresh_if_needed(wanted: Iterable[str], root: Path | None) -> list[str]:
+    """Renew any grant whose access token was asked for and is about to die."""
+    try:
+        import passbook_oauth
+    except ImportError:
+        return []
+
+    asked = {str(key) for key in wanted}
+    renewed: list[str] = []
+    for grant in passbook_oauth.read_grants(root=root).get("grants", []):
+        if not isinstance(grant, dict) or not grant.get("key_prefix"):
+            continue
+        try:
+            keys = passbook_oauth.grant_keys(grant)
+        except passbook_oauth.GrantError:
+            continue
+        if keys["access_token"] not in asked:
+            continue
+        if _renew_one(grant, keys, root):
+            renewed.append(grant.get("id", ""))
+    return renewed
+
+
+def _renew_one(grant: Mapping[str, Any], keys: Mapping[str, str], root: Path | None) -> bool:
+    import passbook_oauth
+
+    identifier = str(grant.get("id") or "")
+    # One refresh per grant at a time. Two agents asking at once would otherwise
+    # both spend the refresh token, and a provider that rotates them invalidates
+    # the loser — disconnecting a grant that was working a second ago.
+    with _REFRESH_LOCK:
+        running = _REFRESHING.get(identifier)
+        if running is None:
+            running = threading.Event()
+            _REFRESHING[identifier] = running
+            leader = True
+        else:
+            leader = False
+    if not leader:
+        running.wait(timeout=HTTP_REFRESH_WAIT)
+        return False
+
+    try:
+        values = {name: value for name, value in passbook.load().items() if name in set(keys.values())}
+        if not passbook_oauth.needs_refresh(grant, values):
+            return False
+        refresh_token = values.get(keys["refresh_token"], "")
+        fresh = passbook_oauth.exchange_refresh(grant, refresh_token, root=root)
+        passbook.set_values(fresh, overwrite=True)
+        _record("refresh", [keys["access_token"]], app="passbook-oauth", granted=True,
+                reason=f"renewed {identifier}")
+        return True
+    except Exception as error:  # noqa: BLE001 — a dead grant must not fail the read
+        # The caller still gets whatever is stored; a stale token failing at the
+        # provider is a better outcome than the whole request erroring here, and
+        # the row says which grant needs signing in again.
+        _record("refresh", [keys.get("access_token", "*")], app="passbook-oauth", granted=False,
+                reason=f"{identifier}: {str(error)[:120]}")
+        return False
+    finally:
+        with _REFRESH_LOCK:
+            _REFRESHING.pop(identifier, None)
+        running.set()
+
+
+HTTP_REFRESH_WAIT = 30.0
+
+
 def _handle(payload: Mapping[str, Any], root: Path | None = None,
             caller: Mapping[str, Any] | None = None) -> dict[str, Any]:
     operation = str(payload.get("op") or "").strip().lower()
@@ -476,6 +559,10 @@ def _handle(payload: Mapping[str, Any], root: Path | None = None,
             refused.extend((key, "declined" if decision == "deny" else "no answer in time")
                            for key in asked)
 
+    if allowed:
+        # Before reading: renew any sign-in among these keys that is about to
+        # expire, so what the caller receives actually works.
+        _refresh_if_needed(allowed, root)
     available = passbook.load()
     granted = {key: available[key] for key in allowed if available.get(key)}
     missing = [key for key in allowed if key not in granted]

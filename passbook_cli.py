@@ -35,6 +35,8 @@ import os
 import shutil
 import subprocess
 import sys
+import time
+import urllib.parse
 from pathlib import Path
 from typing import Any
 
@@ -737,6 +739,240 @@ def cmd_passkey_enrol(args: argparse.Namespace) -> int:
     except module.VaultError as error:
         return _fail(str(error))
     print(f"Enrolled {made['label']}. It can now open this profile on any device it syncs to.")
+    return 0
+
+
+def _oauth():
+    try:
+        import passbook_oauth
+
+        return passbook_oauth
+    except ImportError:
+        return None
+
+
+def cmd_oauth(args: argparse.Namespace) -> int:
+    """Every sign-in this machine holds, and whether it still works."""
+    module = _oauth()
+    if module is None:
+        return _fail("Sign-ins are not installed on this machine.", "Run:  passbook install")
+    listed = module.describe()
+    if getattr(args, "json", False):
+        print(json.dumps(listed, indent=2))
+        return 0
+    if not listed:
+        print("No sign-ins yet.")
+        print("Add one with:  passbook oauth add google --client-id <id>")
+        return 0
+    for entry in listed:
+        marker = {"connected": " ", "expiring": "!", "expired": "!",
+                  "no-refresh": "!", "disconnected": "x"}.get(entry["state"], " ")
+        print(f" {marker} {entry['id']}")
+        print(f"     {entry['detail']}")
+    return 0
+
+
+def cmd_oauth_add(args: argparse.Namespace) -> int:
+    module = _oauth()
+    if module is None:
+        return 1
+    secret = ""
+    if args.client_secret_stdin:
+        secret = sys.stdin.readline().strip()
+        if not secret:
+            return _fail("No client secret arrived on stdin.")
+    try:
+        made = module.add_grant(
+            args.provider, args.label, client_id=args.client_id, client_secret=secret,
+            authorize_url=args.authorize_url, token_url=args.token_url,
+            scope=args.scope, key_prefix=args.key_prefix, redirect_port=args.redirect_port)
+    except module.GrantError as error:
+        return _fail(str(error))
+    print(f"Added {made['id']}.")
+    print("Its tokens will live in this store as:")
+    for role, name in sorted(made["keys"].items()):
+        print(f"   {name}   ({role.replace('_', ' ')})")
+    print(f"\nConnect it with:  passbook oauth connect {made['id']}")
+    return 0
+
+
+def cmd_oauth_connect(args: argparse.Namespace) -> int:
+    """Open the provider's sign-in page and catch the callback."""
+    module = _oauth()
+    if module is None:
+        return 1
+    try:
+        grant = module.find_grant(args.id)
+    except module.GrantError as error:
+        return _fail(str(error))
+
+    port = args.port or int(grant.get("redirect_port") or 0)
+    try:
+        server, actual_port = _callback_server(port)
+    except OSError as error:
+        return _fail(f"Could not listen for the callback: {error}",
+                     "Another process may already own that port — a vendor CLI mid-login, usually.")
+    redirect_uri = f"http://localhost:{actual_port}{_CALLBACK_PATH}"
+    started = module.authorize_url(args.id, redirect_uri=redirect_uri)
+
+    print(f"Opening {grant['provider']} to sign in.")
+    print("If a browser does not open, paste this:\n")
+    print(f"  {started['url']}\n")
+    if not args.no_browser:
+        import webbrowser
+
+        webbrowser.open(started["url"])
+
+    print(f"Waiting for the callback on {redirect_uri} …")
+    # This command then blocks on a person. Anyone piping it to a log would see
+    # nothing at all until it finished, including the URL they were meant to
+    # paste, so the buffer has to go out now rather than at exit.
+    sys.stdout.flush()
+    result = _await_callback(server, expect_state=started["state"], timeout=args.timeout)
+    if not result.get("code"):
+        return _fail(result.get("error") or "No authorization code arrived.",
+                     "Nothing was stored. Run the command again to retry.")
+    try:
+        module.complete_login(args.id, code=result["code"], verifier=started["verifier"],
+                              redirect_uri=redirect_uri)
+    except module.GrantError as error:
+        return _fail(str(error))
+    print(f"Connected {args.id}.")
+    print("Agents reading its access token now get a live one; the broker renews it.")
+    return 0
+
+
+_CALLBACK_PATH = "/auth/callback"
+
+
+def _callback_server(port: int):
+    """A loopback listener that answers on IPv4 *and* IPv6.
+
+    `localhost` resolves to ::1 first on macOS, so a server bound only to
+    127.0.0.1 is never reached and the login hangs on a page that never loads.
+    Binding a dual-stack socket and then refusing anything that is not loopback
+    keeps the reach identical while actually working.
+    """
+    import http.server
+    import socket
+
+    class Server(http.server.ThreadingHTTPServer):
+        address_family = socket.AF_INET6 if socket.has_ipv6 else socket.AF_INET
+        allow_reuse_address = True
+        captured: dict = {}
+
+        def server_bind(self):
+            if self.address_family == socket.AF_INET6:
+                try:
+                    self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+                except OSError:
+                    pass
+            super().server_bind()
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *_args):  # noqa: D102 — no request logging, ever
+            pass
+
+        def do_GET(self):  # noqa: N802
+            client = self.client_address[0]
+            if client not in {"127.0.0.1", "::1", "::ffff:127.0.0.1"}:
+                self.send_error(403, "loopback only")
+                return
+            parsed = urllib.parse.urlparse(self.path)
+            if parsed.path != _CALLBACK_PATH:
+                self.send_error(404)
+                return
+            query = {k: v[0] for k, v in urllib.parse.parse_qs(parsed.query).items()}
+            self.server.captured.update(query)
+            body = (b"<!doctype html><meta charset=utf-8>"
+                    b"<title>PassBook</title>"
+                    b"<body style='font:15px system-ui;padding:3rem'>"
+                    b"<h1>Signed in.</h1><p>You can close this tab and go back to your terminal.</p>")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    # A dual-stack bind on :: succeeds even when another process already owns
+    # the IPv4 loopback for this port — they are different addresses. The login
+    # would then appear to start, and a browser that resolved `localhost` to
+    # 127.0.0.1 would hand the authorization code to whatever that other process
+    # is. Refusing beats half-listening.
+    if port:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            probe.settimeout(1.0)
+            if probe.connect_ex(("127.0.0.1", port)) == 0:
+                raise OSError(f"port {port} is already served on 127.0.0.1 by another process")
+        finally:
+            probe.close()
+
+    host = "::" if (socket.has_ipv6 and Server.address_family == socket.AF_INET6) else "0.0.0.0"
+    server = Server((host, port), Handler)
+    return server, server.server_address[1]
+
+
+def _await_callback(server, *, expect_state: str, timeout: float) -> dict:
+    import threading
+
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    deadline = time.monotonic() + timeout
+    try:
+        while time.monotonic() < deadline:
+            if server.captured:
+                break
+            time.sleep(0.2)
+    except KeyboardInterrupt:
+        return {"error": "Cancelled."}
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    captured = dict(server.captured)
+    if not captured:
+        return {"error": f"Nothing arrived within {int(timeout)}s."}
+    if captured.get("error"):
+        return {"error": f"{captured['error']}: {captured.get('error_description', '')}".strip(": ")}
+    if captured.get("state") != expect_state:
+        # The state is the only thing tying this callback to the request we
+        # made. A mismatch means it belongs to a different login, so it is not
+        # ours to use.
+        return {"error": "The callback did not match this login. Nothing was stored."}
+    return {"code": captured.get("code", "")}
+
+
+def cmd_oauth_refresh(args: argparse.Namespace) -> int:
+    module = _oauth()
+    if module is None:
+        return 1
+    try:
+        grant = module.find_grant(args.id)
+        keys = module.grant_keys(grant)
+        values = module.token_values(grant, app="passbook-cli")
+        fresh = module.exchange_refresh(grant, values.get(keys["refresh_token"], ""))
+    except module.GrantError as error:
+        return _fail(str(error), "Sign in again:  passbook oauth connect " + args.id)
+    passbook.set_values(fresh, overwrite=True)
+    state = module.status(grant, module.token_values(grant, app="passbook-cli"))
+    print(f"Renewed {grant['id']}. {state['detail']}")
+    return 0
+
+
+def cmd_oauth_remove(args: argparse.Namespace) -> int:
+    module = _oauth()
+    if module is None:
+        return 1
+    if not args.yes:
+        print(f"Removing {args.id} forgets its tokens; you would have to sign in again.")
+        print("Re-run with --yes if that is what you want.")
+        return 1
+    try:
+        gone = module.remove_grant(args.id, forget_tokens=not args.keep_tokens)
+    except module.GrantError as error:
+        return _fail(str(error))
+    print(f"Removed {gone['removed']}." + (f" Forgot {len(gone['forgot'])} key(s)." if gone["forgot"] else ""))
     return 0
 
 
@@ -1825,6 +2061,43 @@ def build_parser() -> argparse.ArgumentParser:
     passkey_enrol.add_argument("--password-stdin", dest="password_stdin", action="store_true",
                                help="read the vault password from stdin, after the PRF secret")
     passkey_enrol.set_defaults(json=False, func=cmd_passkey_enrol)
+
+    oauth = subs.add_parser("oauth", help="sign-ins this machine holds, kept alive")
+    oauth.add_argument("--json", action="store_true")
+    oauth.set_defaults(func=cmd_oauth)
+    oauth_subs = oauth.add_subparsers(dest="oauth_command")
+
+    oauth_add = oauth_subs.add_parser("add", help="describe a sign-in (does not connect it)")
+    oauth_add.add_argument("provider", help="google, github, microsoft, or custom")
+    oauth_add.add_argument("label", nargs="?", default="", help="e.g. work — lets you hold several")
+    oauth_add.add_argument("--client-id", required=True, help="the client you registered")
+    oauth_add.add_argument("--client-secret-stdin", action="store_true",
+                           help="read a confidential client's secret from stdin")
+    oauth_add.add_argument("--authorize-url", default="", help="for a custom provider")
+    oauth_add.add_argument("--token-url", default="", help="for a custom provider")
+    oauth_add.add_argument("--scope", default="")
+    oauth_add.add_argument("--key-prefix", default="", help="names the store keys; derived if omitted")
+    oauth_add.add_argument("--redirect-port", type=int, default=0,
+                           help="fixed port, when the provider registered one")
+    oauth_add.set_defaults(json=False, func=cmd_oauth_add)
+
+    oauth_connect = oauth_subs.add_parser("connect", help="sign in through the browser")
+    oauth_connect.add_argument("id")
+    oauth_connect.add_argument("--port", type=int, default=0)
+    oauth_connect.add_argument("--timeout", type=float, default=180.0)
+    oauth_connect.add_argument("--no-browser", action="store_true")
+    oauth_connect.set_defaults(json=False, func=cmd_oauth_connect)
+
+    oauth_refresh = oauth_subs.add_parser("refresh", help="renew now, without waiting for expiry")
+    oauth_refresh.add_argument("id")
+    oauth_refresh.set_defaults(json=False, func=cmd_oauth_refresh)
+
+    oauth_remove = oauth_subs.add_parser("remove", aliases=["disconnect"], help="forget a sign-in")
+    oauth_remove.add_argument("id")
+    oauth_remove.add_argument("--yes", action="store_true")
+    oauth_remove.add_argument("--keep-tokens", action="store_true",
+                              help="forget the sign-in but leave its keys in the store")
+    oauth_remove.set_defaults(json=False, func=cmd_oauth_remove)
 
     mcp = subs.add_parser("mcp", help="speak MCP on stdio so any agent can find these credentials")
     mcp.set_defaults(func=cmd_mcp)

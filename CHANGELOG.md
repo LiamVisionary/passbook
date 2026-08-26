@@ -4,6 +4,22 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+### Sign-ins
+- **OAuth grants are a thing PassBook understands** (`passbook oauth`). A grant
+  knows which keys hold it, when it expires and how to renew — so a store stops
+  seeing three unrelated strings where an account is.
+- **The broker renews on read.** Anything asking for a grant's access token gets
+  a live one; the broker refreshes, writes back and hands it over. The broker
+  runs whenever a credential can be read at all, so a grant no longer dies
+  because the app that created it is closed.
+- `get_oauth_token` over MCP, so an agent never implements refresh.
+- Several accounts per provider — `google:personal` and `google:work` coexist,
+  each with its own store keys.
+- Tokens live in the store under ordinary key names: sealed with everything
+  else, held to the same audiences, in the same record. Only the grant's
+  description sits beside it, readable on purpose.
+- No vendor client id ships in the provider table, and a test enforces it.
+
 ### Agents
 - **An MCP server** (`passbook mcp`). Any MCP client — and, through ACP's MCP
   passthrough, any ACP editor — learns on connect what this machine holds, what

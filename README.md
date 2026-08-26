@@ -28,6 +28,7 @@ Nothing forks, so nothing ever has to be merged.
 - `passbook_access.py` — optional: which app may read which key, and when
 - `passbook_catalog.py` — optional: groups, audiences, and the access matrix
 - `passbook_mcp.py` — optional: an MCP server, so agents can find all this
+- `passbook_oauth.py` — optional: sign-ins that stay alive, renewed on read
 - `passbook_broker.py` — optional: one door for reads, and a record of them
 - `passbook_stamp.py` — optional: a tamper-evident record of who read what
 - `passbook_link.py` — optional: lending named keys to a second machine
@@ -79,9 +80,13 @@ Do all of this, and tell me what you find at each step:
    `list_credentials` and show me the groups and the count. Do not call
    `get_credential` yet.
 
-6. Tell me, in one short list:
+6. Run `passbook oauth` and tell me whether any account sign-ins exist and
+   whether they are still live. Do not connect anything without asking me.
+
+7. Tell me, in one short list:
    - how many credentials this machine holds
    - which groups they fall into
+   - which sign-ins are connected, and any that have expired for good
    - anything you think should be restricted to fewer agents, and why
 
 Rules while you do this:
@@ -123,6 +128,8 @@ without a second thing to configure.
 | `list_credentials` | Names, groups, and whether *this* agent may read each. Never values. |
 | `get_credential` | One value, by name, checked against policy and recorded. |
 | `check_credentials` | Whether named keys exist, without reading them. |
+| `list_sign_ins` | OAuth accounts and whether each is still live. Never a token. |
+| `get_oauth_token` | A live access token for one sign-in — renewed first, so refresh is never the agent's problem. |
 | `vault_status` | Whether the store is encrypted and currently unlocked. |
 
 On connect the server also hands the agent instructions telling it to list
@@ -329,6 +336,62 @@ sign in, so encrypting one protects nothing and breaks the build. `secure`
 prints every key it is leaving readable, and why, before it does anything.
 
 Add your own with `--skip`, for a feature flag some boot hook reads.
+
+## Accounts, not just keys
+
+Some things are not an API key but a **sign-in** — a ChatGPT plan, a Google
+account — and the difference that matters is that a sign-in has a clock on it.
+A store holding
+
+    OPENAI_OAUTH_ACCESS_TOKEN
+    OPENAI_OAUTH_REFRESH_TOKEN
+    OPENAI_OAUTH_EXPIRES_AT
+
+sees three unrelated strings. It cannot tell you the grant expired and cannot do
+anything about it, so the access token an app reads is dead an hour after
+somebody last opened whatever refreshes it — and it surfaces as a puzzling 401
+somewhere else entirely.
+
+PassBook makes a grant a thing it understands:
+
+```bash
+passbook oauth add google work --client-id <the client you registered>
+passbook oauth connect google:work      # opens the browser, catches the callback
+passbook oauth                          # what is connected, and for how long
+```
+
+**The broker renews it on the way past.** When anything reads the access token,
+the broker checks the clock, refreshes if it is close, writes the new tokens
+back, and hands over one that works. That is the whole point of putting this
+here rather than in an app: the broker runs whenever anything on the machine can
+read a credential at all, so a grant does not die just because the app that
+created it is closed.
+
+An agent therefore never implements refresh:
+
+```
+get_oauth_token("google:work")  ->  a token that is already live
+```
+
+The tokens themselves live in the store under ordinary key names, so they are
+sealed with everything else, held to the same audiences, and in the same record.
+There is no second vault and no second set of rules. Only the grant's
+*description* — its label, token endpoint and which key holds what — lives
+beside it in `passbook-oauth.json`, which is readable on purpose.
+
+![The Sign-ins page: three accounts, one live, one expired, one with no refresh token](docs/app-signins.png)
+
+### Two things worth knowing
+
+**No vendor's client id ships with PassBook.** Some CLIs sign in with a client
+they registered for themselves, and a grant that borrows one is a matter between
+you and that vendor's terms — not something a library should settle by baking it
+in. `PROVIDERS` covers services where you register your own client; anything
+else you describe when you add it.
+
+**A refresh token is worth more than most API keys.** It mints new access tokens
+on demand and usually outlives them by months. If you were undecided about
+`passbook secure`, holding sign-ins is the argument for it.
 
 ## Keeping a large store legible
 

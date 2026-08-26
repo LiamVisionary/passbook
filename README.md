@@ -73,6 +73,11 @@ Do all of this, and tell me what you find at each step:
    needs by name, and I will add them with `passbook add NAME` (which prompts
    without echoing).
 
+   `passbook check` gives three answers, and they are not interchangeable:
+   **set** is readable now, **locked** is in the store but encrypted (I need to
+   run `passbook signin`), and **missing** is genuinely absent. Never run
+   `passbook add` on a locked key — that overwrites a working credential.
+
 4. Register PassBook as an MCP server for yourself, so you can read credentials
    through a checked, recorded door instead of me pasting them into the chat.
    The command is `passbook mcp` and it speaks MCP over stdio. Add it to

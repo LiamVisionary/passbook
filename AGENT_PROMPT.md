@@ -58,7 +58,19 @@ adopts it. Nothing forks, so nothing ever has to be merged.
    not in the shared store yet, pass them once as `seed=` — existing keys are
    never overwritten.
 
-5. Where a key is missing, say which key and where it goes:
+5. Tell the difference between a key that is **missing** and one that is
+   **locked**. `passbook check` says which:
+
+       set      readable right now
+       locked   in the store, encrypted — `passbook signin` opens it
+       missing  genuinely not there
+
+   A locked key is not a lost key. Do NOT run `passbook add` on one: that
+   overwrites a working credential with whatever you paste. If `list` shows a
+   key that you cannot read, the store is sealed and nobody has signed in —
+   say so and stop, rather than re-creating it.
+
+6. Where a key is missing, say which key and where it goes:
    *"OPENAI_API_KEY is not set — run `passbook-add OPENAI_API_KEY`"*. Never
    print a value, ever, including in errors.
 

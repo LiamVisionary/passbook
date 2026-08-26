@@ -20,9 +20,10 @@ The hyphenated forms are generated shims, or console scripts when PassBook is
 installed as a package; either way the name it was called by picks the
 subcommand.
 
-No command in here prints a credential. `check` reports set or missing, `list`
-reports names, and `run` hands values to a child process without ever putting
-them on a terminal or in the ledger.
+No command in here prints a credential. `check` reports set, locked or
+missing — three answers, because a sealed store makes two of them a lie —
+`list` reports names, and `run` hands values to a child process without ever
+putting them on a terminal or in the ledger.
 """
 
 from __future__ import annotations
@@ -122,24 +123,49 @@ def _store_values() -> dict[str, str]:
 
 
 def cmd_check(args: argparse.Namespace) -> int:
-    """Presence, never contents. Exit 1 if any requested key is unset."""
+    """Presence, never contents. Three answers, because there are three.
+
+    This used to have two — set or missing — and a sealed store made it lie. A
+    key that was present, encrypted and perfectly readable through the broker
+    reported `missing`, and then advised `passbook-add`, which would have
+    overwritten a working credential with whatever the reader pasted. Being
+    wrong is bad; being wrong while recommending the destructive fix is worse.
+
+    So: **set** is readable here and now, **locked** is in the store but shut,
+    and **missing** is genuinely absent. Each gets the remedy that matches, and
+    only one of them is `add`.
+    """
+    _use_broker_for_sealed_values("passbook-check", "presence check")
     values = _store_values()
-    missing = []
+    held = set(passbook.key_names())
+
+    missing, locked = [], []
     for key in args.keys:
         value = values.get(key, "")
         if value:
             detail = f" ({len(value)} chars)" if args.length else ""
             if not args.quiet:
                 print(f"{key}: set{detail}")
+        elif key in held:
+            locked.append(key)
+            if not args.quiet:
+                print(f"{key}: locked")
         else:
             missing.append(key)
             if not args.quiet:
                 print(f"{key}: missing")
-    if missing:
+
+    if locked and not missing:
         return _fail(
-            f"\nNot set: {', '.join(missing)}",
-            f"Add with: passbook-add {missing[0]}",
+            f"\nIn the store but encrypted: {', '.join(locked)}",
+            "Nothing is wrong with them — sign in to read them:  passbook signin",
         )
+    if missing:
+        remedy = f"Add with: passbook-add {missing[0]}"
+        if locked:
+            remedy += (f"\nSeparately, these are encrypted rather than absent: "
+                       f"{', '.join(locked)} — run `passbook signin`.")
+        return _fail(f"\nNot set: {', '.join(missing)}", remedy)
     return 0
 
 
@@ -253,9 +279,19 @@ def cmd_get(args: argparse.Namespace) -> int:
         for key in wanted:
             if key in granted:
                 print(f"{key}={granted[key]}")
-    missing = [key for key in wanted if key not in granted]
-    if missing:
-        print(f"Not available: {', '.join(missing)}", file=sys.stderr)
+    absent = [key for key in wanted if key not in granted]
+    if absent:
+        # Same three answers as `check`. "Not available" over a key that is
+        # present but shut sends a reader off to re-create a credential that
+        # was never gone.
+        held = set(passbook.key_names())
+        locked = [key for key in absent if key in held]
+        gone = [key for key in absent if key not in held]
+        if gone:
+            print(f"Not in this store: {', '.join(gone)}", file=sys.stderr)
+        if locked:
+            print(f"In the store but encrypted: {', '.join(locked)}", file=sys.stderr)
+            print("Sign in to read them:  passbook signin", file=sys.stderr)
         return 1
     return 0
 
@@ -2046,7 +2082,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subs = parser.add_subparsers(dest="command", required=True)
 
-    check = subs.add_parser("check", help="report whether keys are set (never their values)")
+    check = subs.add_parser(
+        "check", help="report whether keys are set, locked or missing (never their values)",
+        description="Set means readable here and now. Locked means it is in the store "
+                    "but encrypted, and `passbook signin` will open it — it is not gone, "
+                    "and adding it again would overwrite a working credential. Missing "
+                    "means genuinely absent.")
     check.add_argument("keys", nargs="+")
     check.add_argument("--length", action="store_true", help="also show each value's length")
     check.add_argument("--quiet", "-q", action="store_true", help="exit code only")

@@ -225,3 +225,53 @@ def test_no_vault_command_ever_takes_a_password_as_an_argument(machine):
         assert "--password " not in detail and "--password=" not in detail, verb
         assert "PASSWORD" not in detail.replace("--password-stdin", ""), verb
     assert "signin" in helptext and "unseal" in helptext
+
+
+# ── presence must not lie about a sealed store ─────────────────────────────
+
+
+def _sealed(home: Path):
+    pw = "a properly long vault password\n"
+    _cli("profile", "create", "Owner", "--password-stdin", home=home, stdin=pw)
+    _cli("seal", "--password-stdin", home=home, stdin=pw)
+
+
+def test_check_says_locked_not_missing_for_a_sealed_key(machine):
+    """`check` had two answers where there are three, so a sealed store made it
+    report a present, readable-through-the-broker key as `missing` — and then
+    advise `passbook-add`, which would have overwritten a working credential
+    with whatever the reader pasted."""
+    _sealed(machine)
+    done = _cli("check", "DEMO_KEY", home=machine)
+
+    assert "DEMO_KEY: locked" in done.stdout
+    assert "missing" not in done.stdout
+    assert "passbook-add DEMO_KEY" not in done.stderr, "it advised overwriting a real key"
+    assert "signin" in done.stderr
+
+
+def test_check_still_says_missing_for_a_key_that_is_not_there(machine):
+    _sealed(machine)
+    done = _cli("check", "NOT_A_KEY", home=machine)
+    assert "NOT_A_KEY: missing" in done.stdout
+    assert "passbook-add NOT_A_KEY" in done.stderr
+    assert done.returncode == 1
+
+
+def test_check_separates_the_two_when_both_happen(machine):
+    _sealed(machine)
+    done = _cli("check", "DEMO_KEY", "NOT_A_KEY", home=machine)
+    assert "DEMO_KEY: locked" in done.stdout
+    assert "NOT_A_KEY: missing" in done.stdout
+    # The destructive remedy must name only the key that is really absent.
+    assert "passbook-add NOT_A_KEY" in done.stderr
+    assert "passbook-add DEMO_KEY" not in done.stderr
+
+
+def test_list_and_check_agree_about_what_the_store_holds(machine):
+    """`list` read names and `check` read values, so they disagreed the moment
+    the store was sealed — which is what sent someone hunting a lost key."""
+    _sealed(machine)
+    listed = [line.strip() for line in _cli("list", home=machine).stdout.splitlines() if line.strip()]
+    assert "DEMO_KEY" in listed
+    assert "DEMO_KEY: missing" not in _cli("check", "DEMO_KEY", home=machine).stdout

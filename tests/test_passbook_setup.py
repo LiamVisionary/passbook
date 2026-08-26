@@ -226,3 +226,31 @@ def test_the_installer_honours_an_explicit_interpreter(machine):
     assert done.returncode == 0, done.stderr
     assert sys.executable in done.stdout
     assert (machine / "bin" / "passbook-check").is_file()
+
+
+def test_every_module_in_the_repo_is_declared_for_install():
+    """A module missing from pyproject is a module the installed CLI lacks.
+
+    The install copies the declared list, so an omission is invisible from
+    inside the checkout — the working tree shadows site-packages and every
+    check passes locally while the installed command runs older code. That is
+    not hypothetical: `passbook_backup` added export, import and recovery and
+    was never declared, so no installed copy could reach any of it, and
+    `passbook_stamp` sat at a stale revision while the tree it was tested from
+    looked correct.
+    """
+    import tomllib
+
+    repo = Path(__file__).resolve().parents[1]
+    declared = set(
+        tomllib.loads((repo / "pyproject.toml").read_text())
+        ["tool"]["setuptools"]["py-modules"]
+    )
+    on_disk = {
+        path.stem for path in repo.glob("passbook*.py")
+        if not path.stem.endswith("_test")
+    }
+    missing = on_disk - declared
+    stale = declared - on_disk
+    assert not missing, f"modules in the repo but not installed: {sorted(missing)}"
+    assert not stale, f"modules declared but absent from the repo: {sorted(stale)}"

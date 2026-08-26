@@ -2125,6 +2125,24 @@ def machine_state() -> dict:
         state["links"] = {"available": False, "lent": [], "borrowed": [],
                           "detail": "Machine linking is not installed."}
 
+    # Machines that hold this store WITHOUT a PassBook grant.
+    #
+    # Reported separately from `links` and never merged into them: a linked
+    # machine is trusted because both ends compared a fingerprint, a tailnet
+    # peer is trusted because it is on the tailnet, and showing them as one
+    # list would be the more comfortable lie. The Machines page said "no linked
+    # machines" while six machines held the store.
+    try:
+        import passbook_fleet
+
+        state["fleet"] = passbook_fleet.describe()
+    except ImportError:
+        state["fleet"] = {"available": False, "peers": [], "replicating": 0,
+                          "detail": "Fleet discovery is not installed."}
+    except Exception as error:  # noqa: BLE001 — never fail the whole window on it
+        state["fleet"] = {"available": False, "peers": [], "replicating": 0,
+                          "detail": f"Could not read the tailnet: {error}"}
+
     try:
         import passbook_stamp
 

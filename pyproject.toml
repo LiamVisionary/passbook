@@ -80,12 +80,20 @@ passbook-set = "passbook_cli:main"
 # went stale once and shipped without the vault, the access modes, the keystore
 # and the peer check — all of which import fine from a checkout, so nothing
 # failed until someone installed it.
+# Every passbook_*.py in the repo belongs here. The install COPIES these, so a
+# module missing from the list is a module the installed CLI does not have —
+# and the gap is invisible from inside the checkout, where the working tree
+# shadows site-packages. `passbook_backup` shipped a whole export/import
+# feature that no installed copy could reach. tests/test_passbook_setup.py
+# fails if this list and the directory ever disagree again.
 py-modules = [
     "passbook",
     "passbook_access",
+    "passbook_backup",
     "passbook_broker",
     "passbook_catalog",
     "passbook_cli",
+    "passbook_fleet",
     "passbook_keystore",
     "passbook_link",
     "passbook_mcp",

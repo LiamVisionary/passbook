@@ -1665,8 +1665,8 @@ passbook oauth connect google:work</pre>
     const rows = [...(l.lent || []).map((r) => ({ ...r, lent: true })), ...(l.borrowed || [])];
     return `
       <h2>Machines</h2>
-      <p class="lede">Machines you lend named keys to, or borrow them from. Adding one
-      happens on the command line, because both ends compare a fingerprint.</p>
+      <p class="lede">Every machine that holds this store \u2014 the ones you granted it
+      to, and the ones that receive it because they share your tailnet.</p>
       <div class="group">
         <h3>This machine</h3>
         <div class="row">
@@ -1692,6 +1692,57 @@ passbook oauth connect google:work</pre>
               ? `<button class="act" data-revoke="${esc(r.did)}" ${busy ? "disabled" : ""}>Revoke</button>`
               : `<span class="tag ${r.active ? "on" : "off"}">${r.revoked ? "Revoked" : r.active ? "Active" : "Expired"}</span>`}
           </div>`).join("") || `<div class="empty">No linked machines.</div>`}
+        <p class="note">A link is a signed grant naming which keys may move, and it can
+        be revoked from here. It is not the only way a machine ends up holding this
+        store \u2014 see below.</p>
+      </div>
+      ${fleetPanel()}`;
+  }
+
+  /** Machines that hold this store without a PassBook grant.
+   *
+   *  Kept apart from linked machines rather than merged with them. A linked
+   *  machine is trusted because both ends compared a fingerprint; a tailnet
+   *  peer is trusted because it is on the tailnet. One list would be the more
+   *  comfortable lie, and this page already told someone "no linked machines"
+   *  while six machines held their credentials.
+   */
+  function fleetPanel() {
+    const f = state.fleet;
+    if (!f) return "";
+    if (!f.available) {
+      return `<div class="group">
+        <h3>On the tailnet</h3>
+        <p class="note">${esc(f.detail || "This machine cannot see a tailnet.")}</p>
+      </div>`;
+    }
+    const rows = f.peers || [];
+    const replicating = rows.filter((p) => p.replicates);
+    return `
+      <div class="group">
+        <div class="row">
+          <span class="statustile ${replicating.length ? "warn" : "plain"}">${icon("globe")}</span>
+          <div class="grow"><strong>${replicating.length}</strong> machine${replicating.length === 1 ? "" : "s"}
+            receive${replicating.length === 1 ? "s" : ""} this store through HivemindOS fleet sync,
+            without a PassBook grant.</div>
+          <span class="tag ${replicating.length ? "info" : ""}">${rows.length} on the tailnet</span>
+        </div>
+        ${rows.map((p) => `
+          <div class="row">
+            <span class="statustile plain sm">${icon(p.replicates ? "globe" : "monitor")}</span>
+            <div class="grow">
+              <div class="mono">${esc(p.host)}</div>
+              <div class="sub">${esc(p.os || "unknown")}${p.replicates
+                ? " \u00b7 running a collector" : " \u00b7 no collector \u2014 does not receive the store"}</div>
+            </div>
+            ${p.replicates
+              ? `<span class="tag off">Replicated</span>`
+              : `<span class="tag">Not replicated</span>`}
+          </div>`).join("") || `<div class="empty">No other machines on this tailnet.</div>`}
+        <p class="note">Replication predates PassBook and does not consult it: a key's
+        reach, its audience and its projects are decided here and ignored there. Every
+        key currently reaches every one of these machines, which matches the default
+        reach \u2014 but narrowing a key would not narrow this until the two are joined up.</p>
       </div>`;
   }
 

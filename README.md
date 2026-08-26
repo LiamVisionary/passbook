@@ -1,7 +1,11 @@
-# PassBook
+<h1 align="center">
+  <img src="docs/logo.png" alt="PassBook" width="420">
+</h1>
 
-[![CI](https://github.com/LiamVisionary/passbook/actions/workflows/ci.yml/badge.svg)](https://github.com/LiamVisionary/passbook/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+<p align="center">
+  <a href="https://github.com/LiamVisionary/passbook/actions/workflows/ci.yml"><img src="https://github.com/LiamVisionary/passbook/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License: Apache-2.0"></a>
+</p>
 
 **One credential store per machine, shared by every app that opts in.**
 

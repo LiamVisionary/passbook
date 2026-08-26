@@ -553,10 +553,123 @@ must not appear machine-wide, or `"inherit": false` would be decoration.
 `"inherit": false` cuts the machine store out entirely — use it for anything
 holding someone else's credentials. Siblings never see each other either way.
 
+Switch with `passbook workspace use <id>`, or from the foot of the app's source
+list, which also locks the vault on the way. That writes HivemindOS's own
+manifest rather than a PassBook-side copy: two records of which workspace is
+active would disagree the moment either app changed one, and each would go on
+showing the truth as it knew it. `HIVE_WORKSPACE` still wins for a process that
+sets it, and the app says so rather than writing a manifest that process will
+ignore.
+
 Both reference implementations resolve this identically, and a test asserts it
 across runtimes. That is not tidiness: if they diverged, a Node process and a
 Python process on one machine would see different keys, and the same provider
 would work in one and fail in the other with nothing to point at.
+
+## Limiting a key to a project
+
+Scope says which workspaces reach a key. Audience says which agents may read it.
+Projects are the third bound, and they exist because of a gap the other two
+leave open.
+
+An agent is one process that moves between checkouts, and its name does not
+change when it does. So an agent trusted with the deploy key carries that trust
+into every repository you point it at — including one whose README contains an
+instruction somebody else wrote. Limiting the key to the checkout it belongs to
+closes that: the agent is the same, the project is not.
+
+```
+passbook projects                              # what is limited, and to what
+passbook projects set DEPLOY_KEY --only acme    # readable only from that checkout
+passbook projects set SCRATCH_KEY --without prod
+passbook projects set DEPLOY_KEY --every        # back to no limit
+```
+
+A project is `PASSBOOK_PROJECT`, else the basename of the nearest git root. It
+is a **claim its caller makes**, exactly like an agent name — a process can set
+that variable to anything, and this is not pretending otherwise. It stops a
+confused agent reaching across checkouts. It does not stop someone who already
+runs code as you, and nothing on this side of the broker would.
+
+One asymmetry worth knowing: a caller that names **no** project is not on an
+`--only` list, because otherwise running outside any checkout would be the way
+around every project rule. A `--without` list still lets it through, since no
+project named is not the named one.
+
+## Before a key changes
+
+Everything above is about reads. These are about changes:
+
+```
+passbook confirm                 # what asks first
+passbook confirm delete          # removing a key now waits for you
+passbook confirm modify
+passbook confirm add --off
+```
+
+All three are off by default, because a machine where every `passbook add` waits
+on a dialog is one where people stop using `passbook add`. Turned on, they give
+the store a property its encryption does not: **its contents cannot change
+quietly.** Encryption stops a stolen laptop reading your keys; this is what
+catches an agent helpfully "fixing" one.
+
+They are separate toggles because they are different questions. Wanting to be
+told before a credential is *replaced* — the change that breaks things silently,
+because nothing errors, it just starts talking to the wrong account — is not the
+same as wanting a dialog for every new key.
+
+A change that asks waits in the PassBook window and raises a system
+notification. Nothing is written until you answer, and two things count as no:
+
+- **No broker running.** The change is refused, not allowed through. A toggle
+  whose enforcement disappears when a daemon stops is not a toggle.
+- **Nobody answering.** It times out and the key is left alone.
+
+## Getting a store out, and back in
+
+```
+passbook export ~/Desktop/store.pbx              # encrypted, the default
+passbook export ~/store.asc --gpg                # armoured GPG
+passbook export ~/store.env --plain --i-understand
+passbook import ~/Desktop/store.pbx --dry-run    # say what would change
+passbook import ~/Desktop/store.pbx
+```
+
+Three shapes, because the reasons differ. The **encrypted** one is scrypt over a
+passphrase you choose and AES-GCM over the body; the other end needs nothing but
+PassBook. **GPG** is for machines already keeping secrets that way. **Plain** is
+readable `KEY=value` — sometimes exactly what you need, moving to a machine that
+has no PassBook yet, and never safe to leave lying around.
+
+Import works out which shape a file is by looking at it, because the person
+importing it did not choose its shape and should not have to describe it.
+
+Three refusals:
+
+- A plaintext export needs `--plain` **and** `--i-understand`. "Export" reads
+  like "back up", and a plaintext backup is a copy of every credential you own,
+  so the flag that picks the shape is not also the flag that accepts what the
+  shape means.
+- Nothing writes a sealed value out still sealed. An export is a decryption; it
+  goes through the broker like any other read, is held to the same policy, and
+  lands in the ledger under its own op.
+- A wrong passphrase and a damaged file give the same answer. Telling them apart
+  would be an oracle.
+
+### If you forget the password
+
+A vault wrapped by one password is one forgotten password away from gone — the
+data key is wrapped by that password and by nothing else.
+
+```
+passbook recovery          # shows a code, once
+passbook signin --recovery
+```
+
+The code is about 150 bits in six groups, and PassBook keeps only enough to
+check it, so it cannot show it to you twice. It reads back however you type it:
+lower case, hyphens dropped, `O` for `0`, `I` or `L` for `1`. Refusing that would
+be refusing someone the only copy of their vault over typography.
 
 ## PassBook and the hive env
 

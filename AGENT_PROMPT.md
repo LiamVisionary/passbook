@@ -99,6 +99,29 @@ key added while scoped never appears machine-wide. A workspace marked
 `"inherit": false` in `~/.hivemindos/workspaces.json` sees only its own — use
 that for anything holding someone else's credentials.
 
+### Limits you may be held to
+
+A key can be limited beyond "is it set". If a read comes back refused, the
+reason names which bound stopped it, and none of them is a bug to work around:
+
+- **Projects.** `passbook projects` says which keys are limited to which
+  checkouts. Your project is `PASSBOOK_PROJECT`, else the basename of the
+  nearest git root. If a key is limited to a project that is not this one, it is
+  not this project's key — say so and stop. Do not set `PASSBOOK_PROJECT` to
+  something else to get past it.
+- **Agents.** `passbook agents` says which agents a key is for.
+- **Changes may need a person.** If `passbook confirm` shows `add`, `modify` or
+  `delete` set to ask, writing waits for the owner to approve it in the PassBook
+  window. That is not a hang; do not retry in a loop, and do not look for
+  another way to write the file.
+
+### Moving a store
+
+`passbook export FILE` writes the whole store encrypted under a passphrase, and
+`passbook import FILE` reads one back. Both are recorded. Never suggest
+`--plain` unless the person asked for a readable file and understands that it is
+every credential they own in the clear.
+
 ### When you are done
 
 Report: which files you added, where the startup call went, what you deleted,

@@ -269,6 +269,27 @@ fn set_key_group(group: String, names: Vec<String>) -> Result<Value, String> {
     state()
 }
 
+/// How far a key reaches: this workspace, the machine, or the tailnet.
+///
+/// The CLI refuses when this workspace does not own the key, and that refusal is
+/// shown verbatim rather than softened — "only the acme workspace can change
+/// this" is the whole answer, and rewording it would lose which workspace to go
+/// and ask.
+#[tauri::command]
+fn set_key_scope(name: String, scope: String) -> Result<Value, String> {
+    if name.trim().is_empty() {
+        return Err("Which key?".into());
+    }
+    let flag = match scope.as_str() {
+        "workspace" => "--workspace",
+        "machine" => "--machine",
+        "tailnet" => "--tailnet",
+        other => return Err(format!("unknown scope: {other}")),
+    };
+    run(&["scope", "set", name.trim(), flag])?;
+    state()
+}
+
 /// Say who a key is for: everyone, only these agents, or everyone except these.
 #[tauri::command]
 fn set_key_audience(name: String, mode: String, agents: Vec<String>) -> Result<Value, String> {
@@ -394,6 +415,22 @@ fn vault_use_profile(label: String) -> Result<Value, String> {
     vault_state()
 }
 
+/// Profile, seal, broker and sign-in in one go — the whole first run.
+///
+/// These four are never useful apart, and asking for the same password four
+/// times is how a security feature earns a reputation for being annoying. The
+/// window offered them as separate steps and there was no single action that
+/// secured a machine, which is exactly the thing a first-run screen is for.
+#[tauri::command]
+fn vault_secure(label: String, password: String) -> Result<Value, String> {
+    if password.chars().count() < 8 {
+        return Err("A vault password must be at least 8 characters.".into());
+    }
+    let name = if label.trim().is_empty() { "Owner" } else { label.trim() };
+    run_with_password(&["secure", "--profile-name", name, "--password-stdin"], &password)?;
+    vault_state()
+}
+
 /// Encrypt every readable value. The action that makes the app's warning go away.
 #[tauri::command]
 fn vault_seal(password: String) -> Result<Value, String> {
@@ -432,7 +469,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             state, set_mode, unlock, lock, resolve, broker, revoke, add_key, remove_key, reveal_key,
             key_history, vault_state, vault_signin, vault_signout, vault_create_profile,
-            vault_use_profile, vault_seal, vault_unseal, set_key_group, set_key_audience,
+            vault_use_profile, vault_seal, vault_unseal, vault_secure, set_key_group, set_key_audience, set_key_scope,
             access_matrix, oauth_state, oauth_refresh, oauth_disconnect, oauth_connect
         ])
         .run(tauri::generate_context!())

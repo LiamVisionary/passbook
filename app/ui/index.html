@@ -206,6 +206,12 @@
   .snippet { background:var(--chip); border-radius:6px; padding:.5rem .6rem;
     font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.75rem;
     overflow-x:auto; margin:.4rem 0; }
+
+  select.scope { font: inherit; font-size:.74rem; padding:.1rem .3rem; border-radius:5px;
+    border:1px solid var(--line); background:var(--chip); color:var(--dim); max-width:15rem; }
+  select.scope:hover { color:var(--ink); }
+  .scope.locked { font-size:.74rem; color:var(--dim); background:var(--chip);
+    border-radius:5px; padding:.12rem .4rem; }
 </style>
 
 <nav id="nav"></nav>
@@ -416,6 +422,34 @@
     }).join("");
   }
 
+  const SCOPE_WORDS = {
+    workspace: "This workspace",
+    machine: "All workspaces here",
+    tailnet: "All workspaces + linked machines",
+  };
+
+  /** How far a key reaches, and whether this workspace may say.
+   *
+   *  Widening a scope hands a credential to workspaces that did not have it, so
+   *  the workspace it came from keeps that decision. A borrowing workspace sees
+   *  the scope and can read the key; it cannot pass it on. Otherwise sharing a
+   *  key would hand over the power to share it onward, which is not sharing.
+   */
+  function scopePicker(k) {
+    const cat = state.catalog;
+    const rule = cat?.scopes?.[k];
+    if (!rule) return "";
+    const options = (cat.scope_options || []).map((s) =>
+      `<option value="${s}"${s === rule.scope ? " selected" : ""}>${esc(SCOPE_WORDS[s] || s)}</option>`
+    ).join("");
+    if (!rule.may_change) {
+      return `<span class="scope locked" title="Only the ${esc(rule.owner)} workspace can change this">
+        ${esc(SCOPE_WORDS[rule.scope] || rule.scope)} · set by ${esc(rule.owner)}</span>`;
+    }
+    return `<select class="scope" data-scope="${esc(k)}" ${busy ? "disabled" : ""}
+      title="How far this key reaches">${options}</select>`;
+  }
+
   /** Who a key is for, as a line under the row — and the control to change it. */
   function audienceBlock(k) {
     const cat = state.catalog;
@@ -428,6 +462,7 @@
 
     if (!editing) {
       return `<div class="sub aud">
+        ${scopePicker(k)}
         <span class="${rule ? "restricted" : ""}">Readable by ${esc(label)}</span>
         <button class="icon" data-aud="${esc(k)}">Change</button>
       </div>`;
@@ -495,14 +530,21 @@
       action = `<p class="note">This machine has no vault runtime yet.
         Run <code>passbook install</code> to add one.</p>`;
     } else if (!v.profiles?.length) {
+      // One action, one password. Creating a profile, sealing, starting the
+      // broker and signing in are never useful apart, and a first-run screen
+      // that asks for the same password four times is one people abandon.
       action = `
-        <p class="note">Encrypting the store needs a profile to hold the key —
-        a name and a password that opens it.</p>
+        <p class="note">One step: this makes a profile to hold the key, encrypts
+        every value under it, and signs you in. Values behind a framework's public
+        prefix stay readable — a build inlines those into a browser bundle long
+        before anyone could sign in, so encrypting them protects nothing.</p>
         <div class="addrow">
-          <input id="vp-label" placeholder="Profile name" spellcheck="false" />
-          <input id="vp-pw" type="password" placeholder="New vault password" />
-          <button class="act primary" id="vp-create" ${busy ? "disabled" : ""}>Create profile</button>
-        </div>`;
+          <input id="sec-label" placeholder="Your name" spellcheck="false" value="Owner" />
+          <input id="sec-pw" type="password" placeholder="New vault password" />
+          <button class="act primary" id="sec-go" ${busy ? "disabled" : ""}>Secure this machine</button>
+        </div>
+        <p class="note">Nothing else on this machine stores that password, so pick
+        something you will not lose. You can undo the whole thing later.</p>`;
     } else if (!sealed) {
       action = `
         <p class="note">${readable} value${readable === 1 ? "" : "s"}
@@ -956,6 +998,14 @@ passbook oauth connect google:work</pre>
       b.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } };
     });
 
+    main.querySelectorAll("[data-scope]").forEach((s) => s.onchange = async () => {
+      busy = true; paint();
+      try { state = await invoke("set_key_scope", { name: s.dataset.scope, scope: s.value });
+            notice = ""; grid = null; }
+      catch (e) { notice = String(e); }
+      finally { busy = false; paint(); }
+    });
+
     main.querySelectorAll("[data-aud]").forEach((b) => b.onclick = () => {
       audienceFor = b.dataset.aud; paint();
     });
@@ -1003,15 +1053,15 @@ passbook oauth connect google:work</pre>
     wire("seal-go", () => callVault("vault_seal", { password: pwd("seal-pw") }));
     wire("seal-go2", () => callVault("vault_seal", { password: pwd("sl-pw") }));
     wire("unseal-go", () => callVault("vault_unseal", { password: pwd("sl-pw") }));
-    wire("vp-create", () => callVault("vault_create_profile",
-      { label: document.getElementById("vp-label")?.value ?? "", password: pwd("vp-pw") }));
+    wire("sec-go", () => callVault("vault_secure",
+      { label: document.getElementById("sec-label")?.value ?? "", password: pwd("sec-pw") }));
     wire("np-create", () => callVault("vault_create_profile",
       { label: document.getElementById("np-label")?.value ?? "", password: pwd("np-pw") }));
 
     // Enter submits the password field it is in, because a password field that
     // needs a mouse to submit is one people retype.
     [["si-pw", "si-go"], ["si-pw2", "si-go2"], ["seal-pw", "seal-go"],
-     ["vp-pw", "vp-create"], ["np-pw", "np-create"]].forEach(([field, button]) => {
+     ["sec-pw", "sec-go"], ["np-pw", "np-create"]].forEach(([field, button]) => {
       const input = document.getElementById(field);
       if (input) input.onkeydown = (e) => { if (e.key === "Enter") document.getElementById(button)?.click(); };
     });

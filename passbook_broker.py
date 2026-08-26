@@ -535,11 +535,13 @@ def _handle(payload: Mapping[str, Any], root: Path | None = None,
     status = (caller or {}).get("status", "unknown")
     reason = f"{reason} [{status} caller]".strip() if reason else f"[{status} caller]"
     policy = read_policy(root)
+    # Whose workspace is asking, not this daemon's.
+    asking_workspace = str(payload.get("workspace") or "")
     wanted = [str(key).strip() for key in (payload.get("keys") or []) if str(key).strip()]
 
     allowed, refused, asked = [], [], []
     for key in wanted:
-        verdict = access.decide_key(app, key, policy, root=root)
+        verdict = access.decide_key(app, key, policy, root=root, workspace=asking_workspace)
         if verdict["outcome"] == "grant":
             allowed.append(key)
         elif verdict["outcome"] == "refuse":

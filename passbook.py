@@ -401,7 +401,15 @@ def request(
     # instance — and reaching a real broker from there would be exactly the leak
     # that parameter exists to prevent.
     if stores is None and not source.get("HIVE_ENV_FILES"):
-        brokered = _ask_broker(wanted, app=app, reason=reason, workspace_id=workspace_id)
+        # Send which workspace is asking. A key can be scoped to the workspace
+        # it came from, and that has to be judged by the caller's workspace —
+        # the broker is a daemon with a workspace of its own, and letting it
+        # answer for itself would grant or refuse on the wrong question.
+        try:
+            asking = workspace_id or workspace(source)
+        except ValueError:
+            asking = workspace_id
+        brokered = _ask_broker(wanted, app=app, reason=reason, workspace_id=asking)
         if brokered is not None:
             return brokered
 

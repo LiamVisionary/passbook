@@ -412,6 +412,28 @@ passbook group set "Payments" STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET
 together. A family only becomes a group once two keys share it — a group of one
 is a flat list wearing a costume — and anything you set by hand always wins.
 
+**Scopes** say how far a key reaches across workspaces:
+
+```bash
+passbook scope                                  # what is narrowed, and who owns it
+passbook scope set CLIENT_SECRET --workspace    # this workspace only
+passbook scope set OPENAI_API_KEY --machine     # every workspace here (the default)
+passbook scope set DEPLOY_KEY --tailnet         # …and lendable to linked machines
+```
+
+**Only the workspace a key came from can change its reach.** A workspace you
+share a key with can read it and can see the scope; it cannot pass the key on.
+Otherwise sharing would hand over the power to share onward, which is not
+sharing — it is giving it away. The refusal names the workspace to go and ask:
+
+```
+only the acme workspace can change this key's scope
+```
+
+`tailnet` is a permission, not a sync. PassBook lends keys by explicit envelope
+(`passbook link`); widening a scope makes a key eligible for that and does not
+move it anywhere by itself.
+
 **Audiences** say who a key is for. This is the question people actually ask
 about a production password, and it is the inverse of the per-app modes below:
 

@@ -217,3 +217,88 @@ def test_every_surface_files_a_key_in_the_same_group(machine):
     grid = catalog.matrix(names, ["ci"], policy)
     for row in grid["rows"]:
         assert row["group"] == filed[row["key"]]
+
+
+# ── how far a key reaches, and who decides ─────────────────────────────────
+
+
+def test_a_key_reaches_the_whole_machine_by_default(machine):
+    policy = access.read_policy()
+    assert access.scope_for("ADMIN_TOKEN", policy)["scope"] == "machine"
+    assert access.decide_key("app", "ADMIN_TOKEN", policy, workspace="anything")["outcome"] == "grant"
+
+
+def test_narrowing_a_key_hides_it_from_other_workspaces(machine):
+    policy = access.read_policy()
+    access.set_scope("ADMIN_TOKEN", "workspace", policy, workspace="acme")
+
+    assert access.decide_key("app", "ADMIN_TOKEN", policy, workspace="acme")["outcome"] == "grant"
+    other = access.decide_key("app", "ADMIN_TOKEN", policy, workspace="other")
+    assert other["outcome"] == "refuse" and other["scope"]
+    assert "acme" in other["why"], "the refusal must name the workspace to go and ask"
+
+
+def test_a_borrowing_workspace_cannot_pass_the_key_on(machine):
+    """Sharing a key must not hand over the power to share it onward — that is
+    not sharing, it is giving it away."""
+    policy = access.read_policy()
+    access.set_scope("ADMIN_TOKEN", "machine", policy, workspace="acme")
+
+    assert access.decide_key("app", "ADMIN_TOKEN", policy, workspace="other")["outcome"] == "grant"
+    assert not access.may_change_scope("other", "ADMIN_TOKEN", policy)["allowed"]
+    with pytest.raises(PermissionError, match="acme"):
+        access.set_scope("ADMIN_TOKEN", "tailnet", policy, workspace="other")
+
+
+def test_the_owner_can_still_change_it(machine):
+    policy = access.read_policy()
+    access.set_scope("ADMIN_TOKEN", "machine", policy, workspace="acme")
+    assert access.set_scope("ADMIN_TOKEN", "tailnet", policy, workspace="acme")["scope"] == "tailnet"
+    assert access.set_scope("ADMIN_TOKEN", "workspace", policy, workspace="acme")["scope"] == "workspace"
+
+
+def test_the_first_workspace_to_scope_a_key_claims_it(machine):
+    policy = access.read_policy()
+    assert access.may_change_scope("anyone", "ADMIN_TOKEN", policy)["allowed"]
+    access.set_scope("ADMIN_TOKEN", "machine", policy, workspace="acme")
+    assert access.scope_for("ADMIN_TOKEN", policy)["owner"] == "acme"
+    assert not access.may_change_scope("latecomer", "ADMIN_TOKEN", policy)["allowed"]
+
+
+def test_a_machine_with_no_workspaces_locks_nothing(machine):
+    """Recording an owner of "" would lock a key to a name that does not exist."""
+    policy = access.read_policy()
+    access.set_scope("ADMIN_TOKEN", "workspace", policy, workspace="")
+    assert access.scope_for("ADMIN_TOKEN", policy)["owner"] == ""
+    assert access.may_change_scope("a-workspace-created-later", "ADMIN_TOKEN", policy)["allowed"]
+    assert access.decide_key("app", "ADMIN_TOKEN", policy, workspace="anyone")["outcome"] == "grant"
+
+
+def test_scope_outranks_a_permissive_mode_and_an_open_unlock(machine):
+    policy = access.read_policy()
+    policy["apps"] = {"app": {"keys": {"ADMIN_TOKEN": {"mode": "always"}}}}
+    access.set_scope("ADMIN_TOKEN", "workspace", policy, workspace="acme")
+    access.open_session(duration="1h", keys=[], app="", approved_by="owner")
+    assert access.decide_key("app", "ADMIN_TOKEN", policy, workspace="other")["outcome"] == "refuse"
+
+
+def test_an_unreadable_scope_degrades_to_the_default(machine):
+    policy = access.read_policy()
+    policy["keys"] = {"ADMIN_TOKEN": {"scope": "nonsense", "owner_workspace": "acme"}}
+    assert access.scope_for("ADMIN_TOKEN", policy)["scope"] == access.DEFAULT_SCOPE
+    assert access.decide_key("app", "ADMIN_TOKEN", policy, workspace="other")["outcome"] == "grant"
+
+
+def test_an_unknown_scope_is_refused_at_write_time(machine):
+    policy = access.read_policy()
+    with pytest.raises(ValueError, match="scope must be"):
+        access.set_scope("ADMIN_TOKEN", "everywhere", policy, workspace="acme")
+
+
+def test_scope_survives_a_policy_round_trip(machine):
+    policy = access.read_policy()
+    access.set_scope("ADMIN_TOKEN", "workspace", policy, workspace="acme")
+    access.write_policy(policy)
+    reloaded = access.read_policy()
+    assert access.scope_for("ADMIN_TOKEN", reloaded) == {
+        "scope": "workspace", "owner": "acme", "explicit": True}

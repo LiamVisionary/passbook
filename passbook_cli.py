@@ -1108,6 +1108,70 @@ def cmd_agents_set(args: argparse.Namespace) -> int:
     return 0
 
 
+SCOPE_WORDS = {
+    "workspace": "this workspace only",
+    "machine": "every workspace on this machine",
+    "tailnet": "every workspace here, and lendable to linked machines",
+}
+
+
+def cmd_scope(args: argparse.Namespace) -> int:
+    """How far each key reaches, and who decides."""
+    import passbook_access as access
+
+    policy = access.read_policy()
+    here = passbook.workspace()
+    names = passbook.key_names()
+    if args.key:
+        if args.key not in names:
+            return _fail(f"Not in this store: {args.key}")
+        names = [args.key]
+
+    rows = []
+    for name in names:
+        rule = access.scope_for(name, policy)
+        rows.append({"key": name, **rule,
+                     "may_change": access.may_change_scope(here, name, policy)["allowed"]})
+    if getattr(args, "json", False):
+        print(json.dumps({"workspace": here, "scopes": list(access.SCOPES), "keys": rows}, indent=2))
+        return 0
+
+    print(f"acting for workspace: {here or '(none configured)'}\n")
+    narrowed = [r for r in rows if r["explicit"]] if not args.key else rows
+    if not narrowed:
+        print(f"Every key is scoped to {SCOPE_WORDS[access.DEFAULT_SCOPE]} (the default).")
+        print("Narrow one with:  passbook scope set KEY --workspace")
+        return 0
+    for row in narrowed:
+        lock = "" if row["may_change"] else f"   (owned by {row['owner']})"
+        print(f"  {row['key']}: {SCOPE_WORDS[row['scope']]}{lock}")
+    return 0
+
+
+def cmd_scope_set(args: argparse.Namespace) -> int:
+    import passbook_access as access
+
+    policy = access.read_policy()
+    if args.key not in passbook.key_names():
+        return _fail(f"Not in this store: {args.key}")
+    scope = ("workspace" if args.workspace else "machine" if args.machine
+             else "tailnet" if args.tailnet else "")
+    if not scope:
+        return _fail("How far?", "Use --workspace, --machine or --tailnet.")
+    try:
+        rule = access.set_scope(args.key, scope, policy, workspace=passbook.workspace())
+    except PermissionError as error:
+        return _fail(str(error),
+                     "A key's reach is decided by the workspace it came from.")
+    except ValueError as error:
+        return _fail(str(error))
+    access.write_policy(policy)
+    print(f"{args.key}: {SCOPE_WORDS[rule['scope']]}")
+    if rule["scope"] != "workspace" and rule["owner"]:
+        print(f"Only the {rule['owner']} workspace can change this again.")
+    return 0
+
+
 def cmd_matrix(args: argparse.Namespace) -> int:
     """Which agents can read which keys, as a grid you can actually scan."""
     catalog = _catalog()
@@ -1464,8 +1528,21 @@ def machine_state() -> dict:
             rule = passbook_access.audience_for(name, policy)
             if rule["mode"] != "all":
                 restricted[name] = rule
+        here = passbook.workspace()
+        scopes = {}
+        for name in names:
+            rule = passbook_access.scope_for(name, policy)
+            scopes[name] = {
+                **rule,
+                "may_change": passbook_access.may_change_scope(here, name, policy)["allowed"],
+            }
         state["catalog"] = {
             "available": True,
+            "workspace": here,
+            "workspaces": passbook.workspaces(),
+            "scopes": scopes,
+            "scope_options": list(passbook_access.SCOPES),
+            "default_scope": passbook_access.DEFAULT_SCOPE,
             "ungrouped": passbook_catalog.UNGROUPED,
             "groups": passbook_catalog.groups(names, policy),
             "group_of": passbook_catalog.effective_groups(names, policy),
@@ -2135,6 +2212,23 @@ def build_parser() -> argparse.ArgumentParser:
     agents_set.add_argument("--only", nargs="+", metavar="AGENT", help="only these agents")
     agents_set.add_argument("--block", nargs="+", metavar="AGENT", help="every agent except these")
     agents_set.set_defaults(json=False, func=cmd_agents_set)
+
+    # No positional on the parent — an optional one beside subparsers makes
+    # `scope set KEY` parse the key as a subcommand. Same trap as `agents`.
+    scope_cmd = subs.add_parser("scope", help="how far each key reaches across workspaces")
+    scope_cmd.add_argument("--json", action="store_true")
+    scope_cmd.set_defaults(key="", func=cmd_scope)
+    scope_subs = scope_cmd.add_subparsers(dest="scope_command")
+    scope_show = scope_subs.add_parser("show", help="one key's reach")
+    scope_show.add_argument("key")
+    scope_show.set_defaults(json=False, func=cmd_scope)
+    scope_set = scope_subs.add_parser("set", help="set a key's reach; only its own workspace may")
+    scope_set.add_argument("key")
+    scope_set.add_argument("--workspace", action="store_true", help="this workspace only")
+    scope_set.add_argument("--machine", action="store_true", help="every workspace on this machine")
+    scope_set.add_argument("--tailnet", action="store_true",
+                           help="as machine, and lendable to linked machines")
+    scope_set.set_defaults(json=False, key="", func=cmd_scope_set)
 
     matrix = subs.add_parser("matrix", help="which agents can read which keys")
     matrix.add_argument("--agent", nargs="+", default=[], help="only these agents")

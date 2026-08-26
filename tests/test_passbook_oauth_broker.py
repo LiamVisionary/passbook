@@ -301,3 +301,26 @@ def test_the_token_fetch_asks_for_one_batch_only(connected):
 
     after = len([r for r in passbook_stamp.read_stamps(limit=200) if r.get("op") == "read"])
     assert after - before == 1, "one token fetch should be one read row"
+
+
+def test_the_broker_judges_scope_by_the_caller_not_itself(machine):
+    """A key scoped to the workspace it came from has to be judged by whoever is
+    asking. The broker is a daemon with a workspace of its own, and answering
+    for itself would grant or refuse on the wrong question."""
+    import passbook_access as access
+
+    passbook.set_values({"CLIENT_SECRET": "a-value"}, overwrite=True)
+    policy = access.read_policy()
+    access.set_scope("CLIENT_SECRET", "workspace", policy, workspace="acme")
+    access.write_policy(policy)
+
+    started = passbook_broker.start()
+    if not started.get("ok"):
+        pytest.skip("no broker here")
+    try:
+        assert passbook_broker.request_through_broker(
+            ["CLIENT_SECRET"], app="a", workspace_id="acme") == {"CLIENT_SECRET": "a-value"}
+        assert passbook_broker.request_through_broker(
+            ["CLIENT_SECRET"], app="a", workspace_id="other") == {}
+    finally:
+        passbook_broker.stop()

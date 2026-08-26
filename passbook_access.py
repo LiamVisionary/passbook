@@ -47,6 +47,12 @@ from typing import Any, Iterable, Mapping, MutableMapping
 import passbook
 
 __all__ = [
+    "DEFAULT_SCOPE",
+    "SCOPES",
+    "may_change_scope",
+    "scope_allows",
+    "scope_for",
+    "set_scope",
     "AUDIENCE_MODES",
     "audience_allows",
     "audience_for",
@@ -264,6 +270,95 @@ def mode_for(app: str, key: str, policy: Mapping[str, Any]) -> dict[str, Any]:
         if isinstance(source, dict) and source.get("mode") in GRANT_MODES:
             return source
     return {"mode": DEFAULT_MODE}
+
+
+# ── how far a key reaches ──────────────────────────────────────────────────
+#
+# A workspace never sees a sibling's keys, which is the right default and is
+# occasionally the wrong one: an OpenAI key is usually meant for everything on
+# the machine, while a client's credential is meant for exactly one workspace.
+# So a key carries a **scope**:
+#
+#   workspace   the workspace that owns it, and nobody else (the default)
+#   machine     every workspace on this machine
+#   tailnet     as above, and eligible to be lent to a linked machine
+#
+# `tailnet` is a permission, not a sync. PassBook lends keys by explicit
+# envelope (`passbook link`); widening a scope makes a key eligible for that and
+# does not move it anywhere by itself. Saying otherwise would promise a
+# replication this project does not do.
+#
+# ## Ownership
+#
+# Widening a scope hands a credential to workspaces that did not have it, so the
+# workspace it came from keeps that decision. Anyone else can see the scope and
+# read the key; only the owner can change how far it reaches. Otherwise sharing
+# a key with a workspace would hand that workspace the power to share it onward,
+# which is not sharing — it is giving it away.
+
+SCOPES = ("workspace", "machine", "tailnet")
+DEFAULT_SCOPE = "machine"
+
+
+def scope_for(key: str, policy: Mapping[str, Any]) -> dict[str, Any]:
+    """A key's reach and who decides it. Unreadable entries read as the default.
+
+    The default is `machine` because that is what a store with no workspaces
+    configured has always done — every app on the machine sharing one file. A
+    key only narrows when somebody narrows it.
+    """
+    entry = key_entry(key, policy)
+    raw = str(entry.get("scope", "") or "").strip().lower()
+    return {
+        "scope": raw if raw in SCOPES else DEFAULT_SCOPE,
+        "owner": str(entry.get("owner_workspace", "") or ""),
+        "explicit": raw in SCOPES,
+    }
+
+
+def scope_allows(workspace: str, key: str, policy: Mapping[str, Any]) -> dict[str, Any]:
+    """May a process acting for this workspace read this key at all?"""
+    rule = scope_for(key, policy)
+    here = str(workspace or "")
+    if rule["scope"] in {"machine", "tailnet"}:
+        return {"allowed": True, "why": f"scoped to the whole {rule['scope']}"}
+    owner = rule["owner"]
+    if not owner or not here or here == owner:
+        return {"allowed": True, "why": "this workspace owns it"}
+    return {"allowed": False,
+            "why": f"scoped to the {owner} workspace"}
+
+
+def may_change_scope(workspace: str, key: str, policy: Mapping[str, Any]) -> dict[str, Any]:
+    """Only the workspace a key came from decides how far it reaches."""
+    rule = scope_for(key, policy)
+    owner, here = rule["owner"], str(workspace or "")
+    if not owner:
+        return {"allowed": True, "why": "no workspace has claimed this key yet"}
+    if here == owner:
+        return {"allowed": True, "why": "this workspace owns it"}
+    return {"allowed": False,
+            "why": f"only the {owner} workspace can change this key's scope"}
+
+
+def set_scope(key: str, scope: str, policy: MutableMapping[str, Any], *,
+              workspace: str = "") -> dict[str, Any]:
+    """Set a key's reach, in place. Refuses unless this workspace owns it."""
+    wanted = str(scope).strip().lower()
+    if wanted not in SCOPES:
+        raise ValueError(f"scope must be one of {', '.join(SCOPES)}")
+    verdict = may_change_scope(workspace, key, policy)
+    if not verdict["allowed"]:
+        raise PermissionError(verdict["why"])
+    keys = policy.setdefault("keys", {})
+    entry = keys.setdefault(str(key), {})
+    entry["scope"] = wanted
+    # The first workspace to scope a key claims it. A machine with no workspaces
+    # configured records no owner, so nothing is locked to a name that does not
+    # exist yet and any workspace created later can still take it.
+    if workspace:
+        entry.setdefault("owner_workspace", str(workspace))
+    return scope_for(key, policy)
 
 
 # ── who a key is for ───────────────────────────────────────────────────────
@@ -528,12 +623,26 @@ def requires_passkey(rule: Mapping[str, Any]) -> bool:
     return True if value is None else bool(value)
 
 
-def decide_key(app: str, key: str, policy: Mapping[str, Any], *, root: Path | None = None) -> dict[str, Any]:
+def decide_key(app: str, key: str, policy: Mapping[str, Any], *, root: Path | None = None,
+               workspace: str | None = None) -> dict[str, Any]:
     """What to do about one key, right now: grant, refuse, or ask.
 
     Returns an outcome and the reason for it, because "denied" with no cause is
     the thing that makes people disable a policy rather than fix it.
     """
+    # Scope first: a key that does not reach this workspace is not this
+    # workspace's to read, whatever its audience or mode says.
+    if workspace is None:
+        try:
+            import passbook
+
+            workspace = passbook.workspace()
+        except Exception:  # noqa: BLE001 — no workspace configured is the common case
+            workspace = ""
+    reach = scope_allows(workspace, key, policy)
+    if not reach["allowed"]:
+        return {"outcome": "refuse", "mode": "never", "why": reach["why"], "scope": True}
+
     # The audience is a bound, not a preference: if this key is not for this
     # agent, no mode and no unlock can produce a grant.
     audience = audience_allows(app, key, policy)

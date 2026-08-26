@@ -387,6 +387,92 @@ def add_password_factor(
     return {"id": factor["id"], "kind": "password", "label": label}
 
 
+# Crockford's base32 without I, L, O or U: no character pairs that are read
+# back wrong off a piece of paper, and no accidental words.
+RECOVERY_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+RECOVERY_GROUPS = 6
+RECOVERY_GROUP_LEN = 5
+
+
+def new_recovery_code() -> str:
+    """A code with ~150 bits in it, in groups a person can copy without losing
+    their place."""
+    picks = [RECOVERY_ALPHABET[b % len(RECOVERY_ALPHABET)]
+             for b in os.urandom(RECOVERY_GROUPS * RECOVERY_GROUP_LEN)]
+    return "-".join("".join(picks[i:i + RECOVERY_GROUP_LEN])
+                    for i in range(0, len(picks), RECOVERY_GROUP_LEN))
+
+
+def normalise_recovery_code(code: str) -> str:
+    """Accept the code however it was typed back in.
+
+    Someone reading it off paper will lower-case it, lose the hyphens, or type
+    O for 0. Refusing that is refusing the only copy of their vault over
+    typography.
+    """
+    swaps = {"O": "0", "I": "1", "L": "1", "U": "V"}
+    cleaned = [swaps.get(c, c) for c in str(code).upper() if c.isalnum()]
+    body = "".join(cleaned)
+    return "-".join(body[i:i + RECOVERY_GROUP_LEN]
+                    for i in range(0, len(body), RECOVERY_GROUP_LEN))
+
+
+def add_recovery_factor(
+    profile_id: str, *, dek: bytes, label: str = "recovery code",
+    root: Path | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Wrap the data key under a fresh recovery code, and return the code once.
+
+    A password-only vault has one way in, and a forgotten password is the end of
+    the store — the data key is wrapped by the password and by nothing else.
+    This is a second wrapping.
+
+    The code carries its own entropy, so the KDF over it does not have to be
+    slow the way the password's is; there is nothing to guess at human speed.
+    The code itself is never stored, which is what makes it a factor rather than
+    a hint: PassBook keeps the wrapped key and can tell whether a code opens it,
+    and cannot tell you what the code was.
+    """
+    _require_crypto()
+    vault = read_vault(root=root)
+    profile = _find_profile(vault, profile_id)
+    code = new_recovery_code()
+    factor_id = _b64(os.urandom(6))
+    params = {"kdf": "scrypt", "salt": _b64(os.urandom(16)),
+              "n": 1 << 14, "r": SCRYPT_R, "p": SCRYPT_P}
+    factor = {
+        "id": factor_id,
+        "kind": "recovery",
+        "label": label,
+        "created_at": _now(),
+        "params": params,
+        "wrapped": _wrap(dek, _password_kek(code, params),
+                         profile_id=profile["id"], factor_id=factor_id),
+    }
+    profile.setdefault("factors", []).append(factor)
+    _save_vault(vault, root=root)
+    return code, {"id": factor_id, "kind": "recovery", "label": label}
+
+
+def unlock_with_recovery(profile_id: str, code: str, *, root: Path | None = None) -> bytes:
+    """Open the vault with a recovery code, however it was typed."""
+    _require_crypto()
+    vault = read_vault(root=root)
+    profile = _find_profile(vault, profile_id or active_profile_id(root=root))
+    candidates = _factors_of(profile, "recovery")
+    if not candidates:
+        raise VaultError("This profile has no recovery code")
+    typed = normalise_recovery_code(code)
+    for factor in candidates:
+        try:
+            return _unwrap(str(factor.get("wrapped", "")),
+                           _password_kek(typed, factor.get("params") or {}),
+                           profile_id=profile["id"], factor_id=str(factor.get("id")))
+        except VaultError:
+            continue
+    raise VaultError("That recovery code does not open this vault")
+
+
 def add_passkey_factor(
     profile_id: str, *, dek: bytes, credential_id: str, prf_secret: bytes,
     label: str = "passkey", rp_id: str = "", transports: Iterable[str] = (),

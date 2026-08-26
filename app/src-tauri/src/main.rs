@@ -460,6 +460,91 @@ fn vault_use_profile(label: String) -> Result<Value, String> {
     vault_state()
 }
 
+/// Write the store to a file the person picked in a save dialog.
+///
+/// The passphrase travels to the CLI's stdin like a vault password does, and
+/// the values never enter this process: the CLI opens them, encrypts them and
+/// writes the file. This side only ever sees a path and a count.
+#[tauri::command]
+fn export_store(path: String, shape: String, passphrase: String, note: String) -> Result<Value, String> {
+    if path.trim().is_empty() {
+        return Err("Where should it go?".into());
+    }
+    let target = path.trim();
+    let mut args: Vec<&str> = vec!["export", target];
+    match shape.as_str() {
+        "plain" => {
+            args.push("--plain");
+            args.push("--i-understand");
+        }
+        "gpg" => args.push("--gpg"),
+        _ => {}
+    }
+    if !note.trim().is_empty() {
+        args.push("--note");
+        args.push(note.trim());
+    }
+    if shape == "plain" {
+        run(&args)?;
+    } else {
+        if passphrase.chars().count() < 8 {
+            return Err("An export passphrase must be at least 8 characters.".into());
+        }
+        args.push("--password-stdin");
+        run_with_password(&args, &passphrase)?;
+    }
+    Ok(serde_json::json!({ "ok": true, "path": target, "shape": shape }))
+}
+
+/// Look inside an export without importing it.
+#[tauri::command]
+fn inspect_export(path: String, passphrase: String) -> Result<Value, String> {
+    if path.trim().is_empty() {
+        return Err("Which file?".into());
+    }
+    let target = path.trim();
+    let args: Vec<&str> = vec!["import", target, "--dry-run", "--password-stdin"];
+    let detail = run_with_password(&args, &passphrase)?;
+    Ok(serde_json::json!({ "ok": true, "detail": detail }))
+}
+
+/// Read an export into this store.
+#[tauri::command]
+fn import_store(path: String, passphrase: String, overwrite: bool) -> Result<Value, String> {
+    if path.trim().is_empty() {
+        return Err("Which file?".into());
+    }
+    let target = path.trim();
+    let mut args: Vec<&str> = vec!["import", target, "--password-stdin"];
+    if overwrite {
+        args.push("--overwrite");
+    }
+    let detail = run_with_password(&args, &passphrase)?;
+    let next = state()?;
+    Ok(serde_json::json!({ "ok": true, "detail": detail, "state": next }))
+}
+
+/// Mint a recovery code. Returned once, to be written down.
+#[tauri::command]
+fn make_recovery_code(password: String) -> Result<Value, String> {
+    if password.is_empty() {
+        return Err("The vault password is needed to mint a recovery code.".into());
+    }
+    let detail = run_with_password(&["recovery", "--password-stdin"], &password)?;
+    // The CLI prints the code inside a sentence; the window wants just the code.
+    let code = detail
+        .lines()
+        .map(str::trim)
+        .find(|line| line.len() >= 29 && line.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
+        .unwrap_or("")
+        .to_string();
+    if code.is_empty() {
+        return Err("A recovery code was made, but this window could not read it back. \
+                    Run `passbook recovery` in a terminal instead.".into());
+    }
+    Ok(serde_json::json!({ "ok": true, "code": code }))
+}
+
 /// Switch which workspace this machine acts for.
 ///
 /// Written into HivemindOS's own manifest by the CLI, not a PassBook-side copy,
@@ -529,7 +614,7 @@ fn main() {
             key_history, vault_state, vault_signin, vault_signout, vault_create_profile,
             vault_use_profile, vault_seal, vault_unseal, vault_secure, set_key_group, set_key_audience, set_key_scope, set_keys_scope, remove_keys,
             access_matrix, oauth_state, oauth_refresh, oauth_disconnect, oauth_connect,
-            set_workspace
+            set_workspace, export_store, inspect_export, import_store, make_recovery_code
         ])
         .run(tauri::generate_context!())
         .expect("PassBook failed to start");

@@ -356,6 +356,9 @@ def _signin(payload: Mapping[str, Any], root: Path | None,
         elif payload.get("device"):
             dek = passbook_vault.unlock_with_device(profile, root=root)
             factor = "device"
+        elif payload.get("recovery"):
+            dek = passbook_vault.unlock_with_recovery(profile, str(payload["recovery"]), root=root)
+            factor = "recovery"
         else:
             return {"ok": False, "error": "no factor offered"}
     except passbook_vault.VaultError as error:
@@ -727,6 +730,7 @@ def signin(
     *,
     profile: str = "",
     password: str = "",
+    recovery: str = "",
     credential_id: str = "",
     prf_secret: bytes = b"",
     device: bool = False,
@@ -745,6 +749,8 @@ def signin(
         payload["duration"] = duration
     if password:
         payload["password"] = password
+    elif recovery:
+        payload["recovery"] = recovery
     elif prf_secret:
         payload["prf_secret"] = base64.urlsafe_b64encode(prf_secret).decode("ascii").rstrip("=")
         payload["credential_id"] = credential_id

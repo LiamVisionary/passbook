@@ -402,6 +402,11 @@
   select.scope { font: inherit; font-size: 11.5px; padding: 2px 6px; border-radius: 6px;
     border: 1px solid var(--line2); background: var(--card); color: var(--ink2); max-width: 15rem; }
   select.scope:hover { color: var(--ink1); }
+  .recovery {
+    font-size: 15px; letter-spacing: .06em; margin-top: 5px;
+    background: var(--chip2); border-radius: 7px; padding: 7px 10px;
+    display: inline-block; user-select: all;
+  }
   .scope.locked { font-size: 11.5px; color: var(--ink3); background: var(--chip);
     border-radius: 6px; padding: 2px 8px; display: inline-flex; align-items: center; gap: 4px; }
 
@@ -518,6 +523,11 @@
   // timer wiping the second one's tick.
   let copied = {};
   const copiedTimers = {};
+  // Backup: which shape, where, and the last thing that happened. The
+  // passphrase is never held here — it goes straight from its field to the CLI
+  // and the field is cleared, because a paint would otherwise put it back.
+  let backup = { shape: "encrypted", note: "", busy: "", said: "", ok: false };
+  let recoveryCode = "";
   // Which row is mid-edit. The background refresh must not wipe a half-typed
   // value out from under someone, so polling pauses while this is set.
   let revealed = {};    // key -> true once its value has been fetched and shown
@@ -989,6 +999,101 @@
     return (vault?.profiles || []).find((p) => p.id === id)?.label || id || "this machine";
   }
 
+  const BACKUP_SHAPES = {
+    encrypted: ["Encrypted", "A passphrase you choose. Portable, needs nothing installed at the other end."],
+    gpg: ["GPG", "An armoured GPG message, symmetric under a passphrase."],
+    plain: ["Plain text", "Every value readable. For moving to a machine that has no PassBook yet."],
+  };
+
+  function defaultExportPath(shape) {
+    const home = state?.home || "~";
+    const day = new Date().toISOString().slice(0, 10);
+    const where = state?.catalog?.workspace || state?.store?.workspace || "store";
+    const ext = shape === "plain" ? "env" : shape === "gpg" ? "asc" : "pbx";
+    return `${home}/Desktop/passbook-${where}-${day}.${ext}`;
+  }
+
+  /** Getting the store out, and back in.
+   *
+   *  Three shapes because the reasons differ. The plaintext one asks twice on
+   *  purpose: "export" reads like "back up", and a plaintext backup is a copy
+   *  of every credential you own.
+   */
+  function backupPanel() {
+    const v = vault;
+    const shape = backup.shape;
+    const [, blurb] = BACKUP_SHAPES[shape];
+    const needsPass = shape !== "plain";
+    const locked = v?.supported && v.fully_sealed && !v.unlocked;
+
+    return `
+      <div class="group">
+        <h3>Backup and transfer</h3>
+        ${locked ? `<p class="note">The vault is shut, so there is nothing readable to
+          export. Sign in first.</p>` : ""}
+        <div class="row">
+          <div class="grow">Write every key in this store to one file.</div>
+          <div class="seg">${Object.entries(BACKUP_SHAPES).map(([id, [label]]) =>
+            `<button data-bshape="${id}" aria-pressed="${shape === id}">${label}</button>`).join("")}</div>
+        </div>
+        <p class="note">${esc(blurb)}</p>
+        <div class="addrow two">
+          <input id="bk-path" value="${esc(backup.path || defaultExportPath(shape))}"
+            spellcheck="false" placeholder="Where to write it" />
+          <button class="act ${shape === "plain" ? "danger" : "primary"}" id="bk-export"
+            ${busy || locked ? "disabled" : ""}>${icon("out")} Export</button>
+        </div>
+        ${needsPass ? `<div class="addrow two">
+          <input id="bk-pass" type="password" placeholder="Passphrase for the export" />
+          <span class="tag">${shape === "gpg" ? "gpg, symmetric" : "scrypt + AES-GCM"}</span>
+        </div>` : `<p class="note err">${icon("alert", "tinyicon")} Every value in that file
+          will be readable by anything that can open it. It is not a backup you keep; it is
+          a thing you move and then destroy.</p>`}
+
+        <div class="row"><div class="grow">Read an export back in. Encrypted, GPG and
+          plain text are all recognised by looking at the file.</div></div>
+        <div class="addrow two">
+          <input id="bk-in" placeholder="Path to an export" spellcheck="false" />
+          <button class="act" id="bk-inspect" ${busy ? "disabled" : ""}>${icon("eye")} Inspect</button>
+        </div>
+        <div class="addrow two">
+          <input id="bk-inpass" type="password" placeholder="Its passphrase, if it has one" />
+          <button class="act" id="bk-import" ${busy ? "disabled" : ""}>${icon("into")} Import</button>
+        </div>
+        ${backup.said ? `<pre class="snippet">${esc(backup.said)}</pre>` : ""}
+        <p class="note">An import never overwrites a key this store already holds; it says
+        which ones it kept. Everything here is recorded by name in the ledger \u2014 an
+        export is the largest read anyone performs against a store, so it would be a
+        strange one to leave out.</p>
+      </div>
+
+      <div class="group">
+        <h3>If you forget the password</h3>
+        ${recoveryCode ? `
+          <div class="row">
+            <span class="statustile good">${icon("shield")}</span>
+            <div class="grow"><strong>Write this down, somewhere this machine is not.</strong>
+              <div class="recovery mono">${esc(recoveryCode)}</div></div>
+            <button class="iconbtn ${copied.__recovery ? "done" : ""}"
+              data-copytext="${esc(recoveryCode)}" data-copymark="__recovery"
+              title="Copy" aria-label="Copy the recovery code">${icon(copied.__recovery ? "check" : "copy")}</button>
+          </div>
+          <p class="note">Shown once. It opens the vault on its own, so it is as good as the
+          password \u2014 PassBook keeps only enough to check it, and cannot show it again.</p>
+          <div class="addrow two"><span></span>
+            <button class="act" data-recoverydone>I have written it down</button></div>
+        ` : `
+          <div class="row"><div class="grow">Your data key is wrapped by your password and
+            nothing else, so a forgotten password is the end of this store. A recovery code
+            is a second wrapping.</div></div>
+          <div class="addrow two">
+            <input id="rc-pw" type="password" placeholder="Vault password" />
+            <button class="act" id="rc-go" ${busy || !v?.profiles?.length ? "disabled" : ""}>
+              ${icon("shield")} Make a recovery code</button>
+          </div>`}
+      </div>`;
+  }
+
   function vaultPage() {
     const v = vault;
     if (!v) return `<h2>Vault</h2><p class="lede">Reading the vault…</p>`;
@@ -1083,7 +1188,7 @@
     return `<h2>Vault</h2>
       <p class="lede">Whether anything on this machine can read your credentials right now.</p>
       <div class="group">${openState}</div>
-      ${signIn}${encryption}${profiles}${device}`;
+      ${signIn}${encryption}${profiles}${backupPanel()}${device}`;
   }
 
   function lockBanner() {
@@ -1549,6 +1654,22 @@ passbook oauth connect google:work</pre>
       page = b.dataset.goto; notice = ""; paint();
     });
     main.querySelectorAll("[data-signout]").forEach((b) => b.onclick = () => callVault("vault_signout"));
+    main.querySelectorAll("[data-bshape]").forEach((b) => b.onclick = () => {
+      backup.shape = b.dataset.bshape;
+      // The default path carries the shape's extension, so a shape change moves
+      // it — unless the person has typed their own.
+      const typed = document.getElementById("bk-path")?.value ?? "";
+      if (!typed || typed === backup.path || typed.startsWith(`${state?.home || "~"}/Desktop/passbook-`)) {
+        backup.path = "";
+      } else {
+        backup.path = typed;
+      }
+      backup.said = "";
+      paint();
+    });
+    main.querySelectorAll("[data-recoverydone]").forEach((b) => b.onclick = () => {
+      recoveryCode = ""; paint();
+    });
     main.querySelectorAll("[data-workspace]").forEach((b) => b.onclick = async () => {
       busy = true; paint();
       try { state = await invoke("set_workspace", { name: b.dataset.workspace });
@@ -1695,6 +1816,50 @@ passbook oauth connect google:work</pre>
       const button = document.getElementById(id);
       if (button) button.onclick = run;
     };
+    wire("bk-export", async () => {
+      const path = document.getElementById("bk-path")?.value?.trim() ?? "";
+      const passphrase = document.getElementById("bk-pass")?.value ?? "";
+      if (!path) { notice = "Where should it go?"; paint(); return; }
+      backup.path = path;
+      busy = true; backup.said = ""; paint();
+      try {
+        const answer = await invoke("export_store", {
+          path, shape: backup.shape, passphrase, note: backup.note || "" });
+        backup.said = `Wrote ${answer.path}`;
+        notice = "";
+      } catch (e) { notice = String(e); }
+      finally { busy = false; paint(); }
+    });
+    wire("bk-inspect", async () => {
+      const path = document.getElementById("bk-in")?.value?.trim() ?? "";
+      const passphrase = document.getElementById("bk-inpass")?.value ?? "";
+      if (!path) { notice = "Which file?"; paint(); return; }
+      busy = true; paint();
+      try { backup.said = await invoke("inspect_export", { path, passphrase }).then((a) => a.detail);
+            notice = ""; }
+      catch (e) { notice = String(e); }
+      finally { busy = false; paint(); }
+    });
+    wire("bk-import", async () => {
+      const path = document.getElementById("bk-in")?.value?.trim() ?? "";
+      const passphrase = document.getElementById("bk-inpass")?.value ?? "";
+      if (!path) { notice = "Which file?"; paint(); return; }
+      busy = true; paint();
+      try {
+        const answer = await invoke("import_store", { path, passphrase, overwrite: false });
+        backup.said = answer.detail;
+        state = answer.state; notice = ""; grid = null;
+      } catch (e) { notice = String(e); }
+      finally { busy = false; paint(); }
+    });
+    wire("rc-go", async () => {
+      const password = pwd("rc-pw");
+      if (!password) { notice = "The vault password is needed to mint a recovery code."; paint(); return; }
+      busy = true; paint();
+      try { recoveryCode = (await invoke("make_recovery_code", { password })).code; notice = ""; }
+      catch (e) { notice = String(e); }
+      finally { busy = false; await refreshVault(); paint(); }
+    });
     wire("si-go", () => signIn("si-pw", "si-profile"));
     wire("sw-go", () => signIn("sw-pw", "sw-profile"));
     wire("si-go2", () => signIn("si-pw2", null));

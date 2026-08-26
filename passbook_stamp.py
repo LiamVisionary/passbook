@@ -75,6 +75,14 @@ OPERATIONS = frozenset({
     # An OAuth grant renewed on the caller's behalf. Worth its own row: a
     # refresh that starts failing is the earliest sign a sign-in has died.
     "refresh",
+    # A whole store leaving or entering the machine. The single most
+    # consequential thing anyone can do here, and the row an audit looks for
+    # first, so it is never folded into "read".
+    "export", "import",
+    # A recovery code minted. The code itself is never written down here — only
+    # that one now exists, and when, because a second one appearing is
+    # something the owner should be able to notice.
+    "recovery",
 })
 
 

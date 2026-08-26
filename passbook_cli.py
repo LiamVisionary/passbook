@@ -33,6 +33,7 @@ import base64
 import getpass
 import json
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -1237,6 +1238,209 @@ def cmd_scope_set(args: argparse.Namespace) -> int:
     return 0 if changed and not refused and not missing else (0 if changed else 1)
 
 
+def _export_values(app: str, reason: str) -> dict[str, str] | None:
+    """Every value this scope can read, opened, or None if the vault is shut.
+
+    Goes through the broker like any other read, so an export is policy-checked
+    and lands in the ledger. An export is the largest read anybody ever does
+    here; it would be a strange one to leave out of the record.
+    """
+    _use_broker_for_sealed_values(app, reason)
+    values = _store_values()
+    stored = passbook.key_names()
+    readable = {name: values[name] for name in stored if values.get(name)}
+    if stored and not readable:
+        _fail("The store is encrypted and locked, so there is nothing to export.",
+              "Sign in first:  passbook signin")
+        return None
+    return readable
+
+
+def cmd_export(args: argparse.Namespace) -> int:
+    """Write the store to a file: encrypted by default, GPG or plain on request."""
+    try:
+        import passbook_backup
+    except ImportError:
+        return _fail("Export is not installed on this machine.", "Run:  passbook install")
+
+    target = Path(args.file).expanduser()
+    values = _export_values("passbook-export", f"export to {target.name}")
+    if values is None:
+        return 1
+    if not values:
+        return _fail("There is nothing in this store to export.")
+
+    meta = {"workspace": passbook.workspace(), "machine": platform.node(),
+            "note": args.note or ""}
+    try:
+        if args.plain:
+            # Two separate acts of consent. "Export" reads like "back up", and a
+            # plaintext backup is a copy of every credential you own — so the
+            # flag that chooses the shape is not also the flag that accepts what
+            # the shape means.
+            if not args.i_understand:
+                return _fail(
+                    "A plaintext export puts every value in the clear in that file.",
+                    "If that is what you want:  passbook export --plain --i-understand "
+                    f"{args.file}")
+            text = passbook_backup.plain(values, path=str(target))
+        elif args.gpg or args.recipient:
+            passphrase = ""
+            if not args.recipient:
+                passphrase = _ask_password("Passphrase for the export: ", confirm=True,
+                                           from_stdin=args.password_stdin)
+            text = passbook_backup.gpg_encrypt(values, recipient=args.recipient,
+                                               passphrase=passphrase, **meta)
+        else:
+            passphrase = _ask_password("Passphrase for the export: ", confirm=True,
+                                       from_stdin=args.password_stdin)
+            text = passbook_backup.encrypt(values, passphrase, **meta)
+        written = passbook_backup.write_private(target, text)
+    except passbook_backup.BackupError as error:
+        return _fail(str(error))
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return 1
+    except ValueError as error:
+        return _fail(str(error))
+    except OSError as error:
+        return _fail(f"Could not write {target}: {error}")
+
+    _record_export("export", sorted(values), str(written))
+    shape = "plaintext" if args.plain else ("GPG" if (args.gpg or args.recipient) else "encrypted")
+    print(f"Exported {len(values)} key(s) to {written} ({shape}).")
+    if args.plain:
+        print("Every value in that file is readable. Move it and destroy it.", file=sys.stderr)
+    return 0
+
+
+def cmd_import(args: argparse.Namespace) -> int:
+    """Read an export of any shape into this store."""
+    try:
+        import passbook_backup
+    except ImportError:
+        return _fail("Import is not installed on this machine.", "Run:  passbook install")
+
+    source = Path(args.file).expanduser()
+    try:
+        text = source.read_text(encoding="utf-8")
+    except OSError as error:
+        return _fail(f"Could not read {source}: {error}")
+
+    shape = passbook_backup.detect(text)
+    passphrase = ""
+    if shape in ("encrypted", "gpg"):
+        needs = shape == "encrypted" or args.password_stdin or not args.recipient_key
+        if needs:
+            try:
+                passphrase = _ask_password(f"Passphrase for {source.name}: ",
+                                           from_stdin=args.password_stdin)
+            except (EOFError, KeyboardInterrupt):
+                print()
+                return 1
+    try:
+        document = passbook_backup.read(text, passphrase=passphrase)
+        incoming = passbook_backup.keys_of(document)
+    except passbook_backup.BackupError as error:
+        return _fail(str(error))
+
+    if not incoming:
+        return _fail("That export has no keys in it.")
+
+    held = set(passbook.key_names())
+    clashes = sorted(name for name in incoming if name in held)
+    fresh = sorted(name for name in incoming if name not in held)
+
+    if args.dry_run:
+        where = document.get("machine") or ""
+        made = document.get("exported_at") or "at an unknown time"
+        print(f"{source} is a {shape} export of {len(incoming)} key(s), made {made}"
+              + (f" on {where}" if where else "") + ".")
+        if fresh:
+            print(f"\nWould add {len(fresh)}:")
+            for name in fresh:
+                print(f"  + {name}")
+        if clashes:
+            print(f"\n{len(clashes)} already here"
+                  f"{' and would be overwritten' if args.overwrite else ', and would be kept'}:")
+            for name in clashes:
+                print(f"  {'~' if args.overwrite else '='} {name}")
+        return 0
+
+    if clashes and not args.overwrite:
+        print(f"{len(clashes)} key(s) are already in this store and were kept. "
+              f"Use --overwrite to replace them.", file=sys.stderr)
+
+    try:
+        result = passbook.set_values(incoming, overwrite=args.overwrite, exact=True)
+    except (ValueError, OSError, passbook.ContainerisedHomeError) as error:
+        return _fail(str(error))
+
+    _record_export("import", sorted(incoming), str(source))
+    added, updated = result.get("added", []), result.get("updated", [])
+    print(f"Imported into {result.get('path')}: {len(added)} added, "
+          f"{len(updated)} updated, {len(result.get('kept', []))} kept.")
+    # A store that was sealed before an import is now part-sealed and
+    # part-plaintext, which is not a state anyone chose.
+    if (added or updated) and _sealed_store_present():
+        print("\nThis store is encrypted, and the imported values went in as plaintext.",
+              file=sys.stderr)
+        print("Seal them too:  passbook seal", file=sys.stderr)
+    return 0
+
+
+def _sealed_store_present() -> bool:
+    try:
+        import passbook_vault
+
+        return bool(passbook_vault.status().get("sealed"))
+    except Exception:
+        return False
+
+
+def _record_export(op: str, names: list[str], where: str) -> None:
+    """Note the largest read (or write) anyone does, by name, never by value."""
+    try:
+        import passbook_stamp
+
+        passbook_stamp.stamp(op=op, keys=names, app=f"passbook-{op}",
+                             reason=f"{op} {len(names)} key(s) — {Path(where).name}",
+                             granted=True)
+    except Exception:
+        # A record that cannot be written must not stop the thing it records;
+        # the alternative is an export that fails because of its own audit line.
+        pass
+
+
+def cmd_recovery(args: argparse.Namespace) -> int:
+    """Mint a recovery code that can open this vault without the password.
+
+    The one thing a password-only vault cannot survive is a forgotten password:
+    the data key is wrapped by the password and by nothing else, so the store is
+    gone. A recovery code is a second wrapping, with enough entropy that it does
+    not need a slow KDF to be safe, and it is shown exactly once.
+    """
+    module = _vault_module()
+    if module is None:
+        return 1
+    opened = _open_vault(module, args.profile, from_stdin=args.password_stdin)
+    if opened is None:
+        return 1
+    dek, profile_id = opened
+    try:
+        code, factor = module.add_recovery_factor(profile_id, dek=dek, label=args.label)
+    except module.VaultError as error:
+        return _fail(str(error))
+
+    _record_export("recovery", [], f"profile {profile_id}")
+    print("Write this down and put it somewhere this machine is not.\n")
+    print(f"    {code}\n")
+    print("It opens the vault on its own, so it is as good as the password.")
+    print("It is shown once — PassBook keeps only what it needs to check it.")
+    print(f"\nUse it with:  passbook signin --recovery")
+    return 0
+
+
 def cmd_workspace(args: argparse.Namespace) -> int:
     """Which workspace this machine is acting for, and what else it has."""
     here = passbook.workspace()
@@ -1346,6 +1550,17 @@ def cmd_signin(args: argparse.Namespace) -> int:
             duration=args.duration)
     elif args.device:
         answer = passbook_broker.signin(profile=args.profile, device=True, duration=args.duration)
+    elif getattr(args, "recovery", False):
+        try:
+            code = _ask_password("Recovery code: ",
+                                 from_stdin=getattr(args, "password_stdin", False))
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return 1
+        except ValueError as error:
+            return _fail(str(error))
+        answer = passbook_broker.signin(profile=args.profile, recovery=code,
+                                        duration=args.duration)
     else:
         try:
             password = _ask_password(from_stdin=getattr(args, "password_stdin", False))
@@ -1605,6 +1820,9 @@ def machine_state() -> dict:
     a bug.
     """
     state: dict = {"store": passbook.status(), "spec_version": passbook.SPEC_VERSION}
+    # The window offers to write an export somewhere, and has no other way to
+    # propose a path a person would recognise.
+    state["home"] = str(Path.home())
 
     try:
         import passbook_seal
@@ -2249,6 +2467,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="use this machine's device factor instead of a password")
     signin.add_argument("--passkey", default="", metavar="CREDENTIAL_ID",
                         help="sign in with a passkey; its PRF secret is read from stdin")
+    signin.add_argument("--recovery", action="store_true",
+                        help="sign in with a recovery code instead of the password")
     signin.add_argument("--password-stdin", dest="password_stdin",
         action="store_true", help="read the password from stdin instead of prompting")
     signin.set_defaults(func=cmd_signin)
@@ -2358,6 +2578,37 @@ def build_parser() -> argparse.ArgumentParser:
     scope_set.add_argument("--tailnet", action="store_true",
                            help="as machine, and lendable to linked machines")
     scope_set.set_defaults(json=False, key="", func=cmd_scope_set)
+
+    export_cmd = subs.add_parser("export", help="write this store to a file")
+    export_cmd.add_argument("file")
+    export_cmd.add_argument("--plain", action="store_true",
+                            help="readable KEY=value lines (needs --i-understand)")
+    export_cmd.add_argument("--i-understand", dest="i_understand", action="store_true",
+                            help="acknowledge that a plaintext export is every value in the clear")
+    export_cmd.add_argument("--gpg", action="store_true", help="armoured GPG instead")
+    export_cmd.add_argument("--recipient", default="",
+                            help="GPG recipient key id; without one, GPG is symmetric")
+    export_cmd.add_argument("--note", default="", help="a line to carry with the export")
+    export_cmd.add_argument("--password-stdin", dest="password_stdin", action="store_true",
+                            help="read the passphrase from stdin instead of prompting")
+    export_cmd.set_defaults(func=cmd_export)
+
+    import_cmd = subs.add_parser("import", help="read an export into this store")
+    import_cmd.add_argument("file")
+    import_cmd.add_argument("--overwrite", action="store_true",
+                            help="replace keys this store already holds")
+    import_cmd.add_argument("--dry-run", dest="dry_run", action="store_true",
+                            help="say what would change, and change nothing")
+    import_cmd.add_argument("--recipient-key", dest="recipient_key", action="store_true",
+                            help="a GPG export encrypted to your key, so gpg-agent has the passphrase")
+    import_cmd.add_argument("--password-stdin", dest="password_stdin", action="store_true")
+    import_cmd.set_defaults(func=cmd_import)
+
+    recovery_cmd = subs.add_parser("recovery", help="mint a code that opens the vault without the password")
+    recovery_cmd.add_argument("--profile", default="")
+    recovery_cmd.add_argument("--label", default="recovery code")
+    recovery_cmd.add_argument("--password-stdin", dest="password_stdin", action="store_true")
+    recovery_cmd.set_defaults(func=cmd_recovery)
 
     workspace_cmd = subs.add_parser("workspace", help="which workspace this machine acts for")
     workspace_cmd.add_argument("--json", action="store_true")

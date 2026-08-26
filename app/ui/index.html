@@ -1517,8 +1517,15 @@ passbook oauth connect google:work</pre>
       </div>`;
   }
 
+  const CONFIRM_WORDS = {
+    add: ["Adding a key", "A credential this store did not have before."],
+    modify: ["Replacing a value", "An existing key being overwritten \u2014 the change that quietly breaks things."],
+    delete: ["Removing a key", "Gone from this store; the value is not recoverable from here."],
+  };
+
   function accessPage() {
     const a = state.access || {};
+    const cat = state.catalog || {};
     const pending = state.broker?.pending || [];
     const open = a.sessions || [];
     return `
@@ -1528,7 +1535,8 @@ passbook oauth connect google:work</pre>
         <div class="banner">
           ${icon("alert")}
           <div class="body">
-            <b>${esc(p.app)}</b> wants ${esc((p.keys || []).join(", "))}
+            <b>${esc(p.app)}</b> ${esc({ add: "wants to add", modify: "wants to change",
+              delete: "wants to remove" }[p.kind] || "wants")} ${esc((p.keys || []).join(", "))}
             ${p.reason ? `<div style="opacity:.85;margin-top:2px">${esc(p.reason)}</div>` : ""}
             <div class="acts">
               <button data-ok="${esc(p.id)}" data-for="">Just once</button>
@@ -1537,6 +1545,30 @@ passbook oauth connect google:work</pre>
             </div>
           </div>
         </div>`).join("")}
+      <div class="group">
+        <h3>Before a key changes</h3>
+        <div class="row"><div class="grow">Everything else on this page is about
+          <em>reads</em>. These are about <em>changes</em>: whether adding, replacing or
+          removing a key stops and asks you first.</div></div>
+        ${(cat.confirm_ops || ["add", "modify", "delete"]).map((op) => {
+          const on = !!(cat.confirm || {})[op];
+          const [label, blurb] = CONFIRM_WORDS[op];
+          return `<div class="row">
+            <span class="statustile ${on ? "good" : "plain"} sm">${icon(on ? "shield" : "plus")}</span>
+            <div class="grow"><div><strong>${label}</strong></div>
+              <div class="sub">${blurb}</div></div>
+            <div class="seg">
+              <button data-confirm="${op}" data-on="0" aria-pressed="${!on}">Straight away</button>
+              <button data-confirm="${op}" data-on="1" aria-pressed="${on}">Ask me</button>
+            </div>
+          </div>`;
+        }).join("")}
+        <p class="note">A change that asks waits in this window and raises a system
+        notification, and nothing is written until you answer. Turning one on when no
+        broker is running would leave nobody to ask, so a change is refused rather than
+        allowed through \u2014 a toggle whose enforcement disappears with a daemon is not
+        a toggle.</p>
+      </div>
       <div class="group">
         <h3>Stop being asked</h3>
         ${open.length ? open.map((u) => `
@@ -1724,6 +1756,14 @@ passbook oauth connect google:work</pre>
       page = b.dataset.goto; notice = ""; paint();
     });
     main.querySelectorAll("[data-signout]").forEach((b) => b.onclick = () => callVault("vault_signout"));
+    main.querySelectorAll("[data-confirm]").forEach((b) => b.onclick = async () => {
+      busy = true; paint();
+      try { state = await invoke("set_confirmation", {
+              op: b.dataset.confirm, required: b.dataset.on === "1" });
+            notice = ""; }
+      catch (e) { notice = String(e); }
+      finally { busy = false; paint(); }
+    });
     main.querySelectorAll("[data-bshape]").forEach((b) => b.onclick = () => {
       backup.shape = b.dataset.bshape;
       // The default path carries the shape's extension, so a shape change moves

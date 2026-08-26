@@ -202,15 +202,52 @@ def pending() -> list[dict[str, Any]]:
                 for item in _PENDING.values()]
 
 
-def _queue(app: str, keys: list[str], reason: str) -> tuple[str, threading.Event]:
+def _queue(app: str, keys: list[str], reason: str,
+           kind: str = "read") -> tuple[str, threading.Event]:
     request_id = secrets.token_hex(4)
     event = threading.Event()
     with _PENDING_LOCK:
         _PENDING[request_id] = {
             "id": request_id, "app": app, "keys": sorted(keys), "reason": reason,
+            "kind": kind,
             "asked": access._stamp(access._now()), "decision": "", "event": event,
         }
+    notify(kind, app, sorted(keys))
     return request_id, event
+
+
+def notify(kind: str, app: str, keys: list[str]) -> None:
+    """Put the request in front of the person, outside the app window.
+
+    The PassBook window is usually not the one you are looking at, and a
+    request that waits three minutes in a window nobody has open is a request
+    that times out. Never raises and never blocks for long: a machine with no
+    notifier is a machine that still has to work.
+
+    Key NAMES only. A notification banner is drawn by the OS, may be logged by
+    it, and is visible to anyone glancing at the screen.
+    """
+    if os.environ.get("PASSBOOK_NO_NOTIFY"):
+        return
+    named = ", ".join(keys[:3]) + (f" and {len(keys) - 3} more" if len(keys) > 3 else "")
+    verb = {"add": "wants to add", "modify": "wants to change",
+            "delete": "wants to remove"}.get(kind, "wants to read")
+    body = f"{app} {verb} {named or 'a credential'}"
+    try:
+        if sys.platform == "darwin":
+            script = ('display notification {} with title "PassBook" subtitle {}'
+                      .format(json.dumps(body), json.dumps("Waiting for you")))
+            subprocess.run(["osascript", "-e", script], capture_output=True, timeout=5)
+        elif sys.platform.startswith("linux"):
+            subprocess.run(["notify-send", "PassBook", body], capture_output=True, timeout=5)
+        elif sys.platform.startswith("win"):
+            subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 "[reflection.assembly]::LoadWithPartialName('System.Windows.Forms');"
+                 f"[System.Windows.Forms.MessageBox]::Show({json.dumps(body)},'PassBook')"],
+                capture_output=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        pass
 
 
 def resolve(request_id: str, *, approve: bool, remember: str = "", approved_by: str = "owner") -> dict[str, Any]:
@@ -324,6 +361,40 @@ def _unsealer(values: dict[str, str]) -> dict[str, str]:
         return values
     dek, profile = _held_dek()
     return passbook_vault.unseal_mapping(values, dek, profile_id=profile)
+
+
+def _confirm(payload: Mapping[str, Any], root: Path | None,
+             caller: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Hold a CHANGE until a person approves it.
+
+    The read path asks when a key's mode says `ask`. This is the same machinery
+    pointed at writes: a store whose values cannot be read is a different
+    property from a store whose contents cannot change quietly, and only the
+    second one catches an agent helpfully "fixing" a credential.
+
+    The broker does not perform the change. It answers yes or no and the caller
+    does the work, which keeps one writer rather than two.
+    """
+    kind = str(payload.get("kind") or "").strip().lower()
+    if kind not in access.CONFIRM_OPS:
+        return {"ok": False, "error": f"{kind or 'that'} is not a change this can confirm"}
+    policy = read_policy(root)
+    if not access.needs_confirmation(kind, policy):
+        return {"ok": True, "decision": "approve", "why": "confirmation is not required"}
+
+    app = str(payload.get("app") or "unknown")
+    keys = sorted({str(k).strip() for k in (payload.get("keys") or []) if str(k).strip()})
+    reason = str(payload.get("reason") or "")[:200]
+    request_id, event = _queue(app, keys, reason, kind=kind)
+    decision = _await_decision(request_id, event)
+    granted = decision == "approve"
+    _record("approve" if granted else "denied", keys or ["*"], app=app, granted=granted,
+            reason=f"{kind}: {decision}")
+    if decision == "timeout":
+        return {"ok": False, "decision": "timeout",
+                "error": "Nobody answered in time, so nothing was changed."}
+    return {"ok": granted, "decision": decision,
+            "error": "" if granted else "That change was declined."}
 
 
 def _signin(payload: Mapping[str, Any], root: Path | None,
@@ -516,6 +587,8 @@ def _handle(payload: Mapping[str, Any], root: Path | None = None,
         if closed["closed"]:
             _record("lock", ["*"], app="passbook-cli", granted=True, reason="unlock ended early")
         return {"ok": True, **closed}
+    if operation == "confirm":
+        return _confirm(payload, root, caller)
     if operation == "signin":
         return _signin(payload, root, caller)
     if operation == "signout":
@@ -736,6 +809,24 @@ def request_through_broker(
         return None
     granted = answer.get("granted")
     return granted if isinstance(granted, dict) else {}
+
+
+def confirm_change(kind: str, keys: Iterable[str], *, app: str, reason: str = "",
+                   root: Path | None = None) -> dict[str, Any]:
+    """Ask the person to approve a change. Returns the decision, or None-ish.
+
+    A broker that is not running means confirmation cannot be obtained. That is
+    reported as `unavailable` rather than as approval: a toggle whose enforcement
+    disappears when a daemon stops is not a toggle, it is a suggestion.
+    """
+    answer = _ask({
+        "op": "confirm", "kind": kind, "app": app,
+        "keys": [str(k) for k in keys], "reason": reason,
+    }, root=root, timeout=_approval_timeout() + 5.0)
+    if answer is None:
+        return {"ok": False, "decision": "unavailable",
+                "error": "No broker is running, so that change could not be confirmed."}
+    return answer
 
 
 def signin(

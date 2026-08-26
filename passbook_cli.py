@@ -170,6 +170,83 @@ def cmd_check(args: argparse.Namespace) -> int:
     return 0
 
 
+def _confirm_change(kind: str, keys, *, reason: str = "") -> bool:
+    """Stop and ask, when the policy says this kind of change needs asking.
+
+    True means go ahead — including when confirmation is switched off, which is
+    the default and the common case.
+
+    The check is cheap and local; only when a toggle is ON does anything reach
+    the broker. And when it is on and there is no broker, this refuses rather
+    than proceeding: a toggle whose enforcement vanishes with a daemon is not a
+    toggle, it is a suggestion.
+    """
+    try:
+        import passbook_access as access
+    except ImportError:
+        return True
+    try:
+        policy = access.read_policy()
+    except Exception:  # noqa: BLE001 — an unreadable policy must not block a write
+        return True
+    if not access.needs_confirmation(kind, policy):
+        return True
+    # The person clicking in the PassBook window has already said yes; asking
+    # them again in the same window would be the app confirming with itself.
+    if os.environ.get("PASSBOOK_APPROVED") == "1":
+        return True
+    try:
+        import passbook_broker
+    except ImportError:
+        return True
+    names = sorted({str(k) for k in keys})
+    print(f"Waiting for you to approve this {kind} in PassBook…", file=sys.stderr)
+    sys.stderr.flush()
+    answer = passbook_broker.confirm_change(
+        kind, names, app=os.environ.get("PASSBOOK_APP", "passbook-cli"),
+        reason=reason or f"{kind} {', '.join(names[:4])}")
+    if answer.get("ok"):
+        return True
+    decision = answer.get("decision", "deny")
+    detail = {
+        "timeout": "Nobody answered, so nothing was changed.",
+        "unavailable": "No broker is running, so that change could not be confirmed. "
+                       "Start it with:  passbook broker start",
+    }.get(decision, "That change was declined; nothing was written.")
+    _fail(detail)
+    return False
+
+
+def cmd_confirm(args: argparse.Namespace) -> int:
+    """Which changes stop and ask before they happen."""
+    import passbook_access as access
+
+    policy = access.read_policy()
+    if args.op:
+        required = not args.off
+        try:
+            access.set_confirmation(args.op, required, policy)
+        except ValueError as error:
+            return _fail(str(error))
+        access.write_policy(policy)
+    current = access.confirmations(policy)
+    if args.json:
+        print(json.dumps(current, indent=2))
+        return 0
+    words = {"add": "adding a key", "modify": "changing a key's value",
+             "delete": "removing a key"}
+    for op in access.CONFIRM_OPS:
+        print(f"  {op:<7} {'asks first' if current[op] else 'happens straight away'}"
+              f"   ({words[op]})")
+    if not any(current.values()):
+        print("\nNothing asks. Turn one on with:  passbook confirm delete")
+    else:
+        print("\nA change that asks waits for you in the PassBook window, and shows "
+              "a notification.")
+        print("Nothing is written until you answer.")
+    return 0
+
+
 def cmd_add(args: argparse.Namespace) -> int:
     """Add or replace keys. Additive unless --replace is given.
 
@@ -204,6 +281,17 @@ def cmd_add(args: argparse.Namespace) -> int:
 
     if not values:
         return _fail("Nothing to add.", "Usage: passbook-add KEY=value | passbook-add KEY")
+    # Adding a key and changing one are different questions, so they are asked
+    # separately: a machine that wants to be told before a credential CHANGES
+    # usually does not want a dialog for every new one.
+    held = set(passbook.key_names())
+    fresh = [k for k in values if k not in held]
+    existing = [k for k in values if k in held]
+    if fresh and not _confirm_change("add", fresh, reason="add a new credential"):
+        return 1
+    if existing and args.replace and not _confirm_change(
+            "modify", existing, reason="replace an existing credential"):
+        return 1
     try:
         result = passbook.set_values(values, overwrite=args.replace)
     except passbook.ContainerisedHomeError as error:
@@ -222,6 +310,8 @@ def cmd_add(args: argparse.Namespace) -> int:
 
 def cmd_remove(args: argparse.Namespace) -> int:
     """Delete keys. The one operation that can break another app on this box."""
+    if not _confirm_change("delete", args.keys, reason="remove a credential"):
+        return 1
     try:
         result = passbook.remove_values(args.keys)
     except passbook.ContainerisedHomeError as error:
@@ -1949,6 +2039,8 @@ def machine_state() -> dict:
             "projects": {name: rule for name in names
                          if (rule := passbook_access.project_for(name, policy))["mode"] != "all"},
             "project_modes": list(passbook_access.PROJECT_MODES),
+            "confirm": passbook_access.confirmations(policy),
+            "confirm_ops": list(passbook_access.CONFIRM_OPS),
             "projects_seen": passbook_access.projects_seen(policy),
             "project": passbook.project(),
             "agents": passbook_catalog.agents_seen(policy=policy),
@@ -2642,6 +2734,13 @@ def build_parser() -> argparse.ArgumentParser:
     scope_set.add_argument("--tailnet", action="store_true",
                            help="as machine, and lendable to linked machines")
     scope_set.set_defaults(json=False, key="", func=cmd_scope_set)
+
+    confirm_cmd = subs.add_parser("confirm", help="which changes stop and ask first")
+    confirm_cmd.add_argument("op", nargs="?", default="", choices=["", "add", "modify", "delete"],
+                             help="the change to turn on (or off, with --off)")
+    confirm_cmd.add_argument("--off", action="store_true", help="turn it off instead")
+    confirm_cmd.add_argument("--json", action="store_true")
+    confirm_cmd.set_defaults(func=cmd_confirm)
 
     projects_cmd = subs.add_parser("projects", help="which projects each key is for")
     projects_cmd.add_argument("--json", action="store_true")

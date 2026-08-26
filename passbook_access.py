@@ -436,6 +436,48 @@ def audience_allows(app: str, key: str, policy: Mapping[str, Any]) -> dict[str, 
     return {"allowed": True, "why": "not excluded"}
 
 
+# ── confirmations for changes ──────────────────────────────────────────────
+#
+# Everything else in this file is about READS. These are about WRITES: whether
+# adding, changing or removing a key should stop and ask the person first.
+#
+# Off by default, all three, because a machine where every `passbook add` waits
+# on a dialog is one where people stop using `passbook add`. Turned on, they
+# make the store's contents something that cannot change quietly — which is a
+# different property from its values being unreadable, and the one that catches
+# an agent helpfully "fixing" a credential.
+
+CONFIRM_OPS = ("add", "modify", "delete")
+
+
+def confirmations(policy: Mapping[str, Any]) -> dict[str, bool]:
+    """Which changes need a person to say yes. Unreadable entries read as off.
+
+    Degrading OFF here, where audiences degrade OPEN, is the same instinct
+    pointed the same way: neither should turn a corrupt policy file into a
+    machine that has locked its owner out of their own store.
+    """
+    raw = policy.get("confirm")
+    if not isinstance(raw, dict):
+        return {op: False for op in CONFIRM_OPS}
+    return {op: bool(raw.get(op, False)) for op in CONFIRM_OPS}
+
+
+def set_confirmation(op: str, required: bool, policy: MutableMapping[str, Any]) -> dict[str, bool]:
+    """Turn one confirmation on or off."""
+    op = str(op).strip().lower()
+    if op not in CONFIRM_OPS:
+        raise ValueError(f"confirmation must be one of {', '.join(CONFIRM_OPS)}")
+    current = confirmations(policy)
+    current[op] = bool(required)
+    policy["confirm"] = current
+    return current
+
+
+def needs_confirmation(op: str, policy: Mapping[str, Any]) -> bool:
+    return confirmations(policy).get(str(op).strip().lower(), False)
+
+
 # ── projects ───────────────────────────────────────────────────────────────
 #
 # A third bound, beside scope (which workspaces) and audience (which agents):

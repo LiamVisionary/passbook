@@ -460,6 +460,21 @@ fn vault_use_profile(label: String) -> Result<Value, String> {
     vault_state()
 }
 
+/// Turn one change-confirmation on or off.
+#[tauri::command]
+fn set_confirmation(op: String, required: bool) -> Result<Value, String> {
+    let op = op.trim();
+    if !["add", "modify", "delete"].contains(&op) {
+        return Err(format!("{op} is not a change that can be confirmed"));
+    }
+    let mut args: Vec<&str> = vec!["confirm", op];
+    if !required {
+        args.push("--off");
+    }
+    run(&args)?;
+    state()
+}
+
 /// Which projects a key is for: every one, only these, or all but these.
 #[tauri::command]
 fn set_key_projects(name: String, mode: String, projects: Vec<String>) -> Result<Value, String> {
@@ -643,7 +658,7 @@ fn main() {
             vault_use_profile, vault_seal, vault_unseal, vault_secure, set_key_group, set_key_audience, set_key_scope, set_keys_scope, remove_keys,
             access_matrix, oauth_state, oauth_refresh, oauth_disconnect, oauth_connect,
             set_workspace, export_store, inspect_export, import_store, make_recovery_code,
-            set_key_projects
+            set_key_projects, set_confirmation
         ])
         .run(tauri::generate_context!())
         .expect("PassBook failed to start");

@@ -354,3 +354,58 @@ def test_projects_survive_a_policy_write(tmp_path):
     access.write_policy(policy, root=tmp_path)
     again = access.read_policy(tmp_path)
     assert access.project_for("DEPLOY_KEY", again)["projects"] == ["acme-site"]
+
+
+# ── confirmations: the toggles that stop a CHANGE ──────────────────────────
+
+def test_nothing_asks_by_default():
+    """A machine where every `passbook add` waits on a dialog is one where
+    people stop using `passbook add`."""
+    policy = access.upgrade_policy({})
+    assert access.confirmations(policy) == {"add": False, "modify": False, "delete": False}
+    assert access.needs_confirmation("delete", policy) is False
+
+
+def test_one_toggle_can_be_turned_on_without_the_others():
+    policy = access.upgrade_policy({})
+    access.set_confirmation("delete", True, policy)
+    current = access.confirmations(policy)
+    assert current == {"add": False, "modify": False, "delete": True}
+    assert access.needs_confirmation("delete", policy) is True
+    assert access.needs_confirmation("add", policy) is False
+
+
+def test_a_toggle_can_be_turned_back_off():
+    policy = access.upgrade_policy({})
+    access.set_confirmation("modify", True, policy)
+    access.set_confirmation("modify", False, policy)
+    assert access.needs_confirmation("modify", policy) is False
+
+
+def test_an_unknown_change_is_refused():
+    policy = access.upgrade_policy({})
+    with pytest.raises(ValueError, match="must be one of"):
+        access.set_confirmation("rename", True, policy)
+
+
+def test_a_corrupt_confirm_section_reads_as_off():
+    """Degrading OFF here, where audiences degrade OPEN, points the same
+    instinct the same way: neither should turn a damaged policy file into a
+    machine that has locked its owner out of their own store."""
+    policy = access.upgrade_policy({})
+    policy["confirm"] = "yes please"
+    assert access.confirmations(policy) == {"add": False, "modify": False, "delete": False}
+    policy["confirm"] = {"delete": "sometimes"}
+    assert access.confirmations(policy)["delete"] is True  # truthy string
+    policy["confirm"] = {"delete": ""}
+    assert access.confirmations(policy)["delete"] is False
+
+
+def test_confirmations_survive_a_policy_write(tmp_path):
+    """`write_policy` lists its sections literally and has dropped a new one
+    before; this is the test that would have caught it."""
+    policy = access.upgrade_policy({})
+    access.set_confirmation("delete", True, policy)
+    access.write_policy(policy, root=tmp_path)
+    again = access.read_policy(tmp_path)
+    assert access.needs_confirmation("delete", again) is True

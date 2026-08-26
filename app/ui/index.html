@@ -14,8 +14,15 @@
     --ink1: #1d1d1f;
     --ink2: #55555a;
     --ink3: #8e8e93;
-    --accent: #c8860d;
+    /* PassBook blue. The logo's own blue is #0068FC, which lands at 4.06:1
+       on this background — under AA for the small accent text this app uses
+       for "2 restricted" and "readable by only …". One shade down clears
+       4.5:1 both as text on the background and as white on the button, and
+       is indistinguishable from the logo at a glance. */
+    --accent: #0060ee;
     --accent-ink: #ffffff;
+    --brand: #0068fc;
+    --brand-deep: #011d3d;
     --sel: rgba(0,0,0,0.075);
     --good: #1a7f37;
     --warn: #b3261e;
@@ -30,8 +37,11 @@
       --ink1: #f5f5f7;
       --ink2: #b0b0b8;
       --ink3: #7e7e86;
-      --accent: #e2a83c;
-      --accent-ink: #1d1d1f;
+      /* Lifted for a dark field; its ink is the logo's own navy. */
+      --accent: #4d9bff;
+      --accent-ink: #011d3d;
+      --brand: #4d9bff;
+      --brand-deep: #011d3d;
       --sel: rgba(255,255,255,0.09);
       --good: #5fd07d;
       --warn: #ff7b70;

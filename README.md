@@ -13,7 +13,7 @@ Ship three apps and you get three credential stores. The same OpenAI key gets
 pasted three times, revoked in one place, and still works in the other two.
 PassBook fixes that by agreeing on a path instead of building a sync protocol.
 
-![The PassBook app: one machine's credentials arranged into groups, with two keys restricted to particular agents](docs/app-keys.png)
+![The PassBook app: one machine's credentials grouped by vendor, each value hidden behind a chip until revealed, with how far the key reaches and who may read it on the line beneath](docs/app-keys.png)
 
 There is a desktop app, and it holds no logic of its own — every question it
 answers goes through the same command line an agent or a script would use. What
@@ -388,7 +388,7 @@ There is no second vault and no second set of rules. Only the grant's
 *description* — its label, token endpoint and which key holds what — lives
 beside it in `passbook-oauth.json`, which is readable on purpose.
 
-![The Sign-ins page: three accounts, one live, one expired, one with no refresh token](docs/app-signins.png)
+![The Sign-ins page: three accounts, one live, one renewing on the next read, one with no refresh token that needs a person](docs/app-signins.png)
 
 ### Two things worth knowing
 
@@ -481,7 +481,7 @@ The agents listed are the ones that have actually asked, read out of the access
 ledger — not just the ones you remembered to configure. Those are usually the
 interesting ones.
 
-![The Agents page: every key against every agent that has asked, with two keys refused](docs/app-agents.png)
+![The Agents page: every key against every agent that has asked, a tick where it would be handed over and a cross where it would be refused](docs/app-agents.png)
 
 The same grid is in the app, and so is the one line that gives an agent access
 in the first place.

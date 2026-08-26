@@ -7,13 +7,17 @@
      that the platform would not draw itself. */
   :root {
     color-scheme: light dark;
-    --bg: #ececee;
-    --sidebar: rgba(246,246,248,0.7);
+    --bg: #eceef2;
+    --bg2: #f5f6f9;
+    --sidebar: rgba(244,245,248,0.72);
     --card: #ffffff;
-    --line: rgba(0,0,0,0.08);
-    --ink1: #1d1d1f;
-    --ink2: #55555a;
-    --ink3: #8e8e93;
+    --line: rgba(0,0,0,0.075);
+    --line2: rgba(0,0,0,0.13);
+    --ink1: #16171a;
+    --ink2: #54565c;
+    --ink3: #8a8c94;
+    --chip: rgba(0,0,0,0.045);
+    --chip2: rgba(0,0,0,0.072);
     /* PassBook blue. The logo's own blue is #0068FC, which lands at 4.06:1
        on this background — under AA for the small accent text this app uses
        for "2 restricted" and "readable by only …". One shade down clears
@@ -21,30 +25,42 @@
        is indistinguishable from the logo at a glance. */
     --accent: #0060ee;
     --accent-ink: #ffffff;
+    --accent-soft: rgba(0,96,238,0.10);
     --brand: #0068fc;
     --brand-deep: #011d3d;
-    --sel: rgba(0,0,0,0.075);
-    --good: #1a7f37;
+    --sel: rgba(0,0,0,0.06);
+    --good: #157033;
+    --good-soft: rgba(21,112,51,0.12);
     --warn: #b3261e;
-    --radius: 10px;
+    --warn-soft: rgba(179,38,30,0.10);
+    --radius: 12px;
+    --shadow: 0 1px 2px rgba(16,24,40,.05), 0 6px 16px rgba(16,24,40,.05);
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #1e1e20;
-      --sidebar: rgba(38,38,42,0.6);
-      --card: #2a2a2e;
-      --line: rgba(255,255,255,0.09);
-      --ink1: #f5f5f7;
-      --ink2: #b0b0b8;
-      --ink3: #7e7e86;
+      --bg: #17181b;
+      --bg2: #1e1f23;
+      --sidebar: rgba(32,33,38,0.7);
+      --card: #232429;
+      --line: rgba(255,255,255,0.075);
+      --line2: rgba(255,255,255,0.14);
+      --ink1: #f2f3f5;
+      --ink2: #b1b3bb;
+      --ink3: #7b7d87;
+      --chip: rgba(255,255,255,0.06);
+      --chip2: rgba(255,255,255,0.1);
       /* Lifted for a dark field; its ink is the logo's own navy. */
       --accent: #4d9bff;
-      --accent-ink: #011d3d;
+      --accent-ink: #05203f;
+      --accent-soft: rgba(77,155,255,0.16);
       --brand: #4d9bff;
       --brand-deep: #011d3d;
-      --sel: rgba(255,255,255,0.09);
+      --sel: rgba(255,255,255,0.075);
       --good: #5fd07d;
+      --good-soft: rgba(95,208,125,0.15);
       --warn: #ff7b70;
+      --warn-soft: rgba(255,123,112,0.14);
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 22px rgba(0,0,0,.26);
     }
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -55,106 +71,215 @@
     -webkit-font-smoothing: antialiased;
   }
 
+  /* ── icons ───────────────────────────────────────────────────────────── */
+  /* One stroke weight, one grid, currentColor throughout, so an icon takes the
+     colour of whatever it sits in and never needs a second file. */
+  svg.ic {
+    width: 16px; height: 16px; flex: 0 0 16px; fill: none; stroke: currentColor;
+    stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round;
+  }
+  svg.navicon { width: 17px; height: 17px; flex-basis: 17px; }
+  svg.pageicon { width: 20px; height: 20px; flex-basis: 20px; stroke-width: 1.6; }
+  svg.emptyicon { width: 26px; height: 26px; flex-basis: 26px; stroke-width: 1.35; opacity: .5; }
+  svg.tinyicon { width: 13px; height: 13px; flex-basis: 13px; }
+
   /* ── source list ─────────────────────────────────────────────────────── */
   nav {
-    width: 208px; flex: 0 0 208px; background: var(--sidebar);
+    width: 216px; flex: 0 0 216px; background: var(--sidebar);
     backdrop-filter: saturate(180%) blur(20px);
     border-right: 1px solid var(--line);
-    padding: 38px 10px 12px; -webkit-app-region: drag;
-    display: flex; flex-direction: column; gap: 1px;
+    padding: 30px 10px 10px; -webkit-app-region: drag;
+    display: flex; flex-direction: column;
   }
-  nav h1 {
-    font-size: 12px; font-weight: 600; letter-spacing: -0.01em;
-    color: var(--ink3); padding: 6px 10px 10px; text-transform: uppercase;
-  }
-  nav button {
-    -webkit-app-region: no-drag; display: flex; align-items: center; gap: 8px;
-    width: 100%; text-align: left; padding: 6px 10px; border: 0; border-radius: 7px;
+  .brand { display: flex; align-items: center; gap: 8px; padding: 6px 8px 14px; }
+  .brand img { width: 22px; height: 22px; border-radius: 6px; }
+  .brand span { font-size: 13.5px; font-weight: 700; letter-spacing: -0.012em; }
+  .navlist { display: flex; flex-direction: column; gap: 1px; }
+  .navlist button {
+    -webkit-app-region: no-drag; display: flex; align-items: center; gap: 9px;
+    width: 100%; text-align: left; padding: 6px 9px; border: 0; border-radius: 7px;
     background: transparent; color: var(--ink1); font: inherit; cursor: default;
   }
-  nav button:hover { background: var(--sel); }
-  nav button[aria-current="true"] { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  .navlist button svg { color: var(--ink3); }
+  .navlist button:hover { background: var(--sel); }
+  .navlist button[aria-current="true"] { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  .navlist button[aria-current="true"] svg { color: var(--accent-ink); }
+  .navlist button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .navlabel { flex: 1; min-width: 0; }
+  .navcount { font-size: 11px; color: var(--ink3); font-variant-numeric: tabular-nums; }
+  .navlist button[aria-current="true"] .navcount { color: var(--accent-ink); opacity: .75; }
   nav .dot {
-    margin-left: auto; width: 7px; height: 7px; border-radius: 50%;
+    width: 7px; height: 7px; border-radius: 50%;
     background: var(--accent); flex: 0 0 7px;
   }
-  nav button[aria-current="true"] .dot { background: var(--accent-ink); }
+  .navlist button[aria-current="true"] .dot { background: var(--accent-ink); }
+
+  /* Whether anything can read a credential right now is the one fact worth
+     seeing from every page, so it sits at the foot of the source list. */
+  .navfoot {
+    -webkit-app-region: no-drag; margin-top: auto;
+    display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
+    padding: 8px 9px; border: 1px solid var(--line); border-radius: 9px;
+    background: var(--card); color: var(--ink1); font: inherit; cursor: default;
+  }
+  .navfoot:hover { border-color: var(--line2); }
+  .navfoot:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .navfoot .col { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+  .navfoot-t { font-size: 12px; font-weight: 600; }
+  .navfoot-s { font-size: 11px; color: var(--ink3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .navfoot.open svg { color: var(--good); }
+  .navfoot.shut svg { color: var(--warn); }
 
   /* ── content ─────────────────────────────────────────────────────────── */
-  main { flex: 1; overflow-y: auto; padding: 38px 28px 32px; -webkit-app-region: drag; }
+  main { flex: 1; overflow-y: auto; padding: 30px 28px 32px; -webkit-app-region: drag; }
   main > * { -webkit-app-region: no-drag; }
-  h2 { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; }
-  .lede { color: var(--ink2); margin: 3px 0 20px; max-width: 62ch; }
+  h2 { font-size: 21px; font-weight: 700; letter-spacing: -0.022em; }
+  .lede { color: var(--ink2); margin: 3px 0 0; max-width: 62ch; }
+  .pagehead { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 18px; }
+  .pagetile {
+    width: 38px; height: 38px; flex: 0 0 38px; border-radius: 10px;
+    background: var(--accent-soft); color: var(--accent);
+    display: flex; align-items: center; justify-content: center; margin-top: 2px;
+  }
+  .pagetext { min-width: 0; }
+  .statustile {
+    width: 30px; height: 30px; flex: 0 0 30px; border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .statustile.good { background: var(--good-soft); color: var(--good); }
+  .statustile.warn { background: var(--warn-soft); color: var(--warn); }
+  .statustile.plain { background: var(--chip2); color: var(--ink2); }
+  .statustile.sm { width: 26px; height: 26px; flex-basis: 26px; border-radius: 7px; }
+  .statustile.sm svg { width: 14px; height: 14px; }
+  .chips.inline { padding: 5px 0 0; }
 
-  .group { background: var(--card); border-radius: var(--radius); overflow: hidden; margin-bottom: 18px; }
+  .group {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: var(--radius); overflow: hidden; margin-bottom: 16px;
+    box-shadow: var(--shadow);
+  }
   .group h3 {
     font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
     color: var(--ink3); padding: 12px 14px 6px; background: transparent;
   }
-  .row { display: flex; align-items: center; gap: 12px; padding: 10px 14px; }
+  .row { display: flex; align-items: center; gap: 12px; padding: 11px 14px; }
   .row + .row { border-top: 1px solid var(--line); }
   .row .grow { flex: 1; min-width: 0; }
   .mono { font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
   .sub { color: var(--ink3); font-size: 11.5px; margin-top: 1px; }
   .note { color: var(--ink3); font-size: 11.5px; line-height: 1.5; padding: 10px 14px 13px; }
+  .note code, .lede code {
+    font: 11.5px ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: var(--chip2); border-radius: 4px; padding: 1px 5px;
+  }
 
-  .seg { display: inline-flex; background: var(--sel); border-radius: 7px; padding: 2px; gap: 2px; }
+  .seg { display: inline-flex; background: var(--chip); border-radius: 8px; padding: 2px; gap: 2px; }
   .seg button {
     border: 0; background: transparent; color: var(--ink2); font: inherit; font-size: 12px;
-    padding: 3px 10px; border-radius: 5px; cursor: default; white-space: nowrap;
+    padding: 3px 10px; border-radius: 6px; cursor: default; white-space: nowrap;
   }
   .seg button[aria-pressed="true"] { background: var(--card); color: var(--ink1); font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,0.12); }
 
   button.act {
-    border: 1px solid var(--line); background: var(--card); color: var(--ink1);
-    font: inherit; font-size: 12px; padding: 4px 12px; border-radius: 6px; cursor: default;
+    border: 1px solid var(--line2); background: var(--card); color: var(--ink1);
+    font: inherit; font-size: 12px; padding: 5px 12px; border-radius: 7px; cursor: default;
+    display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
   }
   button.act:hover { background: var(--sel); }
   button.act.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  button.act.primary:hover { filter: brightness(1.07); }
+  button.act.danger { color: var(--warn); }
+  button.act.danger:hover { background: var(--warn-soft); }
   button.act:disabled { opacity: .45; }
+  button.act:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
-  .tag { font-size: 11px; color: var(--ink3); white-space: nowrap; }
-  .tag.on { color: var(--good); font-weight: 600; }
-  .tag.off { color: var(--warn); font-weight: 600; }
+  /* A word plus a coloured dot, so state reads without reading. */
+  .tag { font-size: 11px; color: var(--ink3); white-space: nowrap;
+         display: inline-flex; align-items: center; gap: 5px; }
+  .tag.on, .tag.off, .tag.info { font-weight: 600; border-radius: 99px; padding: 2px 9px; }
+  .tag.info { color: var(--accent); background: var(--accent-soft); }
+  .tag.on { color: var(--good); background: var(--good-soft); }
+  .tag.off { color: var(--warn); background: var(--warn-soft); }
+  .tag.on::before, .tag.off::before, .tag.info::before {
+    content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor;
+  }
 
-  input { font: inherit; padding: 5px 9px; border-radius: 6px; border: 1px solid var(--line);
-          background: var(--bg); color: var(--ink1); min-width: 0; }
+  input { font: inherit; padding: 6px 9px; border-radius: 7px; border: 1px solid var(--line2);
+          background: var(--bg2); color: var(--ink1); min-width: 0; }
+  input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  select { font: inherit; padding: 5px 8px; border-radius: 7px; border: 1px solid var(--line2);
+           background: var(--card); color: var(--ink1); }
   .add { display: flex; gap: 6px; padding: 10px 14px; border-top: 1px solid var(--line); }
   .add input:first-of-type { width: 190px; }
   .add input:last-of-type { flex: 1; }
 
   .banner { background: var(--accent); color: var(--accent-ink); border-radius: var(--radius);
-            padding: 12px 14px; margin-bottom: 18px; }
+            padding: 12px 14px; margin-bottom: 16px; display: flex; gap: 10px;
+            align-items: flex-start; box-shadow: var(--shadow); }
+  .banner > svg { margin-top: 1px; flex: 0 0 16px; }
+  .banner .body { flex: 1; min-width: 0; }
   .banner b { font-weight: 700; }
-  .banner .acts { display: flex; gap: 6px; margin-top: 9px; }
+  .banner .acts { display: flex; gap: 6px; margin-top: 9px; flex-wrap: wrap; }
   .banner button {
-    border: 1px solid rgba(0,0,0,.25); background: rgba(255,255,255,.9); color: #1d1d1f;
-    font: inherit; font-size: 12px; font-weight: 600; padding: 4px 12px; border-radius: 6px; cursor: default;
+    border: 1px solid rgba(0,0,0,.2); background: rgba(255,255,255,.92); color: #16171a;
+    font: inherit; font-size: 12px; font-weight: 600; padding: 4px 12px; border-radius: 7px; cursor: default;
   }
-  .empty { color: var(--ink3); padding: 14px; font-size: 12.5px; }
+  .banner button:hover { background: #fff; }
+  .empty {
+    color: var(--ink3); padding: 26px 14px; font-size: 12.5px;
+    display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center;
+  }
 
   /* Add sits at the TOP of the list: on a store with hundreds of keys, an add
      row at the bottom is a scroll away and may as well not exist. */
   .addrow { display: grid; grid-template-columns: minmax(0,0.8fr) minmax(0,1fr) auto;
             gap: 6px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
-  .keyrow { padding: 9px 14px; }
+  /* One field and a button: the three-column grid stretched the button over
+     half the window, which read as a second text field. */
+  .addrow.two { grid-template-columns: minmax(0,1fr) auto; }
+  .keyrow { padding: 10px 14px; }
   .keyrow + .keyrow { border-top: 1px solid var(--line); }
+  .keyrow:hover { background: var(--bg2); }
   .keyrow .head { display: flex; align-items: center; gap: 8px; }
-  .keyrow .head .mono { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .keyrow .named { flex: 1; min-width: 0; display: flex; align-items: center; gap: 9px; }
+  .keyrow .head .mono { flex: 0 1 auto; min-width: 0; overflow-wrap: anywhere; font-size: 12.5px; }
   .keyrow .val {
-    width: 100%; margin-top: 6px; font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
-    padding: 4px 8px; border-radius: 5px; border: 1px solid var(--line);
-    background: var(--bg); color: var(--ink2);
+    width: 100%; margin-top: 7px; font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+    padding: 5px 9px; border-radius: 7px; border: 1px solid var(--accent);
+    background: var(--card); color: var(--ink1);
+    box-shadow: 0 0 0 3px var(--accent-soft);
   }
-  .keyrow .val:focus { color: var(--ink1); outline: none; border-color: var(--accent); }
-  .keyrow .val.masked { -webkit-text-security: disc; }
+  /* A hidden value is a chip beside its name, not a field of its own: a row of
+     empty grey per key is most of what you see on a store of any size. */
+  .masked {
+    font: 10.5px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .1em;
+    color: var(--ink3); background: var(--chip); border-radius: 5px;
+    padding: 2px 8px; white-space: nowrap;
+  }
+  .aud .used { color: var(--ink3); }
+
+  /* Row actions are icons: four words on every row of a few hundred is more
+     text than the key names they sit beside. */
+  .iconbtn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 28px; height: 28px; flex: 0 0 28px; border: 0; border-radius: 7px;
+    background: transparent; color: var(--ink3); cursor: default;
+  }
+  .iconbtn:hover { background: var(--sel); color: var(--ink1); }
+  .iconbtn.on { background: var(--accent-soft); color: var(--accent); }
+  .iconbtn.danger:hover { background: var(--warn-soft); color: var(--warn); }
+  .iconbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  /* Kept for the few text buttons that still read better as words. */
   .icon {
     border: 1px solid transparent; background: transparent; color: var(--ink3);
-    font: inherit; font-size: 12px; padding: 3px 7px; border-radius: 5px; cursor: default;
+    font: inherit; font-size: 11.5px; padding: 3px 8px; border-radius: 6px; cursor: default;
+    display: inline-flex; align-items: center; gap: 4px;
   }
   .icon:hover { background: var(--sel); color: var(--ink1); }
   .icon.on { color: var(--accent); font-weight: 600; }
-  .hist { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 8px; }
+  .icon.danger:hover { color: var(--warn); }
+
+  .hist { margin-top: 9px; border-top: 1px solid var(--line); padding-top: 8px; }
   .hist .ev { display: flex; gap: 10px; align-items: baseline; padding: 3px 0; }
   .hist .ev .when { color: var(--ink3); font-size: 11px; white-space: nowrap; width: 118px; flex: 0 0 118px; }
   .hist .ev .who { flex: 1; min-width: 0; font-size: 11.5px; overflow-wrap: anywhere; }
@@ -164,71 +289,101 @@
     color: var(--ink3); overflow-wrap: anywhere; padding: 0 0 4px 128px;
   }
   .hist .foot { color: var(--ink3); font-size: 11px; padding-top: 6px; }
-  .icon.danger:hover { color: var(--warn); }
 
   /* A store can hold hundreds of keys, so find-as-you-type is the primary way
      in, not a convenience bolted to the side. */
-  .grouphead { display: flex; align-items: center; gap: 10px; padding: 10px 14px 8px; }
+  .grouphead { display: flex; align-items: center; gap: 10px; padding: 11px 14px 9px; }
   .grouphead h3 { padding: 0; flex: 1; }
+  .searchwrap { position: relative; display: inline-flex; align-items: center; }
+  .searchwrap > svg { position: absolute; left: 9px; color: var(--ink3); pointer-events: none; }
   .search {
-    font: inherit; font-size: 12px; width: 210px; padding: 4px 9px;
-    border-radius: 6px; border: 1px solid var(--line);
-    background: var(--bg); color: var(--ink1);
+    font: inherit; font-size: 12px; width: 210px; padding: 5px 9px 5px 29px;
+    border-radius: 7px; border: 1px solid var(--line2);
+    background: var(--bg2); color: var(--ink1);
   }
-  .search:focus { outline: none; border-color: var(--accent); }
   .err { color: var(--warn); }
+  .noticebar {
+    display: flex; gap: 8px; align-items: flex-start; margin-top: 14px;
+    padding: 10px 12px; border-radius: 10px; font-size: 12.5px;
+    background: var(--warn-soft); color: var(--warn);
+  }
+  .noticebar.good { background: var(--good-soft); color: var(--good); }
+  .noticebar svg { margin-top: 1px; }
 
-  /* Groups on the Keys page */
-  .grouphead { display:flex; align-items:center; gap:.5rem; padding:.55rem .35rem .35rem;
-    margin-top:.5rem; cursor:pointer; user-select:none; border-top:1px solid var(--line); }
-  .grouphead:first-child { border-top:0; margin-top:0; }
-  .grouphead:hover .gname { color:var(--ink); }
-  .grouphead:focus-visible { outline:2px solid var(--accent); outline-offset:2px; border-radius:6px; }
-  .caret { width:.9rem; color:var(--dim); font-size:.75rem; }
-  .gname { font-weight:600; font-size:.82rem; letter-spacing:.02em; color:var(--dim); }
-  .gcount { font-size:.7rem; color:var(--dim); background:var(--chip); border-radius:99px;
-    padding:.05rem .45rem; }
-  .grestricted { font-size:.7rem; color:var(--accent); margin-left:auto; }
+  /* Groups on the Keys page. A monogram carries a colour the eye can aim at,
+     which a row of identical grey headings does not. */
+  .grouprow {
+    display: flex; align-items: center; gap: 9px; padding: 9px 14px;
+    cursor: default; user-select: none; background: var(--bg2);
+    border-top: 1px solid var(--line);
+  }
+  .grouprow:hover { background: var(--chip); }
+  .grouprow:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .grouprow .caret { color: var(--ink3); display: flex; transition: transform .13s ease; }
+  .grouprow[aria-expanded="true"] .caret { transform: rotate(90deg); }
+  .avatar {
+    width: 24px; height: 24px; flex: 0 0 24px; border-radius: 7px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 700;
+    background: hsl(var(--h) 68% 92%); color: hsl(var(--h) 50% 34%);
+  }
+  @media (prefers-color-scheme: dark) {
+    .avatar { background: hsl(var(--h) 38% 24%); color: hsl(var(--h) 68% 76%); }
+  }
+  .gname { font-weight: 600; font-size: 12.5px; color: var(--ink1); }
+  .gcount { font-size: 11px; color: var(--ink3); background: var(--chip2);
+    border-radius: 99px; padding: 1px 7px; font-variant-numeric: tabular-nums; }
+  .grestricted { font-size: 11px; color: var(--accent); margin-left: auto;
+    display: inline-flex; align-items: center; gap: 4px; }
 
   /* Audience */
-  .aud { display:flex; align-items:center; gap:.5rem; }
-  .aud .restricted { color:var(--accent); }
-  .audedit { border:1px solid var(--line); border-radius:8px; padding:.6rem .7rem;
-    margin-top:.4rem; background:var(--chip); }
-  .audmodes { display:flex; gap:.35rem; flex-wrap:wrap; margin:.45rem 0; }
-  .audlist { display:flex; flex-wrap:wrap; gap:.6rem; margin:.4rem 0; }
-  .audlist label { display:flex; align-items:center; gap:.3rem; font-size:.78rem; }
+  .aud { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+  .aud .restricted { color: var(--accent); display: inline-flex; align-items: center; gap: 4px; }
+  .audedit { border: 1px solid var(--line2); border-radius: 10px; padding: 10px 12px;
+    margin-top: 8px; background: var(--bg2); }
+  .audmodes { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
+  .audlist { display: flex; flex-wrap: wrap; gap: 10px; margin: 8px 0; }
+  .audlist label { display: flex; align-items: center; gap: 5px; font-size: 12px; }
+  .audedit .note { padding: 4px 0 0; }
 
   /* The matrix */
-  .chips { display:flex; flex-wrap:wrap; gap:.35rem; margin:.5rem 0; }
-  .chip { font-size:.72rem; background:var(--chip); border-radius:99px; padding:.12rem .5rem; }
-  .matrixwrap { overflow-x:auto; margin-top:.5rem; }
-  table.matrix { border-collapse:collapse; width:100%; font-size:.78rem; }
-  table.matrix th, table.matrix td { text-align:left; padding:.35rem .5rem;
-    border-bottom:1px solid var(--line); white-space:nowrap; }
-  table.matrix thead th { color:var(--dim); font-weight:600; font-size:.72rem; }
-  .kname { max-width:22rem; overflow:hidden; text-overflow:ellipsis; }
-  .gtag { font-size:.66rem; color:var(--dim); margin-left:.4rem; }
-  td.cell { text-align:center; font-size:.72rem; }
-  td.cell.yes { color:var(--ok, #2f7d4f); }
-  td.cell.no { color:var(--danger, #b3261e); font-weight:600; }
-  td.cell.ask { color:var(--accent); }
-  .snippet { background:var(--chip); border-radius:6px; padding:.5rem .6rem;
-    font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.75rem;
-    overflow-x:auto; margin:.4rem 0; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 14px 12px; }
+  .chip { font-size: 11.5px; background: var(--chip2); border-radius: 99px;
+    padding: 3px 10px; color: var(--ink2);
+    display: inline-flex; align-items: center; gap: 5px; }
+  .factors { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 5px; }
+  .matrixwrap { overflow-x: auto; }
+  table.matrix { border-collapse: collapse; width: 100%; font-size: 12px; }
+  table.matrix th, table.matrix td { text-align: left; padding: 7px 12px;
+    border-bottom: 1px solid var(--line); white-space: nowrap; }
+  table.matrix thead th { color: var(--ink3); font-weight: 600; font-size: 11px;
+    text-transform: uppercase; letter-spacing: .04em; background: var(--bg2); }
+  table.matrix tbody tr:hover { background: var(--bg2); }
+  .kname { max-width: 22rem; overflow: hidden; text-overflow: ellipsis; }
+  .gtag { font-size: 10.5px; color: var(--ink3); margin-left: 6px; }
+  td.cell { text-align: center; }
+  td.cell svg { width: 15px; height: 15px; }
+  td.cell.yes { color: var(--good); }
+  td.cell.no { color: var(--warn); }
+  td.cell.ask { color: var(--accent); }
+  .snippet { background: var(--bg2); border: 1px solid var(--line); border-radius: 8px;
+    padding: 9px 11px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11.5px; overflow-x: auto; margin: 4px 14px 10px; color: var(--ink1); }
 
-  select.scope { font: inherit; font-size:.74rem; padding:.1rem .3rem; border-radius:5px;
-    border:1px solid var(--line); background:var(--chip); color:var(--dim); max-width:15rem; }
-  select.scope:hover { color:var(--ink); }
-  .scope.locked { font-size:.74rem; color:var(--dim); background:var(--chip);
-    border-radius:5px; padding:.12rem .4rem; }
+  select.scope { font: inherit; font-size: 11.5px; padding: 2px 6px; border-radius: 6px;
+    border: 1px solid var(--line2); background: var(--card); color: var(--ink2); max-width: 15rem; }
+  select.scope:hover { color: var(--ink1); }
+  .scope.locked { font-size: 11.5px; color: var(--ink3); background: var(--chip);
+    border-radius: 6px; padding: 2px 8px; display: inline-flex; align-items: center; gap: 4px; }
 
-  input.pick { margin:0 .1rem 0 0; accent-color:var(--accent); cursor:pointer; }
-  .bulkbar { display:flex; flex-wrap:wrap; align-items:center; gap:.5rem;
-    padding:.55rem .7rem; margin:.4rem 0 .2rem; border:1px solid var(--accent);
-    border-radius:8px; background:var(--chip); position:sticky; top:0; z-index:2; }
-  .bulkbar .warn { color:var(--danger, #b3261e); font-size:.8rem; }
-  .bulkbar .note { flex-basis:100%; margin:0; }
+  input.pick { margin: 0 .1rem 0 0; accent-color: var(--accent); cursor: pointer;
+    width: 14px; height: 14px; flex: 0 0 14px; }
+  .bulkbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+    padding: 9px 14px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+    background: var(--accent-soft); position: sticky; top: 0; z-index: 2; }
+  .bulkbar .grow { flex: 1; min-width: 0; }
+  .bulkbar .warn { color: var(--warn); font-size: 12px; }
+  .bulkbar .note { flex-basis: 100%; margin: 0; padding: 4px 0 0; }
 </style>
 
 <nav id="nav"></nav>
@@ -241,6 +396,58 @@
   const main = document.getElementById("main");
   const esc = (v) => String(v ?? "").replace(/[&<>"]/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
 
+  /** The icon set.
+   *
+   *  Drawn here rather than pulled from a library: it is a dozen glyphs, an
+   *  icon font would be a second file to ship and sign, and every third-party
+   *  set carries a licence notice this repo would then have to carry too.
+   *  One 24-grid, one stroke weight, currentColor throughout.
+   */
+  const ICONS = {
+    key: '<circle cx="7.4" cy="12" r="4.1"/><path d="M11.5 12H20.8"/><path d="M17.4 12v3.4"/><path d="M20.2 12v2.5"/>',
+    lock: '<rect x="4.5" y="10.5" width="15" height="9.5" rx="2.4"/><path d="M8 10.5V7.6a4 4 0 0 1 8 0v2.9"/><circle cx="12" cy="15.2" r="1.3" fill="currentColor" stroke="none"/>',
+    unlock: '<rect x="4.5" y="10.5" width="15" height="9.5" rx="2.4"/><path d="M8 10.5V7.6a4 4 0 0 1 7.5-1.9"/><circle cx="12" cy="15.2" r="1.3" fill="currentColor" stroke="none"/>',
+    person: '<circle cx="12" cy="8.4" r="3.6"/><path d="M4.8 20c0-3.7 3.2-5.6 7.2-5.6s7.2 1.9 7.2 5.6"/>',
+    sliders: '<path d="M4 7.5h9.5"/><path d="M18.5 7.5H20"/><circle cx="16" cy="7.5" r="2.1"/><path d="M4 16.5h3.5"/><path d="M12.5 16.5H20"/><circle cx="10" cy="16.5" r="2.1"/>',
+    chip: '<rect x="7" y="7" width="10" height="10" rx="2.2"/><path d="M10 4v3M14 4v3M10 17v3M14 17v3M4 10h3M4 14h3M17 10h3M17 14h3"/>',
+    monitor: '<rect x="3" y="4.8" width="18" height="12" rx="2.2"/><path d="M9 20.5h6"/><path d="M12 16.8v3.7"/>',
+    hub: '<circle cx="12" cy="12" r="2.4"/><circle cx="5.2" cy="6" r="2"/><circle cx="18.8" cy="6" r="2"/><circle cx="12" cy="19.8" r="2"/><path d="M6.8 7.4 10.2 10.4"/><path d="M17.2 7.4 13.8 10.4"/><path d="M12 14.4v3"/>',
+    doc: '<rect x="4.5" y="3.5" width="15" height="17" rx="2.2"/><path d="M8 8.5h8M8 12h8M8 15.5h5"/>',
+    eye: '<path d="M2.6 12S6.2 5.9 12 5.9 21.4 12 21.4 12 17.8 18.1 12 18.1 2.6 12 2.6 12Z"/><circle cx="12" cy="12" r="2.9"/>',
+    eyeOff: '<path d="M4 4 20 20"/><path d="M9.7 6.3A9.9 9.9 0 0 1 12 5.9c5.8 0 9.4 6.1 9.4 6.1a17.6 17.6 0 0 1-3.3 4"/><path d="M6.4 8.1A17.4 17.4 0 0 0 2.6 12s3.6 6.1 9.4 6.1a9.7 9.7 0 0 0 3.2-.5"/><path d="M9.9 9.9a2.9 2.9 0 0 0 4.1 4.1"/>',
+    copy: '<rect x="9" y="9" width="11" height="11" rx="2.2"/><path d="M15 6.7V5.6A1.6 1.6 0 0 0 13.4 4H5.6A1.6 1.6 0 0 0 4 5.6v7.8A1.6 1.6 0 0 0 5.6 15h1.1"/>',
+    history: '<path d="M3.6 12a8.4 8.4 0 1 0 2.7-6.2"/><path d="M3.2 4.2v4.2h4.2"/><path d="M12 7.8V12l3 1.8"/>',
+    trash: '<path d="M4.5 7h15"/><path d="M9.6 7V5.3a1.3 1.3 0 0 1 1.3-1.3h2.2a1.3 1.3 0 0 1 1.3 1.3V7"/><path d="M6.7 7l.8 12a1.6 1.6 0 0 0 1.6 1.5h5.8a1.6 1.6 0 0 0 1.6-1.5l.8-12"/><path d="M10.4 11v6M13.6 11v6"/>',
+    search: '<circle cx="10.6" cy="10.6" r="6"/><path d="M15 15l5 5"/>',
+    plus: '<path d="M12 5.2v13.6M5.2 12h13.6"/>',
+    shield: '<path d="M12 3.3 19 5.9v5.5c0 4.2-2.8 7.6-7 9.3-4.2-1.7-7-5.1-7-9.3V5.9Z"/><path d="M9.2 12.1 11.3 14.2 15 10.5"/>',
+    check: '<path d="M5 12.6 9.4 17 19 7.4"/>',
+    cross: '<path d="M6.5 6.5 17.5 17.5M17.5 6.5 6.5 17.5"/>',
+    question: '<circle cx="12" cy="12" r="8.6"/><path d="M9.7 9.5a2.4 2.4 0 1 1 2.9 2.6v1.4"/><circle cx="12.5" cy="16.4" r=".9" fill="currentColor" stroke="none"/>',
+    chevron: '<path d="M9.8 5.8 16 12l-6.2 6.2"/>',
+    pencil: '<path d="M4 20h4L19.1 8.9a2.1 2.1 0 0 0-3-3L5 17v3Z"/><path d="M14.5 6.4 17.6 9.5"/>',
+    alert: '<path d="M12 4.6 21 20H3Z"/><path d="M12 10v4.4"/><circle cx="12" cy="17.4" r="1" fill="currentColor" stroke="none"/>',
+    inbox: '<path d="M4 13.6h4.2l1.3 2.3h5l1.3-2.3H20"/><path d="M4.6 13.6 7 5.9A1.6 1.6 0 0 1 8.5 4.8h7A1.6 1.6 0 0 1 17 5.9l2.4 7.7v4.4A1.6 1.6 0 0 1 17.8 19.6H6.2A1.6 1.6 0 0 1 4.6 18Z"/>',
+    globe: '<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17"/><path d="M12 3.5c2.2 2.4 3.4 5.3 3.4 8.5S14.2 18.1 12 20.5c-2.2-2.4-3.4-5.3-3.4-8.5S9.8 5.9 12 3.5Z"/>',
+    building: '<path d="M4.5 20.5V5.4a1.4 1.4 0 0 1 1.4-1.4h7.2a1.4 1.4 0 0 1 1.4 1.4v15.1"/><path d="M14.5 10h3.6a1.4 1.4 0 0 1 1.4 1.4v9.1"/><path d="M3 20.5h18"/><path d="M7.6 7.6h3.4M7.6 11.2h3.4M7.6 14.8h3.4"/>',
+    folder: '<path d="M3.5 7.4a1.6 1.6 0 0 1 1.6-1.6h3.6l2 2.4h7.7a1.6 1.6 0 0 1 1.6 1.6v8.4a1.6 1.6 0 0 1-1.6 1.6H5.1a1.6 1.6 0 0 1-1.6-1.6Z"/>',
+    power: '<path d="M12 4v8"/><path d="M17.3 7a7.4 7.4 0 1 1-10.6 0"/>',
+    link: '<path d="M10.2 13.8a3.6 3.6 0 0 0 5.1 0l3-3a3.6 3.6 0 0 0-5.1-5.1l-1.3 1.3"/><path d="M13.8 10.2a3.6 3.6 0 0 0-5.1 0l-3 3a3.6 3.6 0 0 0 5.1 5.1l1.3-1.3"/>',
+    out: '<path d="M6 18 18 6"/><path d="M9 6h9v9"/>',
+    into: '<path d="M18 6 6 18"/><path d="M15 18H6V9"/>',
+  };
+  /** One icon, as inline SVG. `extra` names the size class. */
+  const icon = (name, extra = "") =>
+    `<svg class="ic ${extra}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] || ICONS.question}</svg>`;
+
+  /** A group's monogram tile. The hue is derived from the name, so a vendor
+   *  keeps the same colour between launches without anyone storing one. */
+  function avatar(name) {
+    let h = 0;
+    for (const c of String(name)) h = (h * 31 + c.charCodeAt(0)) % 360;
+    return `<span class="avatar" style="--h:${h}">${esc((String(name)[0] || "?").toUpperCase())}</span>`;
+  }
+
   const MODE = {
     always: ["Always", "Handed over without interrupting you."],
     ask:    ["Ask me", "The request waits until you answer it."],
@@ -248,10 +455,11 @@
     never:  ["Never", "Always refused."],
   };
   const PAGES = [
-    ["keys", "Keys"], ["vault", "Vault"], ["signins", "Sign-ins"], ["access", "Access"],
-    ["agents", "Agents"],
-    ["machines", "Machines"],
-    ["broker", "Broker"], ["record", "Record"],
+    ["keys", "Keys", "key"], ["vault", "Vault", "lock"],
+    ["signins", "Sign-ins", "person"], ["access", "Access", "sliders"],
+    ["agents", "Agents", "chip"],
+    ["machines", "Machines", "monitor"],
+    ["broker", "Broker", "hub"], ["record", "Record", "doc"],
   ];
 
   let state = null, page = "keys", busy = false, notice = "";
@@ -321,8 +529,9 @@
   }
 
   function searchField(id) {
-    return `<input class="search" id="${id}" type="search" placeholder="Search keys"
-      value="${esc(query)}" spellcheck="false" autocapitalize="off" />`;
+    return `<span class="searchwrap">${icon("search", "tinyicon")}
+      <input class="search" id="${id}" type="search" placeholder="Search keys"
+        value="${esc(query)}" spellcheck="false" autocapitalize="off" /></span>`;
   }
 
   function ago(iso) {
@@ -369,12 +578,50 @@
     return ((a.keys || {})[key] || {}).mode || (a.default || {}).mode || state?.access?.default_mode || "always";
   };
 
+  /** How many of a thing each page is about, so the list carries the shape of
+   *  the store rather than eight identical words. */
+  function navCounts() {
+    const links = state?.links || {};
+    return {
+      keys: (state?.store?.keys || []).length,
+      signins: (signins || []).length,
+      agents: (state?.catalog?.agents || []).length,
+      machines: (links.lent || []).length + (links.borrowed || []).length,
+    };
+  }
+
+  /** Whether anything can read a credential right now, pinned to the foot of
+   *  the source list. It is the one fact that changes what every other page
+   *  means, and hunting for it on the Vault page is how people miss it. */
+  function navFoot() {
+    const v = vault;
+    if (!v?.supported) return "";
+    const open = !!v.unlocked;
+    const detail = open
+      ? profileLabel(v.signed_in_profile) + (v.expires_in ? ` · ${humanTime(v.expires_in)} left` : "")
+      : (v.fully_sealed ? "Nothing can read it" : "Values still readable");
+    return `<button class="navfoot ${open ? "open" : "shut"}" data-page="vault"
+      title="${open ? "Signed in" : "Sign in to the vault"}">
+      ${icon(open ? "unlock" : "lock", "navicon")}
+      <span class="col">
+        <span class="navfoot-t">${open ? "Vault open" : "Vault locked"}</span>
+        <span class="navfoot-s">${esc(detail)}</span>
+      </span>
+    </button>`;
+  }
+
   function paintNav() {
     const pending = (state?.broker?.pending || []).length;
-    nav.innerHTML = `<h1>PassBook</h1>` + PAGES.map(([id, label]) => `
-      <button data-page="${id}" aria-current="${page === id}">
-        ${label}${id === "access" && pending ? '<span class="dot"></span>' : ""}
-      </button>`).join("");
+    const counts = navCounts();
+    nav.innerHTML = `
+      <div class="brand"><img src="mark.png" alt="" /><span>PassBook</span></div>
+      <div class="navlist">${PAGES.map(([id, label, glyph]) => `
+        <button data-page="${id}" aria-current="${page === id}">
+          ${icon(glyph, "navicon")}<span class="navlabel">${label}</span>
+          ${id === "access" && pending ? '<span class="dot"></span>'
+            : counts[id] ? `<span class="navcount">${counts[id]}</span>` : ""}
+        </button>`).join("")}</div>
+      ${navFoot()}`;
     nav.querySelectorAll("[data-page]").forEach((b) =>
       b.onclick = () => { page = b.dataset.page; paint(); });
   }
@@ -389,26 +636,27 @@
       <div class="head">
         <input type="checkbox" class="pick" data-pick="${esc(k)}"
           ${picked[k] ? "checked" : ""} aria-label="Select ${esc(k)}" />
-        <span class="mono">${esc(k)}</span>
+        <span class="named"><span class="mono">${esc(k)}</span>
+          ${shown || pending ? "" : `<span class="masked" title="Hidden">••••••••••</span>`}</span>
         ${pending ? `
           <span class="sub">Remove it? Another app may be using it.</span>
           <button class="act primary" data-rmgo="${esc(k)}" ${busy ? "disabled" : ""}>Remove</button>
           <button class="act" data-cancel="1">Cancel</button>
         ` : `
-          <button class="icon ${shown ? "on" : ""}" data-reveal="${esc(k)}"
-            title="${shown ? "Hide value" : "Reveal value"}">${shown ? "Hide" : "Reveal"}</button>
-          <button class="icon" data-copy="${esc(k)}" title="Copy value">Copy</button>
-          <button class="icon ${history[k] ? "on" : ""}" data-hist="${esc(k)}"
-            title="Who has used this key">History</button>
-          <button class="icon danger" data-remove="${esc(k)}" title="Remove">Remove</button>
+          <button class="iconbtn ${shown ? "on" : ""}" data-reveal="${esc(k)}"
+            title="${shown ? "Hide value" : "Reveal value"}"
+            aria-label="${shown ? "Hide value" : "Reveal value"}">${icon(shown ? "eyeOff" : "eye")}</button>
+          <button class="iconbtn" data-copy="${esc(k)}" title="Copy value"
+            aria-label="Copy value">${icon("copy")}</button>
+          <button class="iconbtn ${history[k] ? "on" : ""}" data-hist="${esc(k)}"
+            title="Who has used this key" aria-label="Who has used this key">${icon("history")}</button>
+          <button class="iconbtn danger" data-remove="${esc(k)}" title="Remove"
+            aria-label="Remove">${icon("trash")}</button>
         `}
       </div>
-      <input class="val ${shown ? "" : "masked"}" data-val="${esc(k)}"
-        value="${esc(shown ? (values[k] ?? "") : "••••••••••••")}"
-        ${shown ? "" : "readonly"} spellcheck="false" autocapitalize="off"
-        placeholder="${shown ? "empty" : ""}" />
-      <div class="sub">${usedLine(k)}</div>
-      ${audienceBlock(k)}
+      ${shown ? `<input class="val" data-val="${esc(k)}" value="${esc(values[k] ?? "")}"
+        spellcheck="false" autocapitalize="off" placeholder="empty" />` : ""}
+      ${audienceBlock(k, usedLine(k))}
       ${history[k] ? historyBlock(k) : ""}
     </div>`;
   }
@@ -439,7 +687,7 @@
           ${(cat?.scope_options || []).map((s) =>
             `<option value="${s}">${esc(SCOPE_WORDS[s] || s)}</option>`).join("")}
         </select>
-        <button class="act danger" data-bulkremove ${busy ? "disabled" : ""}>Remove</button>
+        <button class="act danger" data-bulkremove ${busy ? "disabled" : ""}>${icon("trash")} Remove</button>
         <button class="act" data-bulkclear>Clear</button>
       `}
       ${locked.length && !bulkConfirm ? `<div class="note">${locked.length} of these
@@ -471,12 +719,14 @@
     return buckets.map(([group, members]) => {
       const shut = collapsed[group];
       const restricted = members.filter((m) => cat.audiences?.[m]).length;
-      return `<div class="grouphead" data-group="${esc(group)}" role="button" tabindex="0"
+      return `<div class="grouprow" data-group="${esc(group)}" role="button" tabindex="0"
                 aria-expanded="${!shut}">
-          <span class="caret">${shut ? "▸" : "▾"}</span>
+          <span class="caret">${icon("chevron", "tinyicon")}</span>
+          ${avatar(group)}
           <span class="gname">${esc(group)}</span>
           <span class="gcount">${members.length}</span>
-          ${restricted ? `<span class="grestricted">${restricted} restricted</span>` : ""}
+          ${restricted ? `<span class="grestricted">${icon("shield", "tinyicon")}
+            ${restricted} restricted</span>` : ""}
         </div>
         ${shut ? "" : members.map((k) => keyRow(k)).join("")}`;
     }).join("");
@@ -504,16 +754,17 @@
     ).join("");
     if (!rule.may_change) {
       return `<span class="scope locked" title="Only the ${esc(rule.owner)} workspace can change this">
-        ${esc(SCOPE_WORDS[rule.scope] || rule.scope)} · set by ${esc(rule.owner)}</span>`;
+        ${icon("lock", "tinyicon")} ${esc(SCOPE_WORDS[rule.scope] || rule.scope)}
+        · set by ${esc(rule.owner)}</span>`;
     }
     return `<select class="scope" data-scope="${esc(k)}" ${busy ? "disabled" : ""}
       title="How far this key reaches">${options}</select>`;
   }
 
   /** Who a key is for, as a line under the row — and the control to change it. */
-  function audienceBlock(k) {
+  function audienceBlock(k, used = "") {
     const cat = state.catalog;
-    if (!cat?.available) return "";
+    if (!cat?.available) return used ? `<div class="sub">${used}</div>` : "";
     const rule = cat.audiences?.[k];
     const editing = audienceFor === k;
     const label = !rule ? "every agent"
@@ -522,9 +773,11 @@
 
     if (!editing) {
       return `<div class="sub aud">
+        ${used ? `<span class="used">${used}</span>` : ""}
         ${scopePicker(k)}
-        <span class="${rule ? "restricted" : ""}">Readable by ${esc(label)}</span>
-        <button class="icon" data-aud="${esc(k)}">Change</button>
+        <span class="${rule ? "restricted" : ""}">${rule ? icon("shield", "tinyicon") : ""}
+          Readable by ${esc(label)}</span>
+        <button class="icon" data-aud="${esc(k)}">${icon("pencil", "tinyicon")} Change</button>
       </div>`;
     }
     const known = cat.agents || [];
@@ -578,7 +831,7 @@
         <div class="addrow">
           <input id="k" placeholder="KEY_NAME" spellcheck="false" autocapitalize="off" />
           <input id="v" type="password" placeholder="value" />
-          <button class="act primary" id="addgo" ${busy ? "disabled" : ""}>Add</button>
+          <button class="act primary" id="addgo" ${busy ? "disabled" : ""}>${icon("plus")} Add</button>
         </div>
         ${bulkBar(keys)}
         ${groupedKeys(keys)
@@ -628,7 +881,7 @@
         ${readable === 1 ? "is" : "are"} still readable by anything running as you.
         Sealing encrypts ${readable === 1 ? "it" : "them"} under your profile;
         nothing can read ${readable === 1 ? "it" : "them"} again until you sign in.</p>
-        <div class="addrow">
+        <div class="addrow two">
           <input id="seal-pw" type="password" placeholder="Vault password" />
           <button class="act primary" id="seal-go" ${busy ? "disabled" : ""}>Seal the store</button>
         </div>`;
@@ -636,7 +889,7 @@
       action = `
         <p class="note">Everything is encrypted and the vault is shut, so apps on
         this machine currently have no credentials. Sign in to give them some.</p>
-        <div class="addrow">
+        <div class="addrow two">
           <input id="si-pw2" type="password" placeholder="Vault password" />
           <button class="act primary" id="si-go2" ${busy ? "disabled" : ""}>Sign in</button>
         </div>`;
@@ -659,6 +912,9 @@
       </div>`;
   }
 
+  /** A fragment written to sit mid-sentence, used to open one. */
+  const sentence = (s) => String(s || "").replace(/^./, (c) => c.toUpperCase());
+
   function profileLabel(id) {
     return (vault?.profiles || []).find((p) => p.id === id)?.label || id || "this machine";
   }
@@ -674,11 +930,13 @@
     }
 
     const openState = v.unlocked
-      ? `<div class="row"><div class="grow"><strong>Open</strong> —
+      ? `<div class="row"><span class="statustile good">${icon("unlock")}</span>
+         <div class="grow"><strong>Open</strong> —
            signed in as ${esc(profileLabel(v.signed_in_profile))} by ${esc(v.factor || "password")}${
              v.expires_in ? `, ${humanTime(v.expires_in)} left` : ""}.</div>
-         <button class="act" data-signout ${busy ? "disabled" : ""}>Lock</button></div>`
-      : `<div class="row"><div class="grow"><strong>Locked</strong> —
+         <button class="act" data-signout ${busy ? "disabled" : ""}>${icon("lock")} Lock</button></div>`
+      : `<div class="row"><span class="statustile warn">${icon("lock")}</span>
+         <div class="grow"><strong>Locked</strong> —
            ${v.fully_sealed
              ? "apps on this machine have no credentials right now."
              : "though the store is not sealed, so values are readable anyway."}</div>
@@ -692,7 +950,7 @@
             ${v.profiles.map((p) => `<option value="${esc(p.id)}"${
               p.id === (vaultForm.profile || v.active) ? " selected" : ""}>${esc(p.label)}</option>`).join("")}
           </select>` : ""}
-        <div class="addrow">
+        <div class="addrow two">
           <input id="si-pw" type="password" placeholder="Vault password" />
           <button class="act primary" id="si-go" ${busy ? "disabled" : ""}>Sign in</button>
         </div>
@@ -706,7 +964,11 @@
           <div class="row">
             <div class="grow">
               <strong>${esc(p.label)}</strong>${p.active ? " · active" : ""}
-              <div class="note">${p.factors.map((f) => esc(f.kind)).join(", ") || "no factors"}</div>
+              <div class="factors">${p.factors.length
+                ? p.factors.map((f) => `<span class="chip">${icon(
+                    { password: "key", passkey: "person", device: "monitor" }[f.kind] || "shield",
+                    "tinyicon")} ${esc(f.kind)}</span>`).join("")
+                : `<span class="chip">no factors</span>`}</div>
             </div>
             ${p.active ? "" : `<button class="act" data-use="${esc(p.label)}">Use</button>`}
           </div>`).join("")
@@ -728,7 +990,7 @@
           <span class="tag ${v.fully_sealed ? "on" : "off"}">${v.fully_sealed ? "Encrypted" : "Readable"}</span></div>
         ${v.legacy_v1?.length ? `<p class="note">${v.legacy_v1.length} value(s) still use the
           older machine-key encryption. Sealing again moves them onto your profile.</p>` : ""}
-        <div class="addrow">
+        <div class="addrow two">
           <input id="sl-pw" type="password" placeholder="Vault password" />
           ${v.fully_sealed
             ? `<button class="act" id="unseal-go" ${busy ? "disabled" : ""}>Decrypt back to plaintext</button>`
@@ -742,7 +1004,7 @@
     const device = `
       <div class="group">
         <h3>This device</h3>
-        <p class="note">${esc(v.keystore?.describe || "no OS keystore on this platform")}.
+        <p class="note">${esc(sentence(v.keystore?.describe || "no OS keystore on this platform"))}.
         ${v.keystore?.available
           ? "A device factor could let jobs start at boot without you — at the cost of letting anything running as you open the vault. Add one with <code>passbook profile trust-device</code>."
           : "Sign-in here is by password, which works the same on every platform."}</p>
@@ -757,9 +1019,10 @@
   function lockBanner() {
     if (!vault?.supported || vault.unlocked || !vault.fully_sealed) return "";
     return `<div class="banner">
-      <div class="grow"><strong>The vault is locked.</strong>
-      Every value is encrypted, so apps on this machine have no credentials until you sign in.</div>
-      <button class="act primary" data-goto="vault">Sign in</button>
+      ${icon("lock")}
+      <div class="body"><strong>The vault is locked.</strong>
+      Every value is encrypted, so apps on this machine have no credentials until you sign in.
+      <div class="acts"><button data-goto="vault">Sign in</button></div></div>
     </div>`;
   }
 
@@ -805,6 +1068,7 @@
       const [tone, label] = STATE_TAG[s.state] || ["off", s.state];
       const waiting = connecting[s.id];
       return `<div class="row">
+        ${avatar(String(s.id).split(":")[0])}
         <div class="grow">
           <strong class="mono">${esc(s.id)}</strong>
           <div class="note">${esc(s.detail)}</div>
@@ -857,7 +1121,8 @@ passbook oauth connect google:work</pre>
         <div class="row">
           <div class="grow"><strong>${known.length}</strong> agent${known.length === 1 ? "" : "s"}
             have asked this machine for a credential.</div>
-          <span class="tag ${restricted.length ? "on" : "off"}">${restricted.length} restricted</span>
+          <span class="tag ${restricted.length ? "info" : ""}">${restricted.length
+            ? `${restricted.length} restricted` : "nothing restricted"}</span>
         </div>
         ${known.length ? `<div class="chips">${known.map((a) =>
           `<span class="chip mono">${esc(a)}</span>`).join("")}</div>`
@@ -915,8 +1180,10 @@ passbook oauth connect google:work</pre>
                 ${grid.agents.map((a) => {
                   const cell = r.agents[a];
                   const cls = { grant: "yes", refuse: "no", ask: "ask" }[cell.outcome];
-                  const text = { grant: "yes", refuse: "no", ask: "asks" }[cell.outcome];
-                  return `<td class="cell ${cls}" title="${esc(cell.why)}">${text}</td>`;
+                  const glyph = { grant: "check", refuse: "cross", ask: "question" }[cell.outcome];
+                  const word = { grant: "yes", refuse: "no", ask: "asks" }[cell.outcome];
+                  return `<td class="cell ${cls}" title="${esc(cell.why)}"
+                    aria-label="${word}">${icon(glyph)}</td>`;
                 }).join("")}
               </tr>`).join("")}
             </tbody>
@@ -937,12 +1204,15 @@ passbook oauth connect google:work</pre>
       <p class="lede">How each key is answered when something asks for it.</p>
       ${pending.map((p) => `
         <div class="banner">
-          <b>${esc(p.app)}</b> wants ${esc((p.keys || []).join(", "))}
-          ${p.reason ? `<div style="opacity:.85;margin-top:2px">${esc(p.reason)}</div>` : ""}
-          <div class="acts">
-            <button data-ok="${esc(p.id)}" data-for="">Just once</button>
-            <button data-ok="${esc(p.id)}" data-for="1h">For 1 hour</button>
-            <button data-no="${esc(p.id)}">Decline</button>
+          ${icon("alert")}
+          <div class="body">
+            <b>${esc(p.app)}</b> wants ${esc((p.keys || []).join(", "))}
+            ${p.reason ? `<div style="opacity:.85;margin-top:2px">${esc(p.reason)}</div>` : ""}
+            <div class="acts">
+              <button data-ok="${esc(p.id)}" data-for="">Just once</button>
+              <button data-ok="${esc(p.id)}" data-for="1h">For 1 hour</button>
+              <button data-no="${esc(p.id)}">Decline</button>
+            </div>
           </div>
         </div>`).join("")}
       <div class="group">
@@ -966,8 +1236,18 @@ passbook oauth connect google:work</pre>
         </div>
         ${shownKeys().map((k) => {
           const m = modeOf(k);
+          // The default mode's sentence, repeated under every key, is a wall of
+          // one sentence. What differs between rows is the group a key is in,
+          // and the mode — but only when somebody has changed it.
+          const dflt = state?.access?.default_mode || "always";
+          const group = state.catalog?.groups
+            ? Object.keys(state.catalog.groups).find((g) => state.catalog.groups[g].includes(k))
+            : "";
+          const under = m === dflt
+            ? (group && group !== "Ungrouped" ? esc(group) : "")
+            : esc(MODE[m][1]);
           return `<div class="row"><div class="grow"><div class="mono">${esc(k)}</div>
-            <div class="sub">${esc(MODE[m][1])}</div></div>
+            ${under ? `<div class="sub">${under}</div>` : ""}</div>
             <div class="seg">${["always","ask","never"].map((x) =>
               `<button data-key="${esc(k)}" data-mode="${x}" aria-pressed="${m === x}">${MODE[x][0]}</button>`).join("")}</div>
           </div>`; }).join("")
@@ -985,14 +1265,26 @@ passbook oauth connect google:work</pre>
       happens on the command line, because both ends compare a fingerprint.</p>
       <div class="group">
         <h3>This machine</h3>
-        <div class="row"><div class="grow mono">${esc(l.fingerprint || "—")}</div></div>
+        <div class="row">
+          <span class="statustile plain">${icon("monitor")}</span>
+          <div class="grow"><div class="mono">${esc(l.fingerprint || "—")}</div>
+            <div class="sub">Both ends read this aloud before a key moves.</div></div>
+          ${l.fingerprint ? `<button class="iconbtn" data-copytext="${esc(l.fingerprint)}"
+            title="Copy fingerprint" aria-label="Copy fingerprint">${icon("copy")}</button>` : ""}
+        </div>
+      </div>
+      <div class="group">
+        <h3>Linked machines</h3>
         ${rows.map((r) => `
-          <div class="row"><div class="grow">
-            <div>${r.lent ? "Lent to" : "Borrowed from"} <span class="mono">${esc(r.fingerprint || r.did)}</span></div>
-            <div class="sub mono">${esc((r.keys || []).join(", ")) || "—"}</div></div>
+          <div class="row">
+            <span class="statustile plain sm">${icon(r.lent ? "out" : "into")}</span>
+            <div class="grow">
+              <div>${r.lent ? "Lent to" : "Borrowed from"} <span class="mono">${esc(r.fingerprint || r.did)}</span></div>
+              <div class="chips inline">${(r.keys || []).map((k) =>
+                `<span class="chip mono">${esc(k)}</span>`).join("") || `<span class="sub">no keys</span>`}</div></div>
             ${r.lent && r.active
               ? `<button class="act" data-revoke="${esc(r.did)}" ${busy ? "disabled" : ""}>Revoke</button>`
-              : `<span class="tag ${r.active ? "on" : ""}">${r.revoked ? "Revoked" : r.active ? "Active" : "Expired"}</span>`}
+              : `<span class="tag ${r.active ? "on" : "off"}">${r.revoked ? "Revoked" : r.active ? "Active" : "Expired"}</span>`}
           </div>`).join("") || `<div class="empty">No linked machines.</div>`}
       </div>`;
   }
@@ -1005,28 +1297,90 @@ passbook oauth connect google:work</pre>
       each app choosing to keep one.</p>
       <div class="group">
         <h3>Status</h3>
-        <div class="row"><div class="grow">${b.running
-          ? `Reads go through the broker, default <b>${esc(b.mode || "always")}</b>.`
-          : "Not running — each app records its own reads, so the record has gaps."}</div>
+        <div class="row">
+          <span class="statustile ${b.running ? "good" : "warn"}">${icon("hub")}</span>
+          <div class="grow">${b.running
+            ? `Reads go through the broker, default <b>${esc(b.mode || "always")}</b>.`
+            : "Not running — each app records its own reads, so the record has gaps."}</div>
           <span class="tag ${b.running ? "on" : "off"}">${b.running ? "Running" : "Stopped"}</span>
           <button class="act ${b.running ? "" : "primary"}" data-broker="${b.running ? "stop" : "start"}"
-            ${busy ? "disabled" : ""}>${b.running ? "Stop" : "Start"}</button></div>
+            ${busy ? "disabled" : ""}>${icon("power")} ${b.running ? "Stop" : "Start"}</button></div>
         <p class="note">${esc(b.limits || "")}</p>
       </div>`;
   }
 
+  /** What each kind of entry did, as a glyph. */
+  const OP_ICON = {
+    read: "eye", write: "pencil", set: "pencil", add: "plus", remove: "trash",
+    signin: "unlock", signout: "lock", seal: "lock", unseal: "unlock",
+    link: "link", revoke: "cross", grant: "check", refuse: "cross",
+  };
+
   function recordPage() {
     const r = state.record || {};
+    const rows = (r.rows || []).slice(-40).reverse();
+    const broken = r.intact === false;
     return `
       <h2>Record</h2>
       <p class="lede">Every read, hash-chained. Key names and times — never a value.</p>
       <div class="group">
-        <h3>${esc(r.detail || "")}</h3>
-        ${(r.rows || []).slice(-40).reverse().map((row) => `
-          <div class="row"><div class="grow mono">${esc((row.keys || []).join(", ")) || "—"}</div>
-            <span class="tag">${esc(row.app)}</span>
-            <span class="tag">${esc(row.op)}</span></div>`).join("") || `<div class="empty">Nothing recorded yet.</div>`}
+        <div class="row">
+          <span class="statustile ${broken ? "warn" : "good"}">${icon(broken ? "alert" : "shield")}</span>
+          <div class="grow">${esc(r.detail || "")}</div>
+          <span class="tag ${broken ? "off" : "on"}">${broken ? "Broken" : "Intact"}</span>
+        </div>
+      </div>
+      <div class="group">
+        <h3>Latest ${rows.length}</h3>
+        ${rows.map((row) => `
+          <div class="row">
+            <span class="statustile plain sm" title="${esc(row.op || "")}">${icon(OP_ICON[row.op] || "doc")}</span>
+            <div class="grow">
+              <div class="mono">${esc((row.keys || []).join(", ")) || esc(row.op || "—")}</div>
+              <div class="sub">${esc(row.app || "unknown")}${row.granted === false ? " · refused" : ""}</div>
+            </div>
+            <span class="tag">${esc(ago(row.at) || row.op || "")}</span>
+          </div>`).join("") || `<div class="empty">Nothing recorded yet.</div>`}
       </div>`;
+  }
+
+  /** The last thing that happened, said once, in the colour it deserves. */
+  function noticeBar() {
+    if (!notice) return "";
+    const good = /\bcopied\.$/.test(notice);
+    return `<div class="noticebar ${good ? "good" : ""}">${icon(good ? "check" : "alert")}
+      <span>${esc(notice)}</span></div>`;
+  }
+
+  const PAGE_ICON = Object.fromEntries(PAGES.map(([id, , glyph]) => [id, glyph]));
+
+  /** Give the page its heading tile and every empty state a glyph.
+   *
+   *  Done to the rendered DOM rather than in each page function: there are
+   *  fourteen headings across eight pages once the loading and not-installed
+   *  variants are counted, and a rule applied in one place cannot be the one
+   *  somebody forgets.
+   */
+  function dressPage() {
+    const h2 = main.querySelector("h2");
+    if (h2 && !h2.closest(".pagehead")) {
+      const lede = h2.nextElementSibling?.classList.contains("lede") ? h2.nextElementSibling : null;
+      const wrap = document.createElement("div");
+      wrap.className = "pagehead";
+      const tile = document.createElement("span");
+      tile.className = "pagetile";
+      tile.innerHTML = icon(PAGE_ICON[page] || "key", "pageicon");
+      const text = document.createElement("div");
+      text.className = "pagetext";
+      h2.parentNode.insertBefore(wrap, h2);
+      wrap.append(tile, text);
+      text.append(h2);
+      if (lede) text.append(lede);
+    }
+    main.querySelectorAll(".empty").forEach((box) => {
+      if (box.querySelector("svg")) return;
+      box.insertAdjacentHTML("afterbegin", icon("inbox", "emptyicon"));
+    });
   }
 
   function paint() {
@@ -1036,7 +1390,8 @@ passbook oauth connect google:work</pre>
                    access: accessPage, agents: agentsPage,
                    machines: machinesPage,
                    broker: brokerPage, record: recordPage }[page]();
-    main.innerHTML = lockBanner() + body + (notice ? `<p class="note err">${esc(notice)}</p>` : "");
+    main.innerHTML = lockBanner() + body + noticeBar();
+    dressPage();
 
     main.querySelectorAll("[data-goto]").forEach((b) => b.onclick = () => {
       page = b.dataset.goto; notice = ""; paint();
@@ -1225,6 +1580,11 @@ passbook oauth connect google:work</pre>
       history[k] = "loading"; paint();
       try { history[k] = await invoke("key_history", { name: k }); }
       catch (e) { history[k] = []; notice = String(e); }
+      paint();
+    });
+    main.querySelectorAll("[data-copytext]").forEach((b) => b.onclick = async () => {
+      try { await navigator.clipboard.writeText(b.dataset.copytext); notice = "Fingerprint copied."; }
+      catch (e) { notice = String(e); }
       paint();
     });
     main.querySelectorAll("[data-copy]").forEach((b) => b.onclick = async () => {

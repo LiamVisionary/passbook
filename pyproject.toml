@@ -101,6 +101,7 @@ py-modules = [
     "passbook_peer",
     "passbook_seal",
     "passbook_stamp",
+    "passbook_sync",
     "passbook_vault",
 ]
 

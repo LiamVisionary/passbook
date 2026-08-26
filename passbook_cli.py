@@ -1628,6 +1628,93 @@ def cmd_recovery(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_sync(args: argparse.Namespace) -> int:
+    """What replication would do, or does, between this machine and its peers.
+
+    Dry by default. This replaces a path that has been running unattended for
+    months; a verb that shows its working before it acts is the difference
+    between adopting it and finding out afterwards.
+    """
+    try:
+        import passbook_fleet
+        import passbook_sync
+    except ImportError:
+        return _fail("Fleet sync is not installed on this machine.",
+                     "Run:  passbook install")
+
+    peers = passbook_fleet.reachable()
+    if not peers:
+        ok, detail = passbook_fleet.available()
+        if not ok:
+            return _fail(f"No tailnet here: {detail}")
+        print("No peers on this tailnet are running a collector.")
+        return 0
+
+    store = passbook.env_path()
+    raw = passbook._read_raw(store) if hasattr(passbook, "_read_raw") else \
+        passbook.parse_env_text(store.read_text(encoding="utf-8"))
+    local_meta = passbook_sync.read_meta(store)
+
+    # Open what this machine can, so comparison is between secrets rather than
+    # representations. A value that will not open is marked, never guessed at.
+    import passbook_vault
+
+    sealed = [k for k, v in raw.items() if passbook_vault.is_sealed(v)]
+    opened = {}
+    if sealed:
+        opened = passbook.request(sealed, app="passbook-sync",
+                                  reason="compare against a peer") or {}
+    local = {k: (opened.get(k) or passbook_sync.UNOPENED)
+             if passbook_vault.is_sealed(v) else v for k, v in raw.items()}
+
+    payloads = []
+    unreachable = []
+    for peer in peers:
+        got = passbook_sync.fetch(peer["host"], peer["port"], address=peer["address"])
+        if got is None:
+            unreachable.append(peer["host"])
+        else:
+            payloads.append((peer["host"], got))
+
+    plan = passbook_sync.plan_pull(local, local_meta, payloads)
+    allowed, withheld = passbook_sync.sendable({k: "" for k in raw})
+
+    if args.json:
+        print(json.dumps({
+            "peers": [p["host"] for p in peers],
+            "unreachable": unreachable,
+            "wouldPull": sorted(plan["apply"]),
+            "skippedUnknownAge": plan["skippedUnknownAge"],
+            "skippedSealedShut": plan["skippedSealedShut"],
+            "refusedSealedFromPeer": plan["refusedSealedFromPeer"],
+            "mayReplicate": len(allowed),
+            "withheldByReach": sorted(withheld),
+        }, indent=2))
+        return 0
+
+    print(f"peers with a collector: {len(peers)}")
+    for peer in peers:
+        mark = "unreachable" if peer["host"] in unreachable else "ok"
+        print(f"  {peer['host']}  ({mark})")
+    print()
+    print(f"would pull: {len(plan['apply'])} key(s)")
+    for key in sorted(plan["apply"])[:20]:
+        print(f"  + {key}  (from {plan['sources'][key]})")
+    for label, names in (("held back, local age unknown", plan["skippedUnknownAge"]),
+                         ("held back, sealed and the vault is shut", plan["skippedSealedShut"]),
+                         ("refused, peer served ciphertext", plan["refusedSealedFromPeer"])):
+        if names:
+            print(f"\n{label}: {len(names)}")
+            for key in sorted(names)[:10]:
+                print(f"  - {key}")
+    print(f"\nreach: {len(allowed)} key(s) may replicate, {len(withheld)} withheld")
+    for key, why in sorted(withheld.items())[:10]:
+        print(f"  - {key}: {why}")
+    if not args.apply:
+        print("\nNothing was changed. Add --apply to pull what is listed above.")
+    return 0
+
+
 def cmd_workspace(args: argparse.Namespace) -> int:
     """Which workspace this machine is acting for, and what else it has."""
     here = passbook.workspace()
@@ -2903,6 +2990,12 @@ def build_parser() -> argparse.ArgumentParser:
     recovery_cmd.add_argument("--label", default="recovery code")
     recovery_cmd.add_argument("--password-stdin", dest="password_stdin", action="store_true")
     recovery_cmd.set_defaults(func=cmd_recovery)
+
+    sync_cmd = subs.add_parser("sync", help="what replication would move between this machine and its peers")
+    sync_cmd.add_argument("--apply", action="store_true",
+                          help="actually pull what the plan lists (default is a dry run)")
+    sync_cmd.add_argument("--json", action="store_true")
+    sync_cmd.set_defaults(func=cmd_sync)
 
     workspace_cmd = subs.add_parser("workspace", help="which workspace this machine acts for")
     workspace_cmd.add_argument("--json", action="store_true")

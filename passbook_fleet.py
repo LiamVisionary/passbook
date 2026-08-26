@@ -140,6 +140,30 @@ def peers(*, probe: bool = True) -> list[dict[str, Any]]:
     return sorted(out, key=lambda row: row["host"])
 
 
+def reachable(*, timeout: float = PROBE_TIMEOUT) -> list[dict[str, str]]:
+    """Peers running a collector, WITH the address needed to reach them.
+
+    Separate from `peers()` because this is the only thing that may see an
+    address, and it exists to be handed straight to a socket. Nothing here is
+    stored, logged or returned to a window: `describe()` is what the app gets,
+    and it has no address in it.
+    """
+    data = _status()
+    out: list[dict[str, str]] = []
+    for entry in (data.get("Peer") or {}).values():
+        if not isinstance(entry, dict) or entry.get("Online") is False:
+            continue
+        host = _clean_host(entry)
+        ip = next((str(v) for v in entry.get("TailscaleIPs") or []
+                   if _IPV4.match(str(v))), "")
+        if not host or not ip:
+            continue
+        port = _reachable_collector(ip)
+        if port:
+            out.append({"host": host, "address": ip, "port": port})
+    return sorted(out, key=lambda row: row["host"])
+
+
 def this_machine() -> dict[str, Any]:
     data = _status()
     me = data.get("Self") if isinstance(data.get("Self"), dict) else {}

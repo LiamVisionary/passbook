@@ -2392,6 +2392,43 @@ def cmd_broker_stop(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_broker_restart(args: argparse.Namespace) -> int:
+    """Stop it and start it again — after an upgrade, mostly.
+
+    The broker is a long-running daemon, so a new PassBook on disk is not a new
+    broker in memory: it goes on answering `unknown operation` to anything added
+    since it started, which reads as a broken feature rather than a stale
+    process.
+
+    Restarting drops the data key, by design — it lives in memory and nowhere
+    else. So this says plainly that a sign-in is needed next, rather than
+    leaving someone to discover it when the next read comes back empty.
+    """
+    module = _broker()
+    if module is None:
+        return _fail("The broker is not installed on this machine.")
+    was_open = False
+    try:
+        import passbook_vault  # noqa: F401
+
+        was_open = bool(module.vault_status().get("unlocked"))
+    except Exception:  # noqa: BLE001 — the restart matters more than the notice
+        pass
+
+    module.stop()
+    result = module.start()
+    if not result.get("ok"):
+        return _fail(result.get("detail") or "The broker did not come back up.",
+                     "Start it by hand:  passbook broker start")
+    print(f"Broker restarted on {result['path']} (pid {result['pid']}).")
+    if was_open:
+        print("\nThe vault was open, and the key it held did not survive the restart —")
+        print("it lives in memory and nowhere else. Nothing on this machine can read a")
+        print("sealed value until you sign in again:")
+        print("  passbook signin")
+    return 0
+
+
 def cmd_broker_run(args: argparse.Namespace) -> int:
     """Run in the foreground, for launchd, systemd, or watching it work."""
     module = _broker()
@@ -2961,6 +2998,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     broker_stop = broker_subs.add_parser("stop", help="stop the broker; apps fall back to the files")
     broker_stop.set_defaults(json=False, func=cmd_broker_stop)
+
+    broker_restart = broker_subs.add_parser(
+        "restart", help="stop and start it again, e.g. after upgrading PassBook")
+    broker_restart.set_defaults(json=False, func=cmd_broker_restart)
 
     broker_run = broker_subs.add_parser("run", help="run in the foreground, for launchd or systemd")
     broker_run.set_defaults(json=False, func=cmd_broker_run)

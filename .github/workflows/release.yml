@@ -158,6 +158,11 @@ jobs:
         with:
           projectPath: app
           tauriScript: cargo tauri
+          # Removing "updater" from the bundle targets was not enough: the
+          # action tars the .app itself and uploads it as an updater artifact,
+          # so two files kept appearing for an app that has no updater to
+          # consume them.
+          includeUpdaterJson: false
           args: --target ${{ matrix.target }}
           tagName: ${{ github.event.inputs.tag || github.ref_name }}
           releaseName: PassBook ${{ github.event.inputs.tag || github.ref_name }}

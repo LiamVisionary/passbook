@@ -22,3 +22,6 @@ app/src-tauri/cli/
 app/src-tauri/bin/
 app/src-tauri/runtime/
 app/src-tauri/.runtime-cache/
+
+# Written by the release job with absolute paths for the signing hook.
+app/src-tauri/tauri.signing.conf.json

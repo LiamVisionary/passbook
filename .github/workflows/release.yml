@@ -300,34 +300,57 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           allow-no-subscriptions: true
 
-      # First the application itself, while it is still a loose file. Not
-      # recursive: `release\` also holds build scripts and dependency
-      # executables that are nobody's business to sign.
-      - name: Sign the application binary
+      # Signing is handed to the bundler rather than done around it. The
+      # bundler patches the main binary before packaging it, to record which
+      # installer type it came from, and signs it immediately afterwards -- but
+      # only when a signCommand is configured. Signing it in a step of our own
+      # beforehand produced an installer carrying an application whose
+      # certificate was present and whose hash no longer matched, which Windows
+      # calls HashMismatch and a person calls tampered with.
+      - name: Install the signing tool
         if: runner.os == 'Windows' && env.HAS_WINDOWS_SIGNING == 'true'
-        uses: azure/artifact-signing-action@v2
-        with:
-          endpoint: ${{ vars.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
-          signing-account-name: ${{ vars.AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME }}
-          certificate-profile-name: ${{ vars.AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME }}
-          files-folder: ${{ github.workspace }}\app\src-tauri\target\${{ matrix.target }}\release
-          files-folder-filter: exe
-          files-folder-recurse: false
-          file-digest: SHA256
-          timestamp-rfc3161: http://timestamp.acs.microsoft.com
-          timestamp-digest: SHA256
-          description: PassBook
-          description-url: https://github.com/LiamVisionary/passbook
+        shell: pwsh
+        run: |
+          dotnet tool install --global sign --prerelease
+          "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
 
-      # Now wrap the signed binary. This is also where the artifact paths come
-      # from on Windows, since tauri-action did not run here.
-      - name: Bundle the installer around the signed binary
+      - name: Point Tauri at it
+        id: winsign
+        if: runner.os == 'Windows' && env.HAS_WINDOWS_SIGNING == 'true'
+        shell: pwsh
+        run: |
+          # Written here rather than committed, because the path to the script
+          # has to be absolute: the bundler runs it with its own directory.
+          $script = Join-Path $env:GITHUB_WORKSPACE 'app\src-tauri\nsis\sign-windows.ps1'
+          $config = @{
+            bundle = @{
+              windows = @{
+                signCommand = @{
+                  cmd  = 'powershell'
+                  args = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $script, '-Path', '%1')
+                }
+              }
+            }
+          }
+          $path = Join-Path $env:GITHUB_WORKSPACE 'app\src-tauri\tauri.signing.conf.json'
+          $config | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $path -Encoding utf8
+          Get-Content -LiteralPath $path
+          "config=--config src-tauri/tauri.signing.conf.json" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      # The bundler signs the application and then the installer it builds
+      # around it. This is also where the artifact paths come from on Windows,
+      # since tauri-action did not run here.
+      - name: Bundle the installer
         id: winbuild
         if: runner.os == 'Windows'
         working-directory: app
         shell: pwsh
+        env:
+          PASSBOOK_SIGN_ENDPOINT: ${{ vars.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
+          PASSBOOK_SIGN_ACCOUNT: ${{ vars.AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME }}
+          PASSBOOK_SIGN_PROFILE: ${{ vars.AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME }}
         run: |
-          cargo tauri bundle --target ${{ matrix.target }}
+          cargo tauri bundle --target ${{ matrix.target }} ${{ steps.winsign.outputs.config }}
           $nsis = Join-Path $env:GITHUB_WORKSPACE "app\src-tauri\target\${{ matrix.target }}\release\bundle\nsis"
           $paths = @(Get-ChildItem -LiteralPath $nsis -Filter *.exe -File | ForEach-Object { $_.FullName })
           if (-not $paths) { throw "the bundler produced no installer in $nsis" }
@@ -339,45 +362,32 @@ jobs:
           $json = '[' + (($paths | ForEach-Object { ConvertTo-Json -InputObject $_ -Compress }) -join ',') + ']'
           "artifactPaths=$json" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-      - name: Sign the Windows installer
-        if: runner.os == 'Windows' && env.HAS_WINDOWS_SIGNING == 'true'
-        uses: azure/artifact-signing-action@v2
-        with:
-          endpoint: ${{ vars.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
-          signing-account-name: ${{ vars.AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME }}
-          certificate-profile-name: ${{ vars.AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME }}
-          files-folder: ${{ github.workspace }}\app\src-tauri\target\${{ matrix.target }}\release\bundle\nsis
-          files-folder-filter: exe
-          files-folder-recurse: false
-          file-digest: SHA256
-          timestamp-rfc3161: http://timestamp.acs.microsoft.com
-          timestamp-digest: SHA256
-          description: PassBook
-          description-url: https://github.com/LiamVisionary/passbook
-
-      # Asked of Windows itself rather than assumed from a step that exited
-      # zero. An installer that is signed but not Valid is the same download
-      # warning as one that was never signed at all.
       # Asked of Windows itself rather than assumed from a step that exited
       # zero. An installer that is signed but not Valid is the same download
       # warning as one that was never signed at all.
       #
-      # Both files are checked, because for one release only one of them was:
-      # the installer verified Valid and the application it installed reported
-      # NotSigned, which nothing in this job would have noticed.
-      - name: Check both signatures before shipping them
+      # The application is checked as it actually ships -- unpacked back out of
+      # the installer -- and not where it was built. The bundler patches the
+      # binary into a copy, signs that, and puts the untouched original back, so
+      # the file left in `release\` afterwards says nothing about what a person
+      # will end up running. Checking that one is how a release went out whose
+      # installed application reported HashMismatch while the job went green.
+      - name: Check the signatures on what actually ships
         if: runner.os == 'Windows' && env.HAS_WINDOWS_SIGNING == 'true'
         shell: pwsh
         run: |
-          $release = Join-Path $env:GITHUB_WORKSPACE "app\src-tauri\target\${{ matrix.target }}\release"
-          $app = Join-Path $release "passbook-app.exe"
-          if (-not (Test-Path -LiteralPath $app)) { throw "no application binary at $app" }
-          $installers = @(Get-ChildItem -LiteralPath (Join-Path $release "bundle\nsis") -Filter *.exe -File |
-                          ForEach-Object { $_.FullName })
-          if (-not $installers) { throw "no installer found to check" }
+          $nsis = Join-Path $env:GITHUB_WORKSPACE "app\src-tauri\target\${{ matrix.target }}\release\bundle\nsis"
+          $installers = @(Get-ChildItem -LiteralPath $nsis -Filter *.exe -File)
+          if (-not $installers) { throw "no installer found to check in $nsis" }
+
+          $unpacked = Join-Path $env:RUNNER_TEMP 'unpacked'
+          Remove-Item -Recurse -Force $unpacked -ErrorAction SilentlyContinue
+          & 7z x $installers[0].FullName "-o$unpacked" -y | Out-Null
+          $app = Get-ChildItem -Path $unpacked -Recurse -Filter 'passbook-app.exe' | Select-Object -First 1
+          if (-not $app) { throw "the installer does not contain passbook-app.exe" }
 
           $bad = 0
-          foreach ($file in @($app) + $installers) {
+          foreach ($file in @($app.FullName) + @($installers | ForEach-Object { $_.FullName })) {
             $signature = Get-AuthenticodeSignature -LiteralPath $file
             "{0}: {1}" -f (Split-Path $file -Leaf), $signature.Status
             if ($signature.SignerCertificate) { "  signer: " + $signature.SignerCertificate.Subject }

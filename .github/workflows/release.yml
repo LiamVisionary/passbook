@@ -12,6 +12,12 @@ name: Release
 # than a cross compile, and it is how a universal binary is made. The Intel
 # runner label was tried first and sat queued for an hour while the other three
 # platforms finished, which is not a thing to depend on for a release.
+#
+# The release is drafted once, up front, and the build jobs only ever upload to
+# it. Letting each job decide whether to create it meant two of the four could
+# not see what the others had made: the Mac jobs created a draft and put both
+# dmgs in it, the Windows job then created a second draft, and the release that
+# survived had no Mac builds in it at all.
 
 on:
   push:
@@ -35,6 +41,9 @@ permissions:
 #     APPLE_PASSWORD               an app-specific password for it
 #     APPLE_TEAM_ID                the team
 
+env:
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
 jobs:
   # The tests already run per push, but a release is the one build nobody gets
   # to re-run later, so it does not start until they pass on this exact commit.
@@ -49,9 +58,42 @@ jobs:
       - run: python -m pip install --upgrade pip pytest cryptography
       - run: python -m pytest tests -q
 
+  draft:
+    name: draft the release
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Draft it once, so nothing has to decide later
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "already drafted"
+            exit 0
+          fi
+          gh release create "$TAG" --draft --title "PassBook $TAG" --notes '
+          One credential store per machine, shared by every app that opts in.
+
+          **macOS** takes the `.dmg` for your chip. Apple Silicon is `aarch64`,
+          Intel is `x64`.
+          **Windows** takes the `.exe`.
+          **Linux** takes the `.AppImage` or the `.deb`.
+
+          The command line installs separately, and the app needs it. The name
+          `passbook` on PyPI belongs to an unrelated project, so install from
+          here:
+
+          ```bash
+          uv tool install git+https://github.com/LiamVisionary/passbook
+          ```
+
+          See the [README](https://github.com/LiamVisionary/passbook#readme).'
+
   app:
     name: ${{ matrix.name }}
-    needs: test
+    needs: draft
     runs-on: ${{ matrix.os }}
     env:
       # Hoisted so a step can branch on it. A secret that was never set still
@@ -152,50 +194,45 @@ jobs:
             echo "APPLE_TEAM_ID=${{ secrets.APPLE_TEAM_ID }}"
           } >> "$GITHUB_ENV"
 
+      # Build only. With no tagName the action never touches the release, so it
+      # cannot decide to create a second one.
       - uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        id: build
         with:
           projectPath: app
           tauriScript: cargo tauri
-          # Removing "updater" from the bundle targets was not enough: the
-          # action tars the .app itself and uploads it as an updater artifact,
-          # so two files kept appearing for an app that has no updater to
-          # consume them.
-          includeUpdaterJson: false
           args: --target ${{ matrix.target }}
-          tagName: ${{ github.event.inputs.tag || github.ref_name }}
-          releaseName: PassBook ${{ github.event.inputs.tag || github.ref_name }}
-          releaseBody: |
-            One credential store per machine, shared by every app that opts in.
 
-            **macOS** takes the `.dmg` for your chip. Apple Silicon is
-            `aarch64`, Intel is `x64`.
-            **Windows** takes the `.msi`.
-            **Linux** takes the `.AppImage` or the `.deb`.
-
-            The command line installs separately, and the app needs it:
-
-            ```bash
-            uv tool install git+https://github.com/LiamVisionary/passbook
-            ```
-
-            See the [README](https://github.com/LiamVisionary/passbook#readme).
-          # A draft. Four platforms land in it and then a person looks before
-          # any of it is public, which matters most on the Mac builds: without
-          # the Apple secrets above they are unsigned, and an unsigned first
-          # release teaches everyone who downloads it to click through a
-          # Gatekeeper warning.
-          releaseDraft: true
-          prerelease: false
+      # Named formats rather than everything the bundler produced, so an
+      # updater tarball for an app with no updater cannot slip into a release
+      # again. `artifactPaths` is a JSON array of absolute paths.
+      - name: Attach the installers
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BUILT: ${{ steps.build.outputs.artifactPaths }}
+        run: |
+          set -euo pipefail
+          sent=0
+          while IFS= read -r path; do
+            case "$path" in
+              *.dmg|*.exe|*.msi|*.deb|*.AppImage|*.rpm)
+                echo "attaching ${path##*/}"
+                gh release upload "$TAG" "$path" --clobber
+                sent=$((sent + 1)) ;;
+              *) echo "skipping   ${path##*/}" ;;
+            esac
+          done < <(printf '%s' "$BUILT" | jq -r '.[]')
+          # A platform that quietly ships nothing is the failure this whole job
+          # exists to avoid.
+          [ "$sent" -gt 0 ] || { echo "nothing was attached" >&2; exit 1; }
 
   # The app shells out to the CLI for everything, so the CLI is half the
-  # release. Attached to the same tag rather than left to PyPI alone.
+  # release. Attached to the same tag rather than left to PyPI alone, which
+  # matters here because the name `passbook` on PyPI is somebody else's.
   cli:
     name: command line
-    # Not just `test`: the release has to exist before anything can be attached
-    # to it, and it is the app job that creates it.
-    needs: [test, app]
+    needs: draft
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -204,8 +241,7 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install --upgrade pip build
       - run: python -m build
-      - name: Attach the wheel and the sdist
+      - name: Attach the wheel
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.event.inputs.tag || github.ref_name }}
-        run: gh release upload "$TAG" dist/* --clobber
+        run: gh release upload "$TAG" dist/*.whl --clobber

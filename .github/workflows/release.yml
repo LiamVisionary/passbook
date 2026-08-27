@@ -214,13 +214,19 @@ jobs:
         run: |
           set -euo pipefail
           sent=0
-          while IFS= read -r path; do
-            case "$path" in
+          while IFS= read -r line; do
+            # A Windows runner hands these back with a trailing carriage return
+            # and backslash separators. `*.exe` does not match `....exe\r`, so
+            # the one installer Windows built was skipped and the job shipped
+            # nothing. Match on the file name, not the whole path.
+            path="${line%$'\r'}"
+            name="${path##*[/\\]}"
+            case "$name" in
               *.dmg|*.exe|*.msi|*.deb|*.AppImage|*.rpm)
-                echo "attaching ${path##*/}"
+                echo "attaching $name"
                 gh release upload "$TAG" "$path" --clobber
                 sent=$((sent + 1)) ;;
-              *) echo "skipping   ${path##*/}" ;;
+              *) echo "skipping   $name" ;;
             esac
           done < <(printf '%s' "$BUILT" | jq -r '.[]')
           # A platform that quietly ships nothing is the failure this whole job

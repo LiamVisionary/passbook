@@ -49,6 +49,10 @@ jobs:
     name: ${{ matrix.name }}
     needs: test
     runs-on: ${{ matrix.os }}
+    env:
+      # Hoisted so a step can branch on it. A secret that was never set still
+      # arrives as an empty string, so "is there one" has to be asked here.
+      HAS_SIGNING: ${{ secrets.APPLE_CERTIFICATE != '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -107,18 +111,46 @@ jobs:
       - name: Install the Tauri CLI
         run: cargo install tauri-cli --version "^2" --locked
 
+      # The certificate is imported here rather than handed to the action,
+      # because an unset secret is not absent. It is an empty string, and
+      # Tauri's bundler checks whether APPLE_CERTIFICATE is *set* rather than
+      # whether it holds anything. With the variable present and empty it ran
+      # `security import` on nothing and the build died with "SecKeychainItem
+      # Import: One or more parameters passed to a function were not valid",
+      # which reads like a broken certificate rather than a missing one.
+      #
+      # Setting them through GITHUB_ENV means they are genuinely absent when
+      # there is nothing to sign with, and the build is unsigned rather than
+      # failed.
+      - name: Prepare macOS signing
+        if: runner.os == 'macOS' && env.HAS_SIGNING == 'true'
+        env:
+          CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          unlock="$(uuidgen)"
+          security create-keychain -p "$unlock" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$unlock" "$keychain"
+          printf '%s' "$CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" \
+            -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/cert.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$unlock" "$keychain" > /dev/null
+          security list-keychain -d user -s "$keychain" login.keychain-db
+          {
+            echo "APPLE_SIGNING_IDENTITY=${{ secrets.APPLE_SIGNING_IDENTITY }}"
+            echo "APPLE_ID=${{ secrets.APPLE_ID }}"
+            echo "APPLE_PASSWORD=${{ secrets.APPLE_PASSWORD }}"
+            echo "APPLE_TEAM_ID=${{ secrets.APPLE_TEAM_ID }}"
+          } >> "$GITHUB_ENV"
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Signing and notarisation, when the secrets are set. Without them the
-          # Mac builds still ship, and macOS asks the person who downloads one
-          # whether they meant it.
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           projectPath: app
           tauriScript: cargo tauri
@@ -142,7 +174,7 @@ jobs:
             See the [README](https://github.com/LiamVisionary/passbook#readme).
           # A draft. Four platforms land in it and then a person looks before
           # any of it is public, which matters most on the Mac builds: without
-          # the Apple secrets below they are unsigned, and an unsigned first
+          # the Apple secrets above they are unsigned, and an unsigned first
           # release teaches everyone who downloads it to click through a
           # Gatekeeper warning.
           releaseDraft: true

@@ -27,6 +27,11 @@ EXAMPLE_TEAM = "ABCDE12345"  # noqa: E402
 
 darwin_only = pytest.mark.skipif(sys.platform != "darwin", reason="code identity is macOS-only")
 
+# The verdict shape is checked over a Unix socket pair, which Windows does not
+# have. Three tests errored at setup there rather than saying so.
+needs_unix_sockets = pytest.mark.skipif(
+    not hasattr(socket, "AF_UNIX"), reason="a socket pair needs AF_UNIX")
+
 
 @pytest.fixture
 def pair():
@@ -38,11 +43,13 @@ def pair():
         b.close()
 
 
+@needs_unix_sockets
 def test_the_verdict_is_always_one_of_three(pair):
     identity = peer.peer_identity(pair[0], team=EXAMPLE_TEAM)
     assert identity["status"] in {"verified", "unsigned", "unknown"}
 
 
+@needs_unix_sockets
 def test_every_verdict_carries_its_reason(pair):
     """A refusal with no cause is what makes people switch a policy off."""
     identity = peer.peer_identity(pair[0], team=EXAMPLE_TEAM)
@@ -67,6 +74,7 @@ def test_a_script_under_a_shared_interpreter_is_not_verified(pair):
     assert identity["status"] != "verified"
 
 
+@needs_unix_sockets
 def test_an_unidentifiable_caller_is_unknown_not_verified(pair, monkeypatch):
     """Failing closed on the *label* matters more than failing closed on access:
     a caller we could not check must not be recorded as one we did."""
@@ -74,8 +82,16 @@ def test_an_unidentifiable_caller_is_unknown_not_verified(pair, monkeypatch):
 
     identity = peer.peer_identity(pair[0], team=EXAMPLE_TEAM)
 
+    # The status is the claim, and it does not vary by platform.
     assert identity["status"] == "unknown"
-    assert "not checkable" in identity["reason"]
+    # The reason does. `LOCAL_PEERPID` is a macOS socket option, so elsewhere
+    # the caller cannot be named at all and the verdict is reached one step
+    # earlier. Both answers are honest. Pinning the macOS wording everywhere
+    # failed this on Linux for a reason that had nothing to do with the claim.
+    if peer.peer_pid(pair[0]) is None:
+        assert identity["reason"] == "the socket did not report a peer"
+    else:
+        assert "not checkable" in identity["reason"]
 
 
 def test_a_socket_with_no_peer_is_unknown():

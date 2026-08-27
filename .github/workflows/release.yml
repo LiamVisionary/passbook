@@ -174,6 +174,16 @@ jobs:
       - name: Install the Tauri CLI
         run: cargo install tauri-cli --version "^2" --locked
 
+      # The app shells out to the PassBook CLI for everything it shows, and a
+      # release went out without it. On Windows, which has no system Python at
+      # all, a fresh install opened straight onto "Could not run PassBook:
+      # program not found" and the README's only setup route was a shell
+      # script. So the CLI travels inside the app now, and on Windows an
+      # interpreter travels with it.
+      - name: Stage the CLI into the app
+        shell: bash
+        run: python3 scripts/stage-runtime.py ${{ runner.os == 'Windows' && '--runtime' || '' }}
+
       # The certificate is imported here rather than handed to the action,
       # because an unset secret is not absent. It is an empty string, and
       # Tauri's bundler checks whether APPLE_CERTIFICATE is *set* rather than
@@ -215,10 +225,26 @@ jobs:
       # cannot decide to create a second one.
       - uses: tauri-apps/tauri-action@v0
         id: build
+        if: runner.os != 'Windows'
         with:
           projectPath: app
           tauriScript: cargo tauri
           args: --target ${{ matrix.target }}
+
+      # Windows is built in two halves, because the thing that has to be signed
+      # is not the thing the bundler hands back. v1.0.0 shipped an installer
+      # with a valid Authenticode signature wrapped around an application
+      # binary with none: the signing step ran on the bundler's output folder,
+      # by which point `passbook-app.exe` was already sealed inside the
+      # installer and out of reach.
+      #
+      # `tauri bundle` is the seam. It wraps a binary that is already built and
+      # does not relink it, so a signature applied in between survives into the
+      # installer.
+      - name: Compile the Windows binary
+        if: runner.os == 'Windows'
+        working-directory: app
+        run: cargo tauri build --target ${{ matrix.target }} --no-bundle
 
       # Tauri notarises and staples the .app, then builds the dmg around it and
       # signs that. The dmg itself never goes to Apple, so `spctl` rejects it
@@ -274,6 +300,43 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           allow-no-subscriptions: true
 
+      # First the application itself, while it is still a loose file. Not
+      # recursive: `release\` also holds build scripts and dependency
+      # executables that are nobody's business to sign.
+      - name: Sign the application binary
+        if: runner.os == 'Windows' && env.HAS_WINDOWS_SIGNING == 'true'
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ vars.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ vars.AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME }}
+          files-folder: ${{ github.workspace }}\app\src-tauri\target\${{ matrix.target }}\release
+          files-folder-filter: exe
+          files-folder-recurse: false
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          description: PassBook
+          description-url: https://github.com/LiamVisionary/passbook
+
+      # Now wrap the signed binary. This is also where the artifact paths come
+      # from on Windows, since tauri-action did not run here.
+      - name: Bundle the installer around the signed binary
+        id: winbuild
+        if: runner.os == 'Windows'
+        working-directory: app
+        shell: pwsh
+        run: |
+          cargo tauri bundle --target ${{ matrix.target }}
+          $nsis = Join-Path $env:GITHUB_WORKSPACE "app\src-tauri\target\${{ matrix.target }}\release\bundle\nsis"
+          $paths = @(Get-ChildItem -LiteralPath $nsis -Filter *.exe -File | ForEach-Object { $_.FullName })
+          if (-not $paths) { throw "the bundler produced no installer in $nsis" }
+          $paths | ForEach-Object { "built $_" }
+          # -AsArray, because ConvertTo-Json unwraps a one-element array into a
+          # bare string and the attach step reads this with `jq -r '.[]'`.
+          $json = ConvertTo-Json -InputObject $paths -Compress -AsArray
+          "artifactPaths=$json" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
       - name: Sign the Windows installer
         if: runner.os == 'Windows' && env.HAS_WINDOWS_SIGNING == 'true'
         uses: azure/artifact-signing-action@v2
@@ -293,21 +356,33 @@ jobs:
       # Asked of Windows itself rather than assumed from a step that exited
       # zero. An installer that is signed but not Valid is the same download
       # warning as one that was never signed at all.
-      - name: Check the signature before shipping it
+      # Asked of Windows itself rather than assumed from a step that exited
+      # zero. An installer that is signed but not Valid is the same download
+      # warning as one that was never signed at all.
+      #
+      # Both files are checked, because for one release only one of them was:
+      # the installer verified Valid and the application it installed reported
+      # NotSigned, which nothing in this job would have noticed.
+      - name: Check both signatures before shipping them
         if: runner.os == 'Windows' && env.HAS_WINDOWS_SIGNING == 'true'
         shell: pwsh
         run: |
-          $folder = Join-Path $env:GITHUB_WORKSPACE "app\src-tauri\target\${{ matrix.target }}\release\bundle\nsis"
-          $installers = Get-ChildItem -LiteralPath $folder -Filter *.exe -File
-          if (-not $installers) { throw "no installer found to check in $folder" }
+          $release = Join-Path $env:GITHUB_WORKSPACE "app\src-tauri\target\${{ matrix.target }}\release"
+          $app = Join-Path $release "passbook-app.exe"
+          if (-not (Test-Path -LiteralPath $app)) { throw "no application binary at $app" }
+          $installers = @(Get-ChildItem -LiteralPath (Join-Path $release "bundle\nsis") -Filter *.exe -File |
+                          ForEach-Object { $_.FullName })
+          if (-not $installers) { throw "no installer found to check" }
+
           $bad = 0
-          foreach ($file in $installers) {
-            $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
-            "{0}: {1}" -f $file.Name, $signature.Status
+          foreach ($file in @($app) + $installers) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $file
+            "{0}: {1}" -f (Split-Path $file -Leaf), $signature.Status
             if ($signature.SignerCertificate) { "  signer: " + $signature.SignerCertificate.Subject }
+            if ($signature.TimeStamperCertificate) { "  timestamped" }
             if ($signature.Status -ne "Valid") { $bad++ }
           }
-          if ($bad -gt 0) { throw "$bad installer(s) are not validly signed" }
+          if ($bad -gt 0) { throw "$bad file(s) are not validly signed" }
 
       # Named formats rather than everything the bundler produced, so an
       # updater tarball for an app with no updater cannot slip into a release
@@ -316,7 +391,7 @@ jobs:
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BUILT: ${{ steps.build.outputs.artifactPaths }}
+          BUILT: ${{ steps.build.outputs.artifactPaths || steps.winbuild.outputs.artifactPaths }}
         run: |
           set -euo pipefail
           sent=0

@@ -312,7 +312,14 @@ jobs:
         shell: pwsh
         run: |
           dotnet tool install --global sign --prerelease
-          "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          $tools = "$env:USERPROFILE\.dotnet\tools"
+          $tools | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          $env:PATH = "$tools;$env:PATH"
+          # Printed once here so the flag names are in the log whatever the
+          # signing does next. The bundler captures its hook's output and shows
+          # none of it, so this is the only place they are visible.
+          & sign --version
+          & sign code trusted-signing --help
 
       - name: Point Tauri at it
         id: winsign
@@ -361,6 +368,16 @@ jobs:
           # `[`, the path, and `]` as three separate file names.
           $json = '[' + (($paths | ForEach-Object { ConvertTo-Json -InputObject $_ -Compress }) -join ',') + ']'
           "artifactPaths=$json" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      # `output_ok()` captures the signing hook's stdout and stderr and reports
+      # only "failed to run powershell", so the hook keeps its own transcript
+      # and this is where it gets read out.
+      - name: What the signing hook said
+        if: failure() && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP 'passbook-signing.log'
+          if (Test-Path $log) { Get-Content $log } else { "no signing transcript at $log" }
 
       # Asked of Windows itself rather than assumed from a step that exited
       # zero. An installer that is signed but not Valid is the same download

@@ -239,11 +239,17 @@ def test_every_module_in_the_repo_is_declared_for_install():
     `passbook_stamp` sat at a stale revision while the tree it was tested from
     looked correct.
     """
-    import tomllib
+    # `tomllib` is standard from 3.11. This project supports 3.9, where the
+    # only ways to read a TOML file are a dependency the test suite does not
+    # have or a parser written here. Both are worse than checking on the
+    # interpreters that can: what this asserts is a fact about the repository,
+    # not about the Python running it, so proving it once is proving it.
+    tomllib = pytest.importorskip(
+        "tomllib", reason="reading pyproject needs tomllib, standard from 3.11")
 
     repo = Path(__file__).resolve().parents[1]
     declared = set(
-        tomllib.loads((repo / "pyproject.toml").read_text())
+        tomllib.loads((repo / "pyproject.toml").read_text(encoding="utf-8"))
         ["tool"]["setuptools"]["py-modules"]
     )
     on_disk = {
@@ -265,11 +271,17 @@ def test_every_verb_is_also_a_hyphenated_command():
     `recovery` had no console script, so `passbook-sync` existed for anyone who
     ran the installer and did not exist for anyone who used pip.
     """
-    import tomllib
+    # `tomllib` is standard from 3.11. This project supports 3.9, where the
+    # only ways to read a TOML file are a dependency the test suite does not
+    # have or a parser written here. Both are worse than checking on the
+    # interpreters that can: what this asserts is a fact about the repository,
+    # not about the Python running it, so proving it once is proving it.
+    tomllib = pytest.importorskip(
+        "tomllib", reason="reading pyproject needs tomllib, standard from 3.11")
 
     repo = Path(__file__).resolve().parents[1]
     declared = set(
-        tomllib.loads((repo / "pyproject.toml").read_text())["project"]["scripts"]
+        tomllib.loads((repo / "pyproject.toml").read_text(encoding="utf-8"))["project"]["scripts"]
     ) - {"passbook"}
     derived = set(passbook_cli.aliases())
     missing = derived - declared

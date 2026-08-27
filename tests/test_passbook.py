@@ -18,6 +18,9 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _platform import assert_private  # noqa: E402
 
 import passbook  # noqa: E402
 
@@ -217,8 +220,8 @@ def test_the_store_is_private(hive):
     passbook.ensure(app="app")
     passbook.set_values({"KEY": "value"})
 
-    assert stat.S_IMODE(passbook.env_path().stat().st_mode) == 0o600
-    assert stat.S_IMODE(hive.stat().st_mode) == 0o700
+    assert_private(passbook.env_path(), 0o600)
+    assert_private(hive, 0o700)
 
 
 def test_a_loose_mode_is_tightened_never_loosened(hive):
@@ -227,7 +230,7 @@ def test_a_loose_mode_is_tightened_never_loosened(hive):
 
     passbook.ensure(app="app")
 
-    assert stat.S_IMODE(passbook.env_path().stat().st_mode) == 0o600
+    assert_private(passbook.env_path(), 0o600)
 
 
 def test_a_write_leaves_no_temporary_files_behind(hive):
@@ -281,6 +284,11 @@ def test_an_explicit_hive_home_is_the_way_out_of_a_container(tmp_path, monkeypat
 
 
 NODE_TWIN = Path(__file__).resolve().parents[1] / "passbook.mjs"
+# ESM imports a URL, not a path. On Windows a bare path is refused outright,
+# and interpolating one through `repr` leaves single backslashes that
+# JavaScript reads as escapes, so `D:\a\passbook` silently becomes
+# `D:apassbook`. A file URL is what every platform accepts.
+NODE_TWIN_URL = NODE_TWIN.as_uri()
 
 
 @pytest.mark.skipif(not NODE_TWIN.is_file(), reason="the Node twin is not present")
@@ -292,7 +300,7 @@ def test_the_node_twin_resolves_the_same_store_and_reads_what_python_wrote(hive)
     passbook.set_values({"SHARED_KEY": "written-by-python", "QUOTED_KEY": "two words"})
 
     script = f"""
-        import {{ ensure, load, status, keyNames }} from {json.dumps(str(NODE_TWIN))};
+        import {{ ensure, load, status, keyNames }} from {json.dumps(NODE_TWIN_URL)};
         const joined = ensure({{ app: 'node-side', name: 'Node Side' }});
         const values = load();
         process.stdout.write(JSON.stringify({{
@@ -322,7 +330,7 @@ def test_the_node_twin_resolves_the_same_store_and_reads_what_python_wrote(hive)
 @pytest.mark.skipif(not NODE_TWIN.is_file(), reason="the Node twin is not present")
 def test_python_reads_what_the_node_twin_wrote(hive):
     script = f"""
-        import {{ ensure, setValues }} from {json.dumps(str(NODE_TWIN))};
+        import {{ ensure, setValues }} from {json.dumps(NODE_TWIN_URL)};
         ensure({{ app: 'node-first', name: 'Node First' }});
         setValues({{ NODE_WRITTEN: 'written-by-node', NODE_SPACED: 'two words' }});
         process.stdout.write('ok');
@@ -646,7 +654,7 @@ def test_sealing_preserves_comments_and_permissions(hive, sealing_key):
     passbook_seal.seal_store()
 
     assert "# a note" in passbook.env_path().read_text(encoding="utf-8")
-    assert stat.S_IMODE(passbook.env_path().stat().st_mode) == 0o600
+    assert_private(passbook.env_path(), 0o600)
 
 
 # ── 13. removal ────────────────────────────────────────────────────────────
@@ -682,7 +690,7 @@ def test_removal_preserves_comments_and_permissions(hive):
     assert "# a note" in text
     assert "GONE" not in text
     assert "STAYS=y" in text
-    assert stat.S_IMODE(passbook.env_path().stat().st_mode) == 0o600
+    assert_private(passbook.env_path(), 0o600)
 
 
 def test_removal_refuses_inside_a_sandbox_container(hive, monkeypatch):
@@ -702,7 +710,7 @@ def test_the_node_twin_removes_the_same_way(hive):
     passbook.set_values({"SHARED": "a", "DOOMED": "b"})
 
     script = f"""
-        import {{ removeValues, keyNames }} from {str(NODE_TWIN)!r};
+        import {{ removeValues, keyNames }} from {json.dumps(NODE_TWIN_URL)};
         removeValues(['DOOMED']);
         process.stdout.write(JSON.stringify(keyNames()));
     """
@@ -921,8 +929,8 @@ def test_a_workspace_store_is_created_unreadable_to_anyone_else(hive, monkeypatc
     passbook.set_values({"CLIENT_KEY": "value"})
 
     scoped = passbook.workspace_env_path("client")
-    assert stat.S_IMODE(scoped.stat().st_mode) == 0o600
-    assert stat.S_IMODE(scoped.parent.stat().st_mode) == 0o700
+    assert_private(scoped, 0o600)
+    assert_private(scoped.parent, 0o700)
 
 
 def test_both_runtimes_resolve_the_same_workspace_stores(hive, monkeypatch):
@@ -939,7 +947,7 @@ def test_both_runtimes_resolve_the_same_workspace_stores(hive, monkeypatch):
     passbook.set_values({"CLIENT_KEY": "c"})
 
     script = f"""
-        import {{ keyNames, targetPath, status }} from {str(NODE_TWIN)!r};
+        import {{ keyNames, targetPath, status }} from {json.dumps(NODE_TWIN_URL)};
         process.stdout.write(JSON.stringify({{
             keys: keyNames(), writes: targetPath(), state: status(),
         }}));
@@ -961,7 +969,7 @@ def test_the_node_twin_writes_into_the_workspace_too(hive, monkeypatch):
     passbook.ensure(app="app")
 
     script = f"""
-        import {{ setValues }} from {str(NODE_TWIN)!r};
+        import {{ setValues }} from {json.dumps(NODE_TWIN_URL)};
         setValues({{ FROM_NODE: 'value' }});
     """
     subprocess.run(

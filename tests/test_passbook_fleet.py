@@ -24,6 +24,9 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _platform import assert_private  # noqa: E402
 
 import passbook_fleet as fleet  # noqa: E402
 
@@ -115,7 +118,7 @@ def test_the_cache_holds_no_address_and_nobody_else_can_read_it(tailnet):
     held = path.read_text(encoding="utf-8")
 
     assert not IPV4.search(held), "an address was written to disk"
-    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert_private(path, 0o600)
 
 
 def test_a_damaged_cache_is_no_cache_rather_than_an_error(tailnet):

@@ -18,6 +18,9 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _platform import assert_private  # noqa: E402
 
 import passbook  # noqa: E402
 import passbook_vault as vault  # noqa: E402
@@ -128,7 +131,7 @@ def test_the_vault_file_holds_no_bare_key(root):
 
 def test_the_vault_file_is_private(root):
     _profile(root)
-    assert oct((root / vault.VAULT_FILENAME).stat().st_mode & 0o777) == "0o600"
+    assert_private(root / vault.VAULT_FILENAME)
 
 
 # ── rotating a factor is cheap and actually revokes ────────────────────────
@@ -415,7 +418,7 @@ def test_one_key_can_be_released_and_stays_released(root):
     pid = _profile(root)
     dek = vault.unlock_with_password(pid, PASSWORD, root=root)
     vault.seal_store(dek, profile_id=pid, root=root)
-    assert vault.is_sealed(passbook.parse_env_text((root / ".env").read_text())["TIP_BOT_AUTOSTART"])
+    assert vault.is_sealed(passbook.parse_env_text((root / ".env").read_text(encoding="utf-8"))["TIP_BOT_AUTOSTART"])
 
     result = vault.unseal_store(dek, profile_id=pid, root=root, only=["TIP_BOT_AUTOSTART"])
     on_disk = passbook.parse_env_text((root / ".env").read_text(encoding="utf-8"))
@@ -468,7 +471,7 @@ def test_no_key_ever_appears_twice_after_a_seal_and_a_write(root):
     vault.unseal_store(dek, profile_id=pid, root=root, only=["OTHER"])
     vault.seal_store(dek, profile_id=pid, root=root)
 
-    names = [l.split("=", 1)[0] for l in (root / ".env").read_text().splitlines()
+    names = [l.split("=", 1)[0] for l in (root / ".env").read_text(encoding="utf-8").splitlines()
              if l and not l.startswith("#") and "=" in l]
     assert len(names) == len(set(names)), f"duplicate keys: {sorted(set(n for n in names if names.count(n) > 1))}"
 
@@ -517,7 +520,7 @@ def _ledger(root: Path) -> list[dict]:
     path = root / "credential-access-proofs.jsonl"
     if not path.exists():
         return []
-    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def _opened(root: Path):

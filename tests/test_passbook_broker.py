@@ -19,6 +19,9 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _platform import assert_private  # noqa: E402
 
 import passbook  # noqa: E402
 import passbook_broker  # noqa: E402
@@ -241,12 +244,12 @@ def test_status_reports_the_limit_so_it_reaches_a_ui_too(broker):
 
 
 def test_the_socket_is_reachable_only_by_this_user(broker):
-    assert stat.S_IMODE(passbook_broker.socket_path().stat().st_mode) == 0o600
+    assert_private(passbook_broker.socket_path(), 0o600)
 
 
 def test_the_policy_is_written_unreadable_to_anyone_else(broker):
     passbook_broker.write_policy({"mode": "audit", "apps": {}})
-    assert stat.S_IMODE(passbook_broker.policy_path().stat().st_mode) == 0o600
+    assert_private(passbook_broker.policy_path(), 0o600)
 
 
 def test_a_deep_home_still_binds(tmp_path, monkeypatch):

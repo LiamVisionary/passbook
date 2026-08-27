@@ -22,6 +22,9 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from _platform import assert_private  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 import passbook  # noqa: E402
 import passbook_oauth as oauth  # noqa: E402
 from fake_provider import FakeProvider  # noqa: E402
@@ -69,7 +72,7 @@ def test_the_grant_file_is_private_and_holds_no_tokens(machine):
     _connect(grant, access="a-real-looking-token", refresh="a-real-refresh")
     text = oauth.grants_path().read_text(encoding="utf-8")
 
-    assert oct(oauth.grants_path().stat().st_mode & 0o777) == "0o600"
+    assert_private(oauth.grants_path(), 0o600)
     assert "a-real-looking-token" not in text and "a-real-refresh" not in text
     # It should still be worth reading — that is why it is separate from the store.
     assert "example.test/token" in text and "client-abc" in text

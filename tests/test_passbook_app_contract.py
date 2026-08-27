@@ -316,14 +316,14 @@ UI = PACKAGE / "app" / "ui" / "index.html"
 
 def _page_keys() -> list[str]:
     """The keys in the `PAGES` list — one per entry in the source list."""
-    block = re.search(r"const PAGES = \[(.*?)\];", UI.read_text(), re.S)
+    block = re.search(r"const PAGES = \[(.*?)\];", UI.read_text(encoding="utf-8"), re.S)
     assert block, "PAGES list not found in the window source"
     return re.findall(r'\["([a-z-]+)",', block.group(1))
 
 
 def _routes() -> dict[str, str]:
     """The `page -> function` map the window paints from."""
-    block = re.search(r"const body = \{(.*?)\}\[page\]\(\);", UI.read_text(), re.S)
+    block = re.search(r"const body = \{(.*?)\}\[page\]\(\);", UI.read_text(encoding="utf-8"), re.S)
     assert block, "page router not found in the window source"
     return dict(re.findall(r"([a-z-]+):\s*([A-Za-z0-9_]+)", block.group(1)))
 
@@ -342,7 +342,7 @@ def test_every_nav_entry_has_a_page_to_paint():
 
 
 def test_every_route_points_at_a_function_that_exists():
-    source = UI.read_text()
+    source = UI.read_text(encoding="utf-8")
     absent = [name for name in _routes().values()
               if f"function {name}(" not in source]
     assert not absent, f"routes pointing at nothing: {absent}"
@@ -350,7 +350,7 @@ def test_every_route_points_at_a_function_that_exists():
 
 def test_every_goto_button_lands_on_a_real_page():
     routes = _routes()
-    targets = set(re.findall(r'data-goto="([a-z-]+)"', UI.read_text()))
+    targets = set(re.findall(r'data-goto="([a-z-]+)"', UI.read_text(encoding="utf-8")))
     assert targets, "no data-goto buttons found — has the attribute been renamed?"
     assert not targets - set(routes), f"buttons going nowhere: {sorted(targets - set(routes))}"
 
@@ -368,7 +368,7 @@ def test_nothing_toggled_by_hidden_is_forced_visible_by_an_id_rule():
     Any element the script hides this way needs `[hidden]` given a rule of its
     own alongside whatever `display` its id rule sets.
     """
-    source = UI.read_text()
+    source = UI.read_text(encoding="utf-8")
     toggled = set(re.findall(r"\b([A-Za-z_$][\w$]*)\.hidden\s*=", source))
     assert toggled, "no .hidden toggles found — has the gate stopped hiding itself?"
 
@@ -435,7 +435,7 @@ def test_the_window_has_a_word_for_every_operation_the_ledger_writes():
     """
     import passbook_stamp
 
-    source = UI.read_text()
+    source = UI.read_text(encoding="utf-8")
     for name in ("OP_WORD", "OP_ICON"):
         covered = _object_keys(source, name)
         assert covered, f"{name} not found in the window source"
@@ -454,7 +454,7 @@ def test_a_read_that_came_back_short_is_not_called_a_refusal():
     put a warning tile beside them, which made a fifth of all activity look
     like an attack and hid the single row that was one.
     """
-    source = UI.read_text()
+    source = UI.read_text(encoding="utf-8")
     block = re.search(r"const OP_WORD = \{(.*?)\n  \};", source, re.S)
     assert block, "OP_WORD not found"
     read = re.search(r"^\s*read:\s*\{([^}]*)\}", block.group(1), re.M)
@@ -487,7 +487,7 @@ def test_no_handler_reads_an_attribute_its_buttons_do_not_carry():
     access switch and named the key attribute differently from the handler that
     had always read it.
     """
-    source = UI.read_text()
+    source = UI.read_text(encoding="utf-8")
     # Each handler's body runs to the start of the next one. Matching it with a
     # regex that stopped at the first semicolon read `dataset` uses from the
     # whole file instead, and reported every button against every handler.
@@ -550,7 +550,7 @@ def test_the_lock_screen_cannot_be_dismissed_without_a_factor():
     So the workspace picker may set up a sign-in and nothing else. Lifting the
     lock belongs to the paths that have just checked a password or a passkey.
     """
-    source = UI.read_text()
+    source = UI.read_text(encoding="utf-8")
     picker = _gate_handler(source, "gpick")
     assert picker, "the workspace picker handler was not found"
     assert "unlockWindow" not in picker, \
@@ -577,7 +577,7 @@ def test_every_control_on_the_lock_screen_does_something():
     at all. On a lock screen that is the worst way to be broken: the person
     pressing it concludes their passkey is refused.
     """
-    source = UI.read_text()
+    source = UI.read_text(encoding="utf-8")
     # Only the gate's own markup. `data-goto`, `data-grid` and `data-group` are
     # main-page controls that happen to start with the same letter.
     drawn = set()
@@ -615,7 +615,7 @@ def test_every_command_the_window_calls_is_allowed_by_the_acl():
 
     # And the grant really does name every command, not merely agree with a
     # generator that could itself be looking at the wrong thing.
-    source = (PACKAGE / "app/src-tauri/src/main.rs").read_text()
+    source = (PACKAGE / "app/src-tauri/src/main.rs").read_text(encoding="utf-8")
     block = re.search(r"tauri::generate_handler!\[(.*?)\]", source, re.S)
     assert block, "no generate_handler! block"
     commands = [name for name in dict.fromkeys(
@@ -623,7 +623,7 @@ def test_every_command_the_window_calls_is_allowed_by_the_acl():
         if f"fn {name}(" in source]
     assert commands, "no commands found in the handler list"
     granted = set(json.loads(
-        (PACKAGE / "app/src-tauri/capabilities/default.json").read_text())["permissions"])
+        (PACKAGE / "app/src-tauri/capabilities/default.json").read_text(encoding="utf-8"))["permissions"])
     missing = [name for name in commands
                if f"allow-{name.replace('_', '-')}" not in granted]
     assert not missing, f"commands the window may not call: {missing}"
@@ -639,7 +639,7 @@ def test_the_source_list_stays_short():
     that is not one of the few things a person opens this app to do belongs on
     the settings shelf, which is one press away and does not cost a slot.
     """
-    source = UI.read_text()
+    source = UI.read_text(encoding="utf-8")
     block = re.search(r"const PAGES = \[(.*?)\n  \];", source, re.S)
     assert block, "PAGES not found"
     entries = re.findall(r'\["(\w+)"', block.group(1))
@@ -653,7 +653,7 @@ def test_every_settings_pane_is_reachable_and_leads_back():
     row, so the row has to name a real page and the page has to draw the way
     back — otherwise moving something out of sight is the same as deleting it.
     """
-    source = UI.read_text()
+    source = UI.read_text(encoding="utf-8")
     shelf = re.search(r"const SETTINGS = \[(.*?)\n  \];", source, re.S)
     assert shelf, "the settings shelf was not found"
     panes = re.findall(r'\["(\w+)"', shelf.group(1))
@@ -679,7 +679,7 @@ def test_the_page_of_callers_is_not_headed_agents():
     real machine it was wrong for every one of them. The word still belongs in
     the MCP block on the same page, where an agent really is what connects.
     """
-    source = UI.read_text()
+    source = UI.read_text(encoding="utf-8")
     body = re.search(r"function appsPage\(\) \{(.*?)\n  \}\n", source, re.S)
     assert body, "appsPage not found — was it renamed without updating this test?"
     # The page is named where it is reached from — its settings row and the
@@ -721,7 +721,7 @@ def test_an_unchecked_chain_is_never_labelled_intact():
     good, so the moment verification moved off the refresh path every store
     would have been labelled Intact without a single row being hashed.
     """
-    body = re.search(r"function recordPage\(\) \{(.*?)\n  \}\n", UI.read_text(), re.S)
+    body = re.search(r"function recordPage\(\) \{(.*?)\n  \}\n", UI.read_text(encoding="utf-8"), re.S)
     assert body, "recordPage not found"
     assert "Not checked" in body.group(1), "an unverified chain must say so"
 

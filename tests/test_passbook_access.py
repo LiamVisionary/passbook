@@ -18,6 +18,9 @@ import pytest
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _platform import assert_private  # noqa: E402
 
 import passbook  # noqa: E402
 import passbook_access as access  # noqa: E402
@@ -211,7 +214,7 @@ def test_an_unlock_records_who_and_why_but_never_a_value(machine):
     assert unlock["reason"] == "batch render"
     assert unlock["approved_by"] == "owner"
     assert "passbook" not in written.lower() or "value" not in written.lower()
-    assert stat.S_IMODE(access.sessions_path().stat().st_mode) == 0o600
+    assert_private(access.sessions_path(), 0o600)
 
 
 # ── the policy file ────────────────────────────────────────────────────────
@@ -224,7 +227,7 @@ def test_a_corrupt_policy_grants_rather_than_refuses(machine):
 
 def test_the_policy_is_written_unreadable_to_anyone_else(machine):
     access.write_policy(_rules())
-    assert stat.S_IMODE(access.policy_path().stat().st_mode) == 0o600
+    assert_private(access.policy_path(), 0o600)
 
 
 def test_a_version_one_policy_still_reads(machine):

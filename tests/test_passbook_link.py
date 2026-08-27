@@ -22,6 +22,9 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _platform import assert_private  # noqa: E402
 
 import passbook  # noqa: E402
 import passbook_link  # noqa: E402
@@ -302,7 +305,7 @@ def test_grants_report_key_names_and_never_values(machines):
 def test_the_device_key_is_created_unreadable_to_anyone_else(machines):
     with machines["at"]("owner") as home:
         passbook_link.identity()
-        assert stat.S_IMODE((home / passbook_link.DEVICE_FILENAME).stat().st_mode) == 0o600
+        assert_private((home / passbook_link.DEVICE_FILENAME), 0o600)
 
 
 def test_the_grant_record_is_created_unreadable_to_anyone_else(machines):
@@ -310,7 +313,7 @@ def test_the_grant_record_is_created_unreadable_to_anyone_else(machines):
         passbook.set_values({"LENT": "value"})
     _lend(machines, ["LENT"])
     with machines["at"]("owner"):
-        assert stat.S_IMODE((home / passbook_link.GRANTS_FILENAME).stat().st_mode) == 0o600
+        assert_private((home / passbook_link.GRANTS_FILENAME), 0o600)
 
 
 def test_the_identity_is_stable_across_calls(machines):

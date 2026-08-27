@@ -19,6 +19,9 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _platform import assert_private  # noqa: E402
 
 import passbook_backup as backup  # noqa: E402
 
@@ -116,7 +119,7 @@ def test_a_plaintext_export_quotes_the_way_the_store_does():
 def test_an_export_is_written_private_and_leaves_no_readable_half(tmp_path):
     target = tmp_path / "store.pbx"
     backup.write_private(target, backup.encrypt(VALUES, PASSPHRASE))
-    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    assert_private(target, 0o600)
     assert not list(tmp_path.glob(".*.partial"))
 
 

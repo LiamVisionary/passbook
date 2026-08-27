@@ -21,6 +21,8 @@ from pathlib import Path
 
 import pytest
 
+from _platform import broker_marker
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -30,8 +32,7 @@ import passbook_oauth as oauth  # noqa: E402
 import passbook_stamp  # noqa: E402
 from fake_provider import FakeProvider  # noqa: E402
 
-pytestmark = pytest.mark.skipif(
-    not hasattr(socket, "AF_UNIX"), reason="the broker needs AF_UNIX")
+pytestmark = broker_marker()
 
 
 @pytest.fixture

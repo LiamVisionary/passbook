@@ -115,7 +115,20 @@ def _cfstring(core, text: str) -> ctypes.c_void_p:
 
 
 def peer_pid(sock: socket.socket) -> int | None:
-    """The pid at the other end of a Unix socket, straight from the kernel."""
+    """The pid at the other end, straight from the kernel.
+
+    A Windows named pipe answers this itself, through
+    `GetNamedPipeClientProcessId` — there is no socket option to ask, and the
+    connection is not a socket. Asking the object first keeps the caller's
+    identity coming from the kernel on both transports, rather than one of them
+    quietly degrading to "unknown".
+    """
+    reported = getattr(sock, "peer_pid", None)
+    if callable(reported):
+        try:
+            return reported()
+        except OSError:
+            return None
     try:
         return sock.getsockopt(_SOL_LOCAL, _LOCAL_PEERPID)
     except (OSError, AttributeError):

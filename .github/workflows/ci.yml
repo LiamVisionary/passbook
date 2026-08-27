@@ -11,8 +11,10 @@ permissions:
 
 jobs:
   # The portability claim is the point of this project, so it is tested rather
-  # than asserted. The vault opens the same way on every OS; the broker needs a
-  # Unix socket and skips itself on Windows, which the matrix shows honestly.
+  # than asserted. The vault opens the same way on every OS, and so does the
+  # broker: a Unix socket where there is one, a named pipe on Windows. Those
+  # tests used to skip themselves there, which is how a release shipped in
+  # which `passbook signin` could not run on Windows at all.
   test:
     name: ${{ matrix.os }} · py${{ matrix.python }}
     runs-on: ${{ matrix.os }}

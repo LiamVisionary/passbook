@@ -93,6 +93,21 @@ REQUEST_TIMEOUT = 120.0
 MAX_REQUEST_BYTES = 64 * 1024
 
 
+# Which door this platform can offer. Everything below the transport — the
+# protocol, the policy, the ledger, the sessions — is the same either way; only
+# the thing that carries the bytes differs.
+_WINDOWS = os.name == "nt"
+if _WINDOWS:  # pragma: no cover - selected by platform
+    import passbook_pipe
+else:
+    passbook_pipe = None
+
+# From Windows' CreateProcess flags. Spelled out rather than imported, because
+# `subprocess.DETACHED_PROCESS` does not exist on the platforms that never need
+# it, and this module has to import everywhere.
+_DETACHED_PROCESS = 0x00000008
+_CREATE_NEW_PROCESS_GROUP = 0x00000200
+
 _BIND_LOCK = threading.Lock()
 
 # AF_UNIX paths are capped by the kernel — 104 bytes on macOS, 108 on Linux —
@@ -128,6 +143,60 @@ def socket_path(root: Path | None = None) -> Path:
 
 def pid_path(root: Path | None = None) -> Path:
     return (Path(root) if root is not None else passbook.root()) / PID_FILENAME
+
+
+def store_root(root: Path | None = None) -> Path:
+    return Path(root) if root is not None else passbook.root()
+
+
+def endpoint(root: Path | None = None) -> str:
+    """Where the broker listens, in the form this platform names it.
+
+    A path to a socket file on macOS and Linux; a pipe name on Windows, where
+    the namespace is machine-wide rather than a directory. Anything that only
+    wants to *show* the address asks this, so nothing has to know which.
+    """
+    if _WINDOWS:
+        return passbook_pipe.pipe_name(store_root(root))
+    return str(socket_path(root))
+
+
+class _UnixListener:
+    """The AF_UNIX server, behind the same two calls the pipe server offers."""
+
+    def __init__(self, server: socket.socket, path: Path) -> None:
+        self._server = server
+        self._path = path
+
+    def accept(self):
+        connection, _ = self._server.accept()
+        return connection
+
+    def close(self) -> None:
+        self._server.close()
+        self._path.unlink(missing_ok=True)
+
+
+def _listen(root: Path | None):
+    """Open the door, as narrowly as this platform allows."""
+    if _WINDOWS:
+        # The pipe carries its own DACL; there is no file to chmod.
+        return passbook_pipe.PipeServer(endpoint(root))
+
+    path = socket_path(root)
+    if path.exists():
+        path.unlink()  # a stale socket from a process that did not clean up
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    # Create it unreachable, then narrow — never briefly world-connectable.
+    previous_umask = os.umask(0o177)
+    try:
+        with _bindable(path) as name:
+            server.bind(name)
+    finally:
+        os.umask(previous_umask)
+    os.chmod(path, 0o600)
+    server.listen(16)
+    return _UnixListener(server, path)
 
 
 # ── policy, delegated ──────────────────────────────────────────────────────
@@ -942,26 +1011,17 @@ def _serve_one(connection: socket.socket, root: Path | None) -> None:
 
 def serve(*, root: Path | None = None, ready: threading.Event | None = None) -> None:
     """Run the broker in the foreground until interrupted."""
-    path = socket_path(root)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
-        if running(root=root):
-            raise RuntimeError(f"A broker is already listening on {path}")
-        path.unlink()  # a stale socket from a process that did not clean up
+    store_root(root).mkdir(parents=True, exist_ok=True)
+    if running(root=root):
+        raise RuntimeError(f"A broker is already listening on {endpoint(root)}")
 
-    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    # Create it unreachable, then narrow — never briefly world-connectable.
-    previous_umask = os.umask(0o177)
-    try:
-        with _bindable(path) as name:
-            server.bind(name)
-    finally:
-        os.umask(previous_umask)
-    os.chmod(path, 0o600)
-    server.listen(16)
+    server = _listen(root)
 
     pid_path(root).write_text(str(os.getpid()), encoding="utf-8")
-    os.chmod(pid_path(root), 0o600)
+    if not _WINDOWS:
+        # Windows has no mode bits to set here; the file sits inside a profile
+        # directory the account already owns.
+        os.chmod(pid_path(root), 0o600)
 
     # From here on, reads inside THIS process can open a sealed store once
     # somebody signs in. No other process installs this, which is what makes
@@ -973,7 +1033,7 @@ def serve(*, root: Path | None = None, ready: threading.Event | None = None) -> 
     try:
         while True:
             try:
-                connection, _ = server.accept()
+                connection = server.accept()
             except OSError:
                 break
             threading.Thread(target=_serve_one, args=(connection, root), daemon=True).start()
@@ -981,24 +1041,46 @@ def serve(*, root: Path | None = None, ready: threading.Event | None = None) -> 
         pass
     finally:
         server.close()
-        path.unlink(missing_ok=True)
         pid_path(root).unlink(missing_ok=True)
 
 
 # ── talking to it ──────────────────────────────────────────────────────────
 
 
+@contextlib.contextmanager
+def _dial(root: Path | None, timeout: float):
+    """A connection to the broker, however this platform reaches one.
+
+    Raises `FileNotFoundError` when nothing is listening, which `_ask` turns
+    into None — "there is no broker", which is a different answer from "the
+    broker said no" and must not be confused with it.
+    """
+    if _WINDOWS:
+        name = passbook_pipe.pipe_name(store_root(root))
+        if not passbook_pipe.is_listening(name):
+            raise FileNotFoundError(name)
+        client = passbook_pipe.connect(name, timeout)
+        try:
+            yield client
+        finally:
+            client.close()
+        return
+
+    path = socket_path(root)
+    if not path.exists():
+        raise FileNotFoundError(str(path))
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(timeout)
+        with _bindable(path) as name:
+            client.connect(name)
+        yield client
+
+
 def _ask(payload: Mapping[str, Any], *, root: Path | None = None, timeout: float | None = None):
     if timeout is None:
         timeout = REQUEST_TIMEOUT if payload.get("op") == "request" else CONNECT_TIMEOUT
-    path = socket_path(root)
-    if not path.exists():
-        return None
     try:
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-            client.settimeout(timeout)
-            with _bindable(path) as name:
-                client.connect(name)
+        with _dial(root, timeout) as client:
             client.sendall((json.dumps(payload, separators=(",", ":")) + "\n").encode("utf-8"))
             chunks = []
             while True:
@@ -1150,11 +1232,20 @@ def vault_status(*, root: Path | None = None) -> dict[str, Any]:
 def start(*, root: Path | None = None, wait: float = 5.0) -> dict[str, Any]:
     """Start the broker in the background."""
     if running(root=root):
-        return {"ok": True, "already": True, "path": str(socket_path(root))}
+        return {"ok": True, "already": True, "path": endpoint(root)}
     package = Path(__file__).resolve().parent
+    # Outliving the command that started it is the entire point: the broker
+    # holds the data key for the session that follows. `start_new_session` is
+    # the POSIX spelling and Windows ignores it silently, so there the broker
+    # stayed in its parent's console and died with it — a sign-in that lasted
+    # exactly as long as the process that asked for it.
+    if _WINDOWS:
+        detach = {"creationflags": _DETACHED_PROCESS | _CREATE_NEW_PROCESS_GROUP}
+    else:
+        detach = {"start_new_session": True}
     process = subprocess.Popen(
         [sys.executable, "-m", "passbook_broker", "--serve"],
-        cwd=str(package), start_new_session=True,
+        cwd=str(package), **detach,
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
         env={**os.environ, "PYTHONPATH": os.pathsep.join(
             [str(package), os.environ.get("PYTHONPATH", "")]).rstrip(os.pathsep)},
@@ -1162,7 +1253,7 @@ def start(*, root: Path | None = None, wait: float = 5.0) -> dict[str, Any]:
     deadline = time.monotonic() + wait
     while time.monotonic() < deadline:
         if running(root=root):
-            return {"ok": True, "already": False, "pid": process.pid, "path": str(socket_path(root))}
+            return {"ok": True, "already": False, "pid": process.pid, "path": endpoint(root)}
         if process.poll() is not None:
             detail = (process.stderr.read().decode("utf-8", "replace").strip() if process.stderr else "")
             return {"ok": False, "detail": detail.splitlines()[-1] if detail else "the broker exited at once"}
@@ -1170,16 +1261,26 @@ def start(*, root: Path | None = None, wait: float = 5.0) -> dict[str, Any]:
     return {"ok": False, "detail": f"the broker did not start within {wait:g}s"}
 
 
+def _forget_socket(root: Path | None) -> None:
+    """Remove the socket file, where there is one.
+
+    A named pipe is not a file: it exists only while a process holds it, so
+    there is nothing left behind to tidy up on Windows.
+    """
+    if not _WINDOWS:
+        socket_path(root).unlink(missing_ok=True)
+
+
 def stop(*, root: Path | None = None) -> dict[str, Any]:
     try:
         pid = int(pid_path(root).read_text(encoding="utf-8").strip())
     except (OSError, ValueError):
-        socket_path(root).unlink(missing_ok=True)
+        _forget_socket(root)
         return {"ok": False, "detail": "No broker is running."}
     try:
         os.kill(pid, 15)
     except ProcessLookupError:
-        socket_path(root).unlink(missing_ok=True)
+        _forget_socket(root)
         pid_path(root).unlink(missing_ok=True)
         return {"ok": True, "detail": "The broker was already gone; cleaned up after it."}
     except OSError as error:
@@ -1188,7 +1289,7 @@ def stop(*, root: Path | None = None) -> dict[str, Any]:
         if not running(root=root):
             break
         time.sleep(0.05)
-    socket_path(root).unlink(missing_ok=True)
+    _forget_socket(root)
     pid_path(root).unlink(missing_ok=True)
     return {"ok": True, "detail": "Stopped."}
 
@@ -1199,7 +1300,7 @@ def status(*, root: Path | None = None) -> dict[str, Any]:
     live = _ask({"op": "status"}, root=root)
     return {
         "running": bool(live and live.get("ok")),
-        "path": str(socket_path(root)),
+        "path": endpoint(root),
         "policy_path": str(policy_path(root)),
         "mode": policy["default"].get("mode", access.DEFAULT_MODE),
         "apps": sorted(policy["apps"]),

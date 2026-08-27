@@ -25,6 +25,8 @@ from pathlib import Path
 
 import pytest
 
+from _platform import broker_marker
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import passbook  # noqa: E402
@@ -34,8 +36,7 @@ PACKAGE = Path(__file__).resolve().parents[1]
 # The broker speaks over a Unix socket, which Windows does not have. These
 # check CLI exit codes the app depends on, and there is no broker there to
 # check them against.
-needs_a_broker = pytest.mark.skipif(
-    not hasattr(socket, "AF_UNIX"), reason="the broker needs AF_UNIX")
+needs_a_broker = broker_marker()
 
 
 @pytest.fixture

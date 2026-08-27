@@ -21,15 +21,14 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from _platform import assert_private  # noqa: E402
+from _platform import assert_private, broker_marker  # noqa: E402
 
 import passbook  # noqa: E402
 import passbook_broker  # noqa: E402
 
-# The broker speaks over a Unix socket, which Windows does not have. Skipping
-# the file beats an import-time AttributeError that reads like a real failure.
-pytestmark = pytest.mark.skipif(
-    not hasattr(socket, "AF_UNIX"), reason="the broker needs AF_UNIX")
+# The broker speaks over a Unix socket, or a named pipe on Windows. The marker
+# is where that judgement lives, so a platform without either says so once.
+pytestmark = broker_marker()
 import passbook_stamp  # noqa: E402
 
 PACKAGE = Path(__file__).resolve().parents[1]

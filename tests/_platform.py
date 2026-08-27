@@ -28,3 +28,33 @@ def assert_private(path: str | Path, expected: int = 0o600) -> None:
         return
     got = stat_module.S_IMODE(os.stat(path).st_mode)
     assert got == expected, f"{path} is {oct(got)}, expected {oct(expected)}"
+
+
+# The broker's transport, and whether this platform has one.
+#
+# It used to be AF_UNIX or nothing, so every broker test skipped itself on
+# Windows. That skip was load-bearing in the worst way: it meant the whole
+# Windows job passed green while `passbook signin` could not run at all there,
+# because reaching for `socket.AF_UNIX` raised AttributeError before any of it
+# got going. There is a named pipe on Windows now, so these tests run
+# everywhere — which is the only reason to trust that they work everywhere.
+#
+# Kept as a marker rather than deleted from sixty tests, so that if a platform
+# ever genuinely cannot host one, there is a single place to say so.
+def _broker_transport_missing() -> bool:
+    if WINDOWS:
+        try:
+            import passbook_pipe  # noqa: F401
+        except ImportError:  # pragma: no cover - would mean a broken install
+            return True
+        return False
+    import socket
+    return not hasattr(socket, "AF_UNIX")
+
+
+def broker_marker():
+    """A skipif marker for tests that need a running broker."""
+    import pytest
+    return pytest.mark.skipif(
+        _broker_transport_missing(),
+        reason="this platform has no broker transport")

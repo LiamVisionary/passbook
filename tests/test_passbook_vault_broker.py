@@ -17,15 +17,16 @@ from pathlib import Path
 
 import pytest
 
+from _platform import broker_marker
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import passbook  # noqa: E402
 import passbook_broker  # noqa: E402
 import passbook_vault as vault  # noqa: E402
 
-# The broker speaks over a Unix socket, which Windows does not have.
-pytestmark = pytest.mark.skipif(
-    not hasattr(socket, "AF_UNIX"), reason="the broker needs AF_UNIX")
+# The broker needs a transport; every supported platform now has one.
+pytestmark = broker_marker()
 
 PASSWORD = "a properly long vault password"
 

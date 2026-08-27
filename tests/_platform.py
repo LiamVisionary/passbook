@@ -58,3 +58,15 @@ def broker_marker():
     return pytest.mark.skipif(
         _broker_transport_missing(),
         reason="this platform has no broker transport")
+
+
+def command_file(prefix, name: str) -> Path:
+    """The file `passbook install` writes for one command, as this platform
+    needs it named.
+
+    Windows resolves a bare `passbook` through PATHEXT, and an extensionless
+    file is not on it, so the shim there is `passbook.cmd`. Tests that spelled
+    the POSIX name directly were asserting a filename rather than the thing
+    they were about.
+    """
+    return Path(prefix) / (f"{name}.cmd" if WINDOWS else name)

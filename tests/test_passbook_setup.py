@@ -26,6 +26,8 @@ needs_a_posix_shell = pytest.mark.skipif(
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import passbook  # noqa: E402
+from _platform import command_file
+
 import passbook_cli  # noqa: E402
 
 PACKAGE = Path(__file__).resolve().parents[1]
@@ -59,7 +61,9 @@ def test_setup_installs_every_command_and_provisions_the_store(machine):
 
     assert done.returncode == 0, done.stderr
     installed = sorted(item.name for item in prefix.iterdir())
-    assert installed == sorted(["passbook", *passbook_cli.aliases()])
+    expected = sorted(command_file(prefix, name).name
+                      for name in ["passbook", *passbook_cli.aliases()])
+    assert installed == expected
     assert (home / ".env").is_file(), "setup must leave a usable store behind"
 
 
@@ -97,19 +101,21 @@ def test_setup_is_idempotent(machine):
     prefix = machine / "bin"
     home = machine / "hive"
     _install(prefix, "--no-runtime", home=home)
-    before = (prefix / "passbook").read_text(encoding="utf-8")
+    shim = command_file(prefix, "passbook")
+    before = shim.read_text(encoding="utf-8")
 
     second = _install(prefix, "--no-runtime", home=home)
 
     assert second.returncode == 0
-    assert (prefix / "passbook").read_text(encoding="utf-8") == before
+    assert shim.read_text(encoding="utf-8") == before
 
 
 def test_setup_refuses_to_overwrite_something_that_is_not_ours(machine):
     """A stray `passbook` on PATH belongs to the user, not to this installer."""
     prefix = machine / "bin"
     prefix.mkdir()
-    stranger = prefix / "passbook"
+    # Whatever name the installer would claim, occupied by somebody else.
+    stranger = command_file(prefix, "passbook")
     stranger.write_text("#!/bin/sh\necho not ours\n", encoding="utf-8")
 
     done = _install(prefix, "--no-runtime", home=machine / "hive")

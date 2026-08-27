@@ -4,6 +4,7 @@
 
 <p align="center">
   <a href="https://github.com/LiamVisionary/passbook/actions/workflows/ci.yml"><img src="https://github.com/LiamVisionary/passbook/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/LiamVisionary/passbook/releases/latest"><img src="https://img.shields.io/github/v/release/LiamVisionary/passbook?label=download" alt="Latest release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License: Apache-2.0"></a>
 </p>
 
@@ -13,40 +14,76 @@ Ship three apps and you get three credential stores. The same OpenAI key gets
 pasted three times, revoked in one place, and still works in the other two.
 PassBook fixes that by agreeing on a path instead of building a sync protocol.
 
-![The PassBook app: one machine's credentials grouped by vendor, each value hidden behind a chip until revealed, with how far the key reaches and who may read it on the line beneath](docs/app-keys.png)
+Every app resolves the same file by the same rule. So provisioning and linking
+are the same operation. The first app that needs credentials creates the store,
+and every app installed after it finds that file and adopts it. Nothing forks,
+so nothing has to be merged.
 
-There is a desktop app, and it holds no logic of its own — every question it
+![Keys grouped by vendor, each value hidden until you reveal it](docs/app-keys.png)
+
+There is a desktop app and it holds no logic of its own. Every question it
 answers goes through the same command line an agent or a script would use. What
-you see below, you can do from a terminal.
+you see here, you can do from a terminal.
 
-Because every app resolves the same file with the same rule, **provisioning and
-linking are the same operation**. The first app that needs credentials creates
-the canonical store; every app installed after it finds that file and adopts it.
-Nothing forks, so nothing ever has to be merged.
+---
 
-- `SPEC.md` — the standard: layout, format, precedence, conformance
-- `passbook.py` — Python 3.9+ reference implementation, no dependencies
-- `passbook.mjs` — Node 18+ twin, byte-compatible with the Python side
-- `passbook_vault.py` — optional: profiles, sign-in, and encryption that travels
-- `passbook_keystore.py` — optional: per-OS key storage for unattended machines
-- `passbook_access.py` — optional: which app may read which key, and when
-- `passbook_catalog.py` — optional: groups, audiences, and the access matrix
-- `passbook_mcp.py` — optional: an MCP server, so agents can find all this
-- `passbook_oauth.py` — optional: sign-ins that stay alive, renewed on read
-- `passbook_broker.py` — optional: one door for reads, and a record of them
-- `passbook_stamp.py` — optional: a tamper-evident record of who read what
-- `passbook_link.py` — optional: lending named keys to a second machine
-- `passbook_peer.py` — optional: asking the kernel who is calling (macOS)
-- `passbook_seal.py` — superseded by `passbook_vault.py`; still reads v1 stores
-- `bin/passbook` — the command line
-- `app/` — a native desktop front end (Tauri), which holds no logic of its own
-- `AGENT_PROMPT.md` — paste into a coding agent to put a project on PassBook
+## Contents
 
-## Set it up with an agent
+- [Install](#install)
+- [Use it](#use-it)
+- [Workspaces](#workspaces)
+- [Signing in](#signing-in)
+- [Encryption](#encryption)
+- [Who can read what](#who-can-read-what)
+- [Activity](#activity)
+- [Devices](#devices)
+- [Sign-ins that stay alive](#sign-ins-that-stay-alive)
+- [Agents](#agents)
+- [The broker](#the-broker)
+- [Backup](#backup)
+- [What it does not claim](#what-it-does-not-claim)
+- [Reference](#reference)
 
-Paste this into Claude Code, Codex, Cursor, Copilot, ChatGPT — anything that can
-run commands on your machine. It installs PassBook, wires the agent into it, and
-leaves the machine in a working state.
+---
+
+## Install
+
+Grab the app from [releases](https://github.com/LiamVisionary/passbook/releases/latest),
+or install the command line:
+
+```bash
+./install.sh
+```
+
+That is the whole setup. It finds a Python, installs the commands, provisions
+the store, and prints what it decided.
+
+Encryption and linking need `cryptography`, which is not in the standard
+library. On Homebrew, Debian and Ubuntu you cannot install it into the system
+Python, because all three mark theirs externally managed and refuse (PEP 668).
+So setup does not ask you to. It provisions its own interpreter under
+`~/.hivemindos/passbook-runtime` and points the commands at that. It touches
+nothing the machine already relies on and needs no root.
+
+If that step cannot run, because there is no network or no build tools, setup
+still finishes. Everything except encryption and linking works, it says so
+plainly, and `passbook install` picks up where it left off later.
+
+Already have `uv` or `pipx`? Same job:
+
+```bash
+uv tool install passbook
+```
+
+Or copy `passbook.py` straight into a project. One file, no dependencies, no
+install step. That copy gets the store, the precedence rule and the scoping.
+Encryption and linking are the parts that need the runtime.
+
+### Set it up with an agent
+
+Paste this into Claude Code, Codex, Cursor, Copilot, anything that can run
+commands on your machine. It installs PassBook, wires the agent into it, and
+leaves the machine working.
 
 ````text
 Set up PassBook on this machine for me, end to end.
@@ -58,129 +95,15 @@ https://github.com/LiamVisionary/passbook
 Do all of this, and tell me what you find at each step:
 
 1. Install it. Prefer a tool installer so it gets its own environment:
-      uv tool install "passbook @ git+https://github.com/LiamVisionary/passbook.git"
-   or, if uv is not available:
-      pipx install "passbook @ git+https://github.com/LiamVisionary/passbook.git"
-   Do NOT pipe a remote script into a shell for this — it is a credential
-   manager, and I want to be able to read what I installed.
-
-2. Confirm it works and show me the output of:
-      passbook status
-   It prints where the store is, how many keys it holds, and which apps use it.
-   It never prints a value.
-
-3. If the store is empty, do not invent keys. Tell me which ones this project
-   needs by name, and I will add them with `passbook add NAME` (which prompts
-   without echoing).
-
-   `passbook check` gives three answers, and they are not interchangeable:
-   **set** is readable now, **locked** is in the store but encrypted (I need to
-   run `passbook signin`), and **missing** is genuinely absent. Never run
-   `passbook add` on a locked key — that overwrites a working credential.
-
-4. Register PassBook as an MCP server for yourself, so you can read credentials
-   through a checked, recorded door instead of me pasting them into the chat.
-   The command is `passbook mcp` and it speaks MCP over stdio. Add it to
-   whichever config file you use — figure out the right one for yourself, and
-   show me the change before you make it. For most clients it looks like:
-      {"mcpServers": {"passbook": {"command": "passbook", "args": ["mcp"]}}}
-
-5. Restart yourself if that is what it takes to load the server, then call
-   `list_credentials` and show me the groups and the count. Do not call
-   `get_credential` yet.
-
-6. Run `passbook oauth` and tell me whether any account sign-ins exist and
-   whether they are still live. Do not connect anything without asking me.
-
-7. Tell me, in one short list:
-   - how many credentials this machine holds
-   - which groups they fall into
-   - which sign-ins are connected, and any that have expired for good
-   - anything you think should be restricted to fewer agents, and why
-
-Rules while you do this:
-- Never print a credential value into the chat, a file, a commit, or a log.
-- Never run `passbook reveal` unless I ask for that exact key.
-- If anything is refused, tell me what it said instead of working around it.
+   uv tool install passbook   (or pipx install passbook, or ./install.sh)
+2. Run `passbook status` and tell me where the store is and how many keys it holds.
+3. Encrypt it with `passbook secure` if it is not encrypted already. Tell me
+   which keys it leaves readable and why.
+4. Add yourself over MCP: `claude mcp add passbook -- passbook mcp`
+5. Show me `passbook apps` so I can see what has asked for a credential.
 ````
 
-Once that is done, the agent asks for credentials by name and every request is
-checked against your policy and recorded. You can see who asked for what with
-`passbook access`, and who is allowed what with `passbook matrix`.
-
-### Wiring it up by hand
-
-`passbook mcp` speaks MCP over stdio, so the config is the same shape everywhere:
-
-```json
-{
-  "mcpServers": {
-    "passbook": { "command": "passbook", "args": ["mcp"] }
-  }
-}
-```
-
-Claude Code will also take it in one line:
-
-```bash
-claude mcp add passbook -- passbook mcp
-```
-
-The Agent Client Protocol, which sits between editors and agents, passes MCP
-servers through to the agent — so this one server reaches ACP editors too
-without a second thing to configure.
-
-### What the agent gets
-
-| Tool | Returns |
-| --- | --- |
-| `list_credentials` | Names, groups, and whether *this* agent may read each. Never values. |
-| `get_credential` | One value, by name, checked against policy and recorded. |
-| `check_credentials` | Whether named keys exist, without reading them. |
-| `list_sign_ins` | OAuth accounts and whether each is still live. Never a token. |
-| `get_oauth_token` | A live access token for one sign-in — renewed first, so refresh is never the agent's problem. |
-| `vault_status` | Whether the store is encrypted and currently unlocked. |
-
-On connect the server also hands the agent instructions telling it to list
-before reading, ask only for what it needs, and never print a value. That is a
-nudge for honest agents, not a control — see below.
-
-**The agent's name is a claim.** It arrives in the MCP handshake and nothing
-proves it, exactly as with the broker. It is used for policy and for the ledger,
-never as authentication. What it buys is the common case rather than the
-adversarial one: an agent asks for three keys instead of helping itself to your
-environment, you can see which agent asked for what, and a key that is none of
-an agent's business can be marked so.
-
-## Install
-
-```bash
-./install.sh
-```
-
-That is the whole setup. It finds a Python, installs the commands, provisions
-the store, and prints what it decided.
-
-Sealing and linking need `cryptography`, which is not in the standard library —
-and on Homebrew, Debian and Ubuntu you **cannot** install it into the system
-Python, because those all mark theirs externally managed and refuse (PEP 668).
-So setup does not ask you to. It provisions its own interpreter under
-`~/.hivemindos/passbook-runtime` and points the commands at that, touching
-nothing the machine already relies on and needing no root.
-
-If that step cannot run — no network, no build tools — setup still completes.
-Everything except sealing and linking works, it says so plainly, and
-`passbook install` picks up where it left off later.
-
-Already have `uv` or `pipx`? They do the same job:
-
-```bash
-uv tool install passbook
-```
-
-Or vendor `passbook.py` straight into a project: one file, no dependencies, and
-no install step at all. That copy gets the store, the precedence rule and the
-scoping; sealing and linking are the parts that need the runtime.
+---
 
 ## Use it
 
@@ -198,7 +121,7 @@ apply();
 ```
 
 Then read credentials from the environment as you already do. The store is a
-fleet-wide **default**, never an override: a value exported into the process, or
+fleet wide **default**, never an override. A value exported into the process, or
 set in the project's own `.env`, always wins.
 
 For an app that should ask for what it needs rather than inherit everything:
@@ -207,93 +130,141 @@ For an app that should ask for what it needs rather than inherit everything:
 key = passbook.request(["OPENAI_API_KEY"], app="my-app", reason="image render")
 ```
 
-Today both read the same file, so `request` grants no less than `apply` does.
+Both read the same file today, so `request` grants no less than `apply` does.
 The difference is that an app written against `request` can be moved behind a
-broker that answers "no" to a key it was never granted, and an app written
-against `apply` cannot.
+broker that says no to a key it was never granted. An app written against
+`apply` cannot.
 
-## On the command line
-
-```bash
-passbook-check OPENAI_API_KEY          # set or missing — never the value
-```
+### On the command line
 
 ```bash
+passbook-check OPENAI_API_KEY          # set or missing, never the value
 passbook-add OPENAI_API_KEY            # prompts without echo
-```
-
-```bash
 passbook-run -- npm run dev            # run with the store loaded as a base
 ```
 
-Prefer the bare `passbook-add KEY` prompt. A value typed as `KEY=value` lands in
+Use the bare `passbook-add KEY` prompt. A value typed as `KEY=value` lands in
 shell history and is briefly visible to `ps`.
 
-## Linking a second machine
+---
 
-Machine B borrows **named keys** from machine A, for a stated period, after a
-human on A has confirmed B's fingerprint. Not the store — named keys.
+## Workspaces
 
-```bash
-passbook-link request
-```
+A machine can hold several stores, and each one has its own key.
 
-```bash
-passbook-link approve <token> --keys OPENAI_API_KEY --confirm <fingerprint>
-```
+That second half is the part that matters. A workspace is not a folder. It is a
+set of credentials plus the thing that opens them, so picking a workspace and
+picking whose key you are holding is one decision, not two. Sign in to Personal
+and the Acme keys stay encrypted, on the same disk, in the same second.
 
-```bash
-passbook-link accept <envelope> --confirm <fingerprint>
-```
+![The workspace picker: Personal, Acme and Lab, each with its own key](docs/app-workspaces.png)
 
-Both ends confirm a fingerprint, and for the same reason. Approving decides who
-may *read* your keys; accepting decides whose keys you will *run with*. Anyone
-who saw a machine's pairing token knows its public key and could seal a valid
-envelope to it carrying their own value for a real key — pointing at a proxy
-that logs everything. So a machine you have not accepted from before has to be
-confirmed once; after that its identity is bound and it is not asked again.
-
-Four properties it is built for:
-
-- **Membership is not authorization.** Same tailnet, same LAN, same account —
-  none of it grants anything. There is no listening service here on purpose, so
-  reachability decides nothing.
-- **The fingerprint is the second factor.** A token could be intercepted and
-  swapped, and that attack is invisible if the only check is "did it arrive".
-  Both machines print a short fingerprint, and approving requires typing it back.
-- **Values are sealed to the device.** The envelope is encrypted to B's device
-  key with an ephemeral exchange, so it is safe on any transport. Whoever
-  carries it learns nothing.
-- **A grant is narrow and it expires.** Named keys, one workspace, an expiry,
-  and a nonce that cannot be replayed. The grant is a UCAN-shaped capability
-  (`iss` / `aud` / `att` / `exp`), signed, and the signed half — not the
-  payload — decides what lands.
-- **Accepting is a trust decision too.** Verifying that an envelope opens proves
-  only that someone sealed it to you, not who. The issuer's fingerprint is what
-  proves the second part.
-
-Revoking stops the next envelope:
+Values sealed by one workspace cannot be read by another. A new workspace starts
+able to open nothing, which is the correct starting point for anything holding
+somebody else's credentials.
 
 ```bash
-passbook-link revoke <did>
+passbook workspace                       # what is here, and which is active
+passbook workspace use acme              # switch
+passbook signin --workspace acme         # open that one, leave the rest shut
+passbook signout --workspace acme        # shut it, leave the rest open
 ```
 
-It cannot unsend what was already delivered, so `revoke` prints the keys that
-must still be **rotated at the provider**. Nothing can do better than that;
-anything claiming to is lying about what a credential is.
+Reads layer the machine store, then the workspace store, so a workspace inherits
+the machine's keys and a more specific value wins. **Writes go to the
+workspace.** That is the half people get bitten by. A key added while you are
+scoped to a client's workspace must not appear machine wide, or `"inherit":
+false` would be decoration.
 
-Linking needs the `cryptography` package. Without it the rest of PassBook works
-unchanged, and linking says so rather than half-working.
+```json
+{"activeWorkspaceId": "acme", "workspaces": [
+  {"id": "main"},
+  {"id": "acme", "inherit": false}
+]}
+```
 
-Accepted keys land in the receiving machine's *active* workspace store, so a
-borrowed key arrives already scoped rather than machine-wide. Workspace ids are
-local to each machine and are never compared across a link — the sender decides
-what it lends, the receiver decides where it lands.
+`"inherit": false` cuts the machine store out entirely. Use it for anything
+holding someone else's credentials. Siblings never see each other either way.
 
-## Encryption and sign-in
+`HIVE_WORKSPACE` wins for a process that sets it. Otherwise the active workspace
+comes from HivemindOS's own `workspaces.json`, and PassBook writes that same
+file rather than keeping a copy. Two records of which workspace is active would
+disagree the moment either app changed one, and each would go on showing the
+truth as it knew it.
+
+Both reference implementations resolve this identically and a test asserts it
+across runtimes. That is not tidiness. If they diverged, a Node process and a
+Python process on one machine would see different keys, and the same provider
+would work in one and fail in the other with nothing to point at.
+
+---
+
+## Signing in
+
+The store is encrypted. Something has to open it, and there are three ways.
+
+![Signing in to a workspace with Touch ID or a password](docs/app-signin.png)
+
+| | Where it works | What it is |
+|---|---|---|
+| **Password** | everywhere | `hashlib.scrypt` over the password you chose |
+| **Touch ID** | the desktop app, on a Mac with biometrics | LocalAuthentication, in front of the device factor |
+| **Passkey** | a browser | a WebAuthn PRF secret |
+
+Be exact about the last two, because the difference is not obvious and it cost
+us an afternoon.
+
+**Passkeys need a browser.** A passkey is bound to a domain and the ceremony
+runs in a browser. A desktop window is neither. Measured from inside PassBook's
+own webview, WebAuthn's `isUserVerifyingPlatformAuthenticatorAvailable()`
+answers false, and it keeps answering false when the window is served over
+`http://localhost` and when the app is signed with a Developer ID. So the
+desktop app does not offer passkey enrolment. A passkey made in a browser opens
+the same vault.
+
+**Touch ID is what the desktop app offers instead.** It is LocalAuthentication,
+the native API, in front of the device factor PassBook already had. It needs no
+domain, no browser and no entitlement.
+
+```bash
+passbook signin              # opens the vault, starts the broker if none is running
+passbook signin --for 8h     # or put a clock on it
+passbook signout             # shut it
+```
+
+**A sign-in does not expire on its own.** It used to close after eight hours,
+which is a rule about a person at a desk and the wrong rule for a machine
+running agents overnight. A vault that locks itself at four in the morning stops
+the work rather than protecting it, and what people do about that is stop
+encrypting the store. Ask for `--for 8h`, `--for 1d`, anything up to a week if
+you want a clock.
+
+Leave `--for` off and the workspace keeps whatever length it is already on. That
+matters more than it sounds: signing in a second time, to switch profile or
+right after adding Touch ID, used to quietly turn a session somebody had boxed
+to an hour into one that never ends.
+
+### Locking the window is not locking the vault
+
+They are two different decisions and the app keeps them apart.
+
+**Lock** closes the window. It asks for a factor to get back in, and it survives
+quitting the app. It does not touch the broker, so agents keep working. That is
+the point. Closing your laptop lid should not stop the overnight run.
+
+**Agent access** is the other lock, and it lives on the lock screen where
+somebody is already thinking about what they leave open. Closing it drops the
+data key and nothing on the machine can read a credential until you sign in.
+
+The window lock stops a person at your keyboard. It does not stop code running
+as you, and nothing here could. That code can read the store directly.
+
+---
+
+## Encryption
 
 By default the store is a plaintext file that anything running as you can read.
-`passbook secure` changes that in one step:
+One command changes that:
 
 ```bash
 passbook secure
@@ -301,56 +272,247 @@ passbook secure
 
 It creates a profile, encrypts every value, starts the broker and signs you in.
 From then on the file holds ciphertext, and the key that opens it exists only
-inside a signed-in broker process — never on disk, and never handed back to a
-caller. Apps ask for values by name and get what policy allows.
+inside a signed-in broker process. Never on disk, never handed back to a caller.
+
+![Security settings: encryption, profiles, recovery and backup](docs/app-security.png)
 
 ```bash
-passbook signout     # lock it; apps have no credentials until you sign in
-passbook signin      # open it again
-passbook unseal      # put everything back in the clear, permanently
+passbook unseal        # put everything back in the clear, permanently
 ```
 
-The way out is deliberately as visible as the way in. An encryption you cannot
-reverse is one nobody turns on.
-
-![The Vault page: the store encrypted, signed in with a password and a passkey, and the button that decrypts it back](docs/app-vault.png)
+The way out is as visible as the way in. An encryption you cannot reverse is one
+nobody turns on.
 
 ### How it holds the key
 
 A value is encrypted under a per-profile **data key** that is never written
-down. The data key is instead *wrapped* by one or more **factors**, and opening
-the vault means satisfying one of them:
+down. The data key is wrapped by one or more factors, and opening the vault
+means satisfying one of them. Changing a password rewraps 32 bytes. It does not
+re-encrypt your values.
 
-| Factor | How | Portable |
-| --- | --- | --- |
-| Password | `hashlib.scrypt` | every platform |
-| Passkey | a WebAuthn PRF secret | every platform with WebAuthn |
-| This device | the OS keystore | opt-in, and weaker — see below |
+Everything in the critical path is `hashlib` and AES-GCM. No Keychain, no DPAPI,
+no libsecret. So the vault opens the same way on macOS, Windows and Linux.
 
-Changing a password rewraps 32 bytes. It does not re-encrypt your values.
-
-Everything in the critical path is `hashlib` and AES-GCM — no Keychain, no
-DPAPI, no libsecret — so the vault opens the same way on macOS, Windows, Linux
-and eventually iOS. The OS keystore survives only as an opt-in third factor for
-jobs that must start without a human, and it is labelled as a cost everywhere it
-is offered: it hands the opening key to anything running as your account, which
-is the exact property the rest of this removes.
+The OS keystore is the exception, and it is opt-in. It hands the opening key to
+anything running as your account, which is the exact property the rest of this
+removes. Touch ID puts a person in front of it for the window, and that is a
+lock on the window rather than on the key.
 
 ### What it leaves readable
 
-Values behind a framework's public prefix — `NEXT_PUBLIC_`, `VITE_`,
-`REACT_APP_`, `PUBLIC_`, `EXPO_PUBLIC_`, `GATSBY_`, `NUXT_PUBLIC_` — are left in
-the clear. A build inlines them into a browser bundle long before anyone could
-sign in, so encrypting one protects nothing and breaks the build. `secure`
-prints every key it is leaving readable, and why, before it does anything.
+Values behind a framework's public prefix (`NEXT_PUBLIC_`, `VITE_`, `REACT_APP_`,
+`PUBLIC_`, `EXPO_PUBLIC_`, `GATSBY_`, `NUXT_PUBLIC_`) are left in the clear. A
+build inlines them into a browser bundle long before anyone could sign in, so
+encrypting one protects nothing and breaks the build. `secure` prints every key
+it is leaving readable, and why, before it does anything.
 
 Add your own with `--skip`, for a feature flag some boot hook reads.
 
-## Accounts, not just keys
+### If you forget the password
 
-Some things are not an API key but a **sign-in** — a ChatGPT plan, a Google
-account — and the difference that matters is that a sign-in has a clock on it.
-A store holding
+A vault wrapped by one password is one forgotten password away from gone.
+
+```bash
+passbook recovery          # shows a code, once
+passbook signin --recovery
+```
+
+The code is about 150 bits in six groups, and PassBook keeps only enough to
+check it, so it cannot show it to you twice. It reads back however you type it:
+lower case, hyphens dropped, `O` for `0`, `I` or `L` for `1`. Refusing that
+would be refusing someone the only copy of their vault over typography.
+
+---
+
+## Who can read what
+
+A store with a few hundred keys is a flat list nobody reads and a policy nobody
+reviews. Four bounds exist for that, and each one answers a different question.
+
+Open a key in the app and all four are on the row.
+
+![One key open: when to ask, who it is shared with, which apps, which projects](docs/app-key-detail.png)
+
+### Groups arrange the store
+
+Inferred from the names you already use, because any scheme that needs you to
+tag three hundred keys by hand never gets finished.
+
+```bash
+passbook group            # what is in here, arranged
+passbook group set "Payments" STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET
+```
+
+`OPENAI_API_KEY` and `OPENAI_BASE_URL` are already telling you they belong
+together. A family becomes a group once two keys share it. A group of one is a
+flat list wearing a costume. Anything you set by hand wins.
+
+### Scopes say how far a key reaches
+
+```bash
+passbook scope set CLIENT_SECRET --workspace    # this workspace only
+passbook scope set OPENAI_API_KEY --machine     # every workspace here
+passbook scope set DEPLOY_KEY --tailnet         # and lendable to linked devices
+```
+
+**Only the workspace a key came from can change its reach.** A workspace you
+share a key with can read it and can see the scope. It cannot pass the key on.
+Otherwise sharing would hand over the power to share onward, which is not
+sharing, it is giving it away.
+
+`tailnet` is a permission, not a sync. Widening a scope makes a key eligible to
+be lent and does not move it anywhere by itself.
+
+### Audiences say who a key is for
+
+```bash
+passbook apps                                     # every restricted key
+passbook apps set ADMIN_TOKEN --only passbook-app
+passbook apps set TRADING_KEY --block claude-code cursor
+passbook apps set ANALYTICS_KEY --everyone        # back to the default
+```
+
+A caller says who it is with `--app`, or by setting `PASSBOOK_APP` once. Every
+PassBook call in that process tree carries it, including whatever `passbook run`
+starts, so an agent harness names itself once instead of threading a flag
+through code it does not own.
+
+An **app** here is whatever declared a name when it asked. A background daemon,
+a command line, a project's build, an agent over MCP. They all land in the same
+field, so the surfaces call the whole set apps rather than claiming every one of
+them is an agent.
+
+Every key is readable by every app until you say otherwise. An audience is a
+**bound**, not a preference: a key that excludes an app is refused for that app
+whatever the mode, unlock or approval says. That is what makes it safe to hand
+someone the shape of their whole store and let them fence off the three keys
+that matter.
+
+![Apps that have asked, and the grid of every key against every app](docs/app-apps.png)
+
+### Projects limit a key to a checkout
+
+An agent is one process that moves between checkouts, and its name does not
+change when it does. So an agent trusted with the deploy key carries that trust
+into every repository you point it at, including one whose README contains an
+instruction somebody else wrote.
+
+```bash
+passbook projects set DEPLOY_KEY --only acme
+passbook projects set SCRATCH_KEY --without prod
+passbook projects set DEPLOY_KEY --every
+```
+
+A project is `PASSBOOK_PROJECT`, else the basename of the nearest git root. It
+is a claim its caller makes, exactly like an app name. It stops a confused agent
+reaching across checkouts. It does not stop someone who already runs code as
+you.
+
+One asymmetry worth knowing. A caller that names **no** project is not on an
+`--only` list, because otherwise running outside any checkout would be the way
+around every project rule. A `--without` list still lets it through, since no
+project named is not the named one.
+
+### Before a key changes
+
+Everything above is about reads. These are about changes.
+
+```bash
+passbook confirm delete          # removing a key now waits for you
+passbook confirm modify
+passbook confirm add --off
+```
+
+All three are off by default, because a machine where every `passbook add` waits
+on a dialog is one where people stop using `passbook add`. Turned on, they give
+the store a property its encryption does not: **its contents cannot change
+quietly.** Encryption stops a stolen laptop reading your keys. This is what
+catches an agent helpfully fixing one.
+
+They are separate toggles because they are different questions. Wanting to be
+told before a credential is *replaced*, the change that breaks things silently
+because nothing errors and it just starts talking to the wrong account, is not
+the same as wanting a dialog for every new key.
+
+A change that asks waits in the window and raises a system notification. Nothing
+is written until you answer, and two things count as no. **No broker running**
+refuses the change rather than letting it through, because a toggle whose
+enforcement disappears with a daemon is not a toggle. **Nobody answering** times
+out and the key is left alone.
+
+---
+
+## Activity
+
+Every read, hash chained. Key names and times, never a value.
+
+![What has been read on this machine, and by what](docs/app-activity.png)
+
+The rows are in GitLawb's proof format, so GitLawb's own verifier reads them.
+Verify from the app or the command line:
+
+```bash
+passbook history                 # what has been read
+passbook history --verify        # re-hash the chain and say whether it holds
+```
+
+Tamper evident, not tamper proof. It does not prevent an access. It makes one
+impossible to hide.
+
+---
+
+## Devices
+
+A second device borrows **named keys** from the first, for a stated period,
+after a human has confirmed a pairing code. Not the store. Named keys.
+
+![Every device that holds this store](docs/app-devices.png)
+
+```bash
+passbook-link request
+passbook-link approve <token> --keys OPENAI_API_KEY --confirm <code>
+passbook-link accept <envelope> --confirm <code>
+```
+
+Both ends confirm a code, for different reasons. Approving decides who may
+*read* your keys. Accepting decides whose keys you will *run with*. Anyone who
+saw a pairing token knows the public key and could seal a valid envelope
+carrying their own value for a real key, pointing at a proxy that logs
+everything. So a device you have not accepted from before is confirmed once, and
+after that its identity is bound.
+
+Four properties it is built for:
+
+- **Membership is not authorization.** Same tailnet, same LAN, same account,
+  none of it grants anything. There is no listening service here on purpose, so
+  reachability decides nothing.
+- **The pairing code is the second factor.** A token could be intercepted and
+  swapped, and that attack is invisible if the only check is whether it arrived.
+- **Values are sealed to the device.** The envelope is encrypted to the far
+  device's key with an ephemeral exchange, so it is safe on any transport.
+  Whoever carries it learns nothing.
+- **A grant is narrow and it expires.** Named keys, one workspace, an expiry,
+  and a nonce that cannot be replayed. It is a UCAN shaped capability, signed,
+  and the signed half decides what lands.
+
+```bash
+passbook-link revoke <did>
+```
+
+Revoking stops the next envelope. It cannot unsend what was already delivered,
+so `revoke` prints the keys that must still be **rotated at the provider**.
+Nothing can do better than that. Anything claiming to is lying about what a
+credential is.
+
+Accepted keys land in the receiving device's *active* workspace, so a borrowed
+key arrives already scoped rather than machine wide.
+
+---
+
+## Sign-ins that stay alive
+
+Some things are not an API key but a **sign-in**, and the difference that
+matters is that a sign-in has a clock on it. A store holding
 
     OPENAI_OAUTH_ACCESS_TOKEN
     OPENAI_OAUTH_REFRESH_TOKEN
@@ -358,10 +520,10 @@ A store holding
 
 sees three unrelated strings. It cannot tell you the grant expired and cannot do
 anything about it, so the access token an app reads is dead an hour after
-somebody last opened whatever refreshes it — and it surfaces as a puzzling 401
+somebody last opened whatever refreshes it. It surfaces as a puzzling 401
 somewhere else entirely.
 
-PassBook makes a grant a thing it understands:
+![Accounts this device holds, and whether each is still live](docs/app-signins.png)
 
 ```bash
 passbook oauth add google work --client-id <the client you registered>
@@ -371,263 +533,104 @@ passbook oauth                          # what is connected, and for how long
 
 **The broker renews it on the way past.** When anything reads the access token,
 the broker checks the clock, refreshes if it is close, writes the new tokens
-back, and hands over one that works. That is the whole point of putting this
-here rather than in an app: the broker runs whenever anything on the machine can
-read a credential at all, so a grant does not die just because the app that
-created it is closed.
+back, and hands over one that works. That is why this lives here rather than in
+an app. The broker runs whenever anything on the machine can read a credential
+at all, so a grant does not die just because the app that created it is closed.
 
-An agent therefore never implements refresh:
+The tokens live in the store under ordinary key names, so they are encrypted
+with everything else, held to the same audiences, and in the same record. There
+is no second vault and no second set of rules.
 
-```
-get_oauth_token("google:work")  ->  a token that is already live
-```
+Two things worth knowing. **No vendor's client id ships with PassBook**, because
+a grant that borrows one is a matter between you and that vendor's terms.
+And **a refresh token is worth more than most API keys**, because it mints new
+access tokens on demand and usually outlives them by months. If you were
+undecided about `passbook secure`, holding sign-ins is the argument for it.
 
-The tokens themselves live in the store under ordinary key names, so they are
-sealed with everything else, held to the same audiences, and in the same record.
-There is no second vault and no second set of rules. Only the grant's
-*description* — its label, token endpoint and which key holds what — lives
-beside it in `passbook-oauth.json`, which is readable on purpose.
+---
 
-![The Sign-ins page: three accounts, one live, one renewing on the next read, one with no refresh token that needs a person](docs/app-signins.png)
+## Agents
 
-### Two things worth knowing
-
-**No vendor's client id ships with PassBook.** Some CLIs sign in with a client
-they registered for themselves, and a grant that borrows one is a matter between
-you and that vendor's terms — not something a library should settle by baking it
-in. `PROVIDERS` covers services where you register your own client; anything
-else you describe when you add it.
-
-**A refresh token is worth more than most API keys.** It mints new access tokens
-on demand and usually outlives them by months. If you were undecided about
-`passbook secure`, holding sign-ins is the argument for it.
-
-## Keeping a large store legible
-
-A store with a few hundred keys is a flat list nobody reads, and a policy nobody
-reviews. Three commands exist for that.
-
-**Groups** arrange the store. They are inferred from the names you already use,
-because any scheme that needs you to tag three hundred keys by hand is a scheme
-that never gets finished:
+PassBook speaks MCP over stdio, so an agent can list what exists and ask for one
+credential at a time, checked and recorded, instead of you pasting keys into a
+chat.
 
 ```bash
-passbook group            # what is in here, arranged
-passbook group -v         # ...with the keys in each
-passbook group set "Payments" STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET
+claude mcp add passbook -- passbook mcp
 ```
 
-`OPENAI_API_KEY` and `OPENAI_BASE_URL` are already telling you they belong
-together. A family only becomes a group once two keys share it — a group of one
-is a flat list wearing a costume — and anything you set by hand always wins.
-
-**Scopes** say how far a key reaches across workspaces:
-
-```bash
-passbook scope                                  # what is narrowed, and who owns it
-passbook scope set CLIENT_SECRET --workspace    # this workspace only
-passbook scope set OPENAI_API_KEY --machine     # every workspace here
-passbook scope set DEPLOY_KEY --tailnet         # …and lendable to linked machines (the default)
+```json
+{
+  "mcpServers": {
+    "passbook": { "command": "passbook", "args": ["mcp"] }
+  }
+}
 ```
 
-**Only the workspace a key came from can change its reach.** A workspace you
-share a key with can read it and can see the scope; it cannot pass the key on.
-Otherwise sharing would hand over the power to share onward, which is not
-sharing — it is giving it away. The refusal names the workspace to go and ask:
+The Agent Client Protocol passes MCP servers through to the agent, so this one
+server reaches ACP editors too without a second thing to configure.
 
-```
-only the acme workspace can change this key's scope
-```
+| Tool | Returns |
+| --- | --- |
+| `list_credentials` | Names, groups, and whether *this* agent may read each. Never values. |
+| `get_credential` | One value, by name, checked against policy and recorded. |
+| `check_credentials` | Whether named keys exist, without reading them. |
+| `list_sign_ins` | OAuth accounts and whether each is still live. Never a token. |
+| `get_oauth_token` | A live access token, renewed first, so refresh is never the agent's problem. |
+| `vault_status` | Whether the store is encrypted and currently unlocked. |
 
-`tailnet` is a permission, not a sync. PassBook lends keys by explicit envelope
-(`passbook link`); widening a scope makes a key eligible for that and does not
-move it anywhere by itself.
+**The agent's name is a claim.** It arrives in the MCP handshake and nothing
+proves it. It is used for policy and for the record, never as authentication.
+What it buys is the common case rather than the adversarial one. An agent asks
+for three keys instead of helping itself to your environment, you can see which
+agent asked for what, and a key that is none of an agent's business can be
+marked so.
 
-**Audiences** say who a key is for. This is the question people actually ask
-about a production password, and it is the inverse of the per-app modes below:
-
-```bash
-passbook agents                                   # every restricted key
-passbook agents show ADMIN_TOKEN                  # one key
-passbook agents set ADMIN_TOKEN --only passbook-app
-passbook agents set TRADING_KEY --block claude-code cursor
-passbook agents set ANALYTICS_KEY --everyone      # back to the default
-```
-
-Every key is readable by every agent until you say otherwise, which is what a
-machine that has never configured this does today. An audience is a **bound**,
-not a preference: a key that excludes an agent is refused for that agent no
-matter what mode, unlock or approval says otherwise. That is what makes it safe
-to hand someone the shape of their whole store and let them fence off the three
-keys that matter.
-
-**The matrix** is the view that makes all of it reviewable:
-
-```bash
-passbook matrix                    # every agent that has ever asked
-passbook matrix --restricted       # only the rows where something is refused
-passbook matrix --group Payments
-```
-
-```
-                      ci          claude-cod
---------------------------------------------
-ADMIN_TOKEN           yes         NO
-CLOUDFLARE_API_TOKEN  yes         yes
-OPENAI_API_KEY        yes         yes
-```
-
-The agents listed are the ones that have actually asked, read out of the access
-ledger — not just the ones you remembered to configure. Those are usually the
-interesting ones.
-
-![The Agents page: every key against every agent that has asked, a tick where it would be handed over and a cross where it would be refused](docs/app-agents.png)
-
-The same grid is in the app, and so is the one line that gives an agent access
-in the first place.
+---
 
 ## The broker
 
-Without a broker, every app records its own reads — so the ledger is missing
-exactly the apps least likely to bother. The broker closes that, and holds each
+Without a broker, every app records its own reads, so the record is missing
+exactly the apps least likely to bother. The broker closes that and holds each
 app to the keys its policy names.
 
 ```bash
 passbook broker start
-```
-
-It starts in **audit** mode: nothing is refused, everything is recorded. Once
-your apps have run for a while, let the record write the policy rather than
-guessing at one:
-
-```bash
 passbook broker policy --learn --mode deny
 ```
 
-Read it before trusting it — anything an app has not needed *yet* is not in
-there. From then on an app granted three keys gets three, and the other 270
-never enter its process.
+It starts in **audit** mode. Nothing is refused, everything is recorded. Once
+your apps have run for a while, let the record write the policy rather than
+guessing at one. Read it before trusting it, because anything an app has not
+needed yet is not in there.
 
 ### What it does not do
 
-**It does not stop a determined attacker.** Three reasons, all deliberate:
+It does not stop a determined attacker. Three reasons, all deliberate:
 
-- anything running as you can connect to the socket and claim to be any app —
-  nothing in a request proves otherwise, and any secret that could prove it
-  would sit on the same disk the attacker can already read
+- anything running as you can connect to the socket and claim to be any app,
+  and any secret that could prove otherwise would sit on the same disk the
+  attacker can already read
 - the store file is still there to be read directly
 - stopping the broker restores full access, and every app keeps working
 
-That last one is a choice: a broker that could take the machine down by stopping
-would not survive a real week. So read `denied` in the record as *"an app asked
-for something it is not set up to need"* — a dependency doing more than you
-expected, or a policy to widen — never as *"an intruder was turned away"*.
+That last one is a choice. A broker that could take the machine down by stopping
+would not survive a real week.
 
-What it genuinely buys you is a **complete record** instead of a voluntary one,
-and **least privilege for honest code**: the common accident is not malware but
-a tool that reads the whole environment because that was the easy call, and then
+So read `denied` in the record as *an app asked for something it is not set up
+to need*. A dependency doing more than you expected, or a policy to widen. Never
+as *an intruder was turned away*.
+
+What it genuinely buys is a **complete record** instead of a voluntary one, and
+**least privilege for honest code**. The common accident is not malware. It is a
+tool that reads the whole environment because that was the easy call, and then
 logs it or ships it in a crash report.
 
-Making refusals real needs the operating system to vouch for the caller — a
-code-signed binary and a keychain ACL on macOS, something different again
-elsewhere. That is a signing-and-distribution project, not a file in here.
+---
 
-## Workspaces
+## Backup
 
-A machine can hold several stores. `HIVE_WORKSPACE`, else the `activeWorkspaceId`
-in HivemindOS's own `workspaces.json`, picks the one in play; `main` *is* the
-machine store rather than a second file.
-
-Reads layer machine store then workspace store, so a workspace inherits the
-machine's keys and a more specific value wins. **Writes go to the workspace**,
-which is the half that matters: a key added while scoped to a client's workspace
-must not appear machine-wide, or `"inherit": false` would be decoration.
-
-```json
-{"activeWorkspaceId": "client", "workspaces": [
-  {"id": "main"},
-  {"id": "client", "inherit": false}
-]}
-```
-
-`"inherit": false` cuts the machine store out entirely — use it for anything
-holding someone else's credentials. Siblings never see each other either way.
-
-Switch with `passbook workspace use <id>`, or from the foot of the app's source
-list, which also locks the vault on the way. That writes HivemindOS's own
-manifest rather than a PassBook-side copy: two records of which workspace is
-active would disagree the moment either app changed one, and each would go on
-showing the truth as it knew it. `HIVE_WORKSPACE` still wins for a process that
-sets it, and the app says so rather than writing a manifest that process will
-ignore.
-
-Both reference implementations resolve this identically, and a test asserts it
-across runtimes. That is not tidiness: if they diverged, a Node process and a
-Python process on one machine would see different keys, and the same provider
-would work in one and fail in the other with nothing to point at.
-
-## Limiting a key to a project
-
-Scope says which workspaces reach a key. Audience says which agents may read it.
-Projects are the third bound, and they exist because of a gap the other two
-leave open.
-
-An agent is one process that moves between checkouts, and its name does not
-change when it does. So an agent trusted with the deploy key carries that trust
-into every repository you point it at — including one whose README contains an
-instruction somebody else wrote. Limiting the key to the checkout it belongs to
-closes that: the agent is the same, the project is not.
-
-```
-passbook projects                              # what is limited, and to what
-passbook projects set DEPLOY_KEY --only acme    # readable only from that checkout
-passbook projects set SCRATCH_KEY --without prod
-passbook projects set DEPLOY_KEY --every        # back to no limit
-```
-
-A project is `PASSBOOK_PROJECT`, else the basename of the nearest git root. It
-is a **claim its caller makes**, exactly like an agent name — a process can set
-that variable to anything, and this is not pretending otherwise. It stops a
-confused agent reaching across checkouts. It does not stop someone who already
-runs code as you, and nothing on this side of the broker would.
-
-One asymmetry worth knowing: a caller that names **no** project is not on an
-`--only` list, because otherwise running outside any checkout would be the way
-around every project rule. A `--without` list still lets it through, since no
-project named is not the named one.
-
-## Before a key changes
-
-Everything above is about reads. These are about changes:
-
-```
-passbook confirm                 # what asks first
-passbook confirm delete          # removing a key now waits for you
-passbook confirm modify
-passbook confirm add --off
-```
-
-All three are off by default, because a machine where every `passbook add` waits
-on a dialog is one where people stop using `passbook add`. Turned on, they give
-the store a property its encryption does not: **its contents cannot change
-quietly.** Encryption stops a stolen laptop reading your keys; this is what
-catches an agent helpfully "fixing" one.
-
-They are separate toggles because they are different questions. Wanting to be
-told before a credential is *replaced* — the change that breaks things silently,
-because nothing errors, it just starts talking to the wrong account — is not the
-same as wanting a dialog for every new key.
-
-A change that asks waits in the PassBook window and raises a system
-notification. Nothing is written until you answer, and two things count as no:
-
-- **No broker running.** The change is refused, not allowed through. A toggle
-  whose enforcement disappears when a daemon stops is not a toggle.
-- **Nobody answering.** It times out and the key is left alone.
-
-## Getting a store out, and back in
-
-```
+```bash
 passbook export ~/Desktop/store.pbx              # encrypted, the default
 passbook export ~/store.asc --gpg                # armoured GPG
 passbook export ~/store.env --plain --i-understand
@@ -635,46 +638,112 @@ passbook import ~/Desktop/store.pbx --dry-run    # say what would change
 passbook import ~/Desktop/store.pbx
 ```
 
-Three shapes, because the reasons differ. The **encrypted** one is scrypt over a
-passphrase you choose and AES-GCM over the body; the other end needs nothing but
-PassBook. **GPG** is for machines already keeping secrets that way. **Plain** is
-readable `KEY=value` — sometimes exactly what you need, moving to a machine that
-has no PassBook yet, and never safe to leave lying around.
+Three shapes because the reasons differ. **Encrypted** is scrypt over a
+passphrase you choose and AES-GCM over the body, and the other end needs nothing
+but PassBook. **GPG** is for machines already keeping secrets that way.
+**Plain** is readable `KEY=value`, sometimes exactly what you need moving to a
+machine that has no PassBook yet, and never safe to leave lying around.
 
 Import works out which shape a file is by looking at it, because the person
 importing it did not choose its shape and should not have to describe it.
 
 Three refusals:
 
-- A plaintext export needs `--plain` **and** `--i-understand`. "Export" reads
-  like "back up", and a plaintext backup is a copy of every credential you own,
-  so the flag that picks the shape is not also the flag that accepts what the
-  shape means.
-- Nothing writes a sealed value out still sealed. An export is a decryption; it
-  goes through the broker like any other read, is held to the same policy, and
-  lands in the ledger under its own op.
+- A plaintext export needs `--plain` **and** `--i-understand`. Export reads like
+  back up, and a plaintext backup is a copy of every credential you own.
+- Nothing writes an encrypted value out still encrypted. An export is a
+  decryption. It goes through the broker like any other read, is held to the
+  same policy, and lands in the record under its own op.
 - A wrong passphrase and a damaged file give the same answer. Telling them apart
   would be an oracle.
 
-### If you forget the password
+An import never overwrites a key the store already holds. It says which ones it
+kept.
 
-A vault wrapped by one password is one forgotten password away from gone — the
-data key is wrapped by that password and by nothing else.
+---
 
-```
-passbook recovery          # shows a code, once
-passbook signin --recovery
-```
+## What it does not claim
 
-The code is about 150 bits in six groups, and PassBook keeps only enough to
-check it, so it cannot show it to you twice. It reads back however you type it:
-lower case, hyphens dropped, `O` for `0`, `I` or `L` for `1`. Refusing that would
-be refusing someone the only copy of their vault over typography.
+**Encryption protects the store at rest.** A stolen laptop, a backup, a synced
+home folder, a copy that ends up in a repo. It does not stop code running as you
+from reading a key. Nothing that hands values to your own processes can.
 
-## PassBook and the hive env
+**The broker makes reads recorded and narrow, not impossible.** It is an audit
+boundary and a blast radius limiter. Calling it an access control would be a lie
+that someone eventually relies on.
+
+**The record is tamper evident, not tamper proof.** It does not prevent an
+access, it makes one impossible to hide.
+
+**The window lock stops a person, not a process.** It asks for a factor and it
+survives quitting the app. Anything already running as you can read the store
+without being asked.
+
+Making refusals real needs the operating system to vouch for the caller. A code
+signed binary and a keychain ACL on macOS, something different again elsewhere.
+That is a signing and distribution project, not a file in here.
+
+### What it will not do
+
+- **Print a value.** Every status, diagnostic and error surface returns key
+  *names*. There is no read back path for a stored value, including for its
+  owner.
+- **Overwrite a key you did not ask it to.** Another app on the machine is
+  probably using it.
+- **Create a second store.** If an implementation seems to need one, it has
+  misread the spec. That includes inside a macOS App Sandbox, where `~`
+  silently becomes a private container. PassBook detects that and refuses,
+  because the alternative looks like missing credentials rather than a
+  packaging bug.
+
+---
+
+## Reference
+
+### What you need installed
+
+Nothing, beyond the one file. An app that vendors `passbook.py` reads the store
+on its own. No daemon, no CLI, no PassBook application.
+
+| | Needed for | Without it |
+|---|---|---|
+| the store implementation | anything at all | — |
+| `passbook install` | the commands on your PATH | apps still work, you just have no CLI |
+| the broker | policy enforcement, a complete record | reads fall back to the files |
+| a policy | asking, windows, unlocks | everything resolves as it always did |
+| the app | the strongest approval surface | approve from the CLI |
+
+A policy is enforced by the broker, so writing one cannot strand a machine that
+has no broker. A brokerless read pays no socket timeout, so the common case
+never subsidises the rare one. There are tests for each of those, because they
+are the sort of promise that erodes one convenience at a time.
+
+### The files
+
+| | |
+|---|---|
+| `SPEC.md` | the standard: layout, format, precedence, conformance |
+| `passbook.py` | Python 3.9+ reference implementation, no dependencies |
+| `passbook.mjs` | Node 18+ twin, byte compatible with the Python side |
+| `passbook_vault.py` | profiles, sign-in, and encryption that travels |
+| `passbook_keystore.py` | per-OS key storage for unattended machines |
+| `passbook_access.py` | which app may read which key, and when |
+| `passbook_catalog.py` | groups, audiences, and the access matrix |
+| `passbook_mcp.py` | an MCP server, so agents can find all this |
+| `passbook_oauth.py` | sign-ins that stay alive, renewed on read |
+| `passbook_broker.py` | one door for reads, and a record of them |
+| `passbook_stamp.py` | a tamper evident record of who read what |
+| `passbook_link.py` | lending named keys to a second device |
+| `passbook_peer.py` | asking the kernel who is calling (macOS) |
+| `bin/passbook` | the command line |
+| `app/` | the desktop app, which holds no logic of its own |
+| `app/src-tauri/biometric/` | Touch ID, behind a small safe API |
+| `AGENT_PROMPT.md` | paste into a coding agent to put a project on PassBook |
+
+### PassBook and the hive env
 
 On a machine running HivemindOS, the store PassBook resolves **is** the hive env
-at `~/.hivemindos/.env` — the same file `hive-env-check` and `hive-env-run`
+at `~/.hivemindos/.env`, the same file `hive-env-check` and `hive-env-run`
 already use. PassBook does not wrap it, shadow it, or migrate it. The commands
 are interchangeable:
 
@@ -682,64 +751,22 @@ are interchangeable:
 passbook-check ANTHROPIC_API_KEY && hive-env-check ANTHROPIC_API_KEY
 ```
 
-The names differ because they answer different questions. "Hive env" names the
-store on a Hive machine. "PassBook" names the standard, and is kept free of Hive
+The names differ because they answer different questions. Hive env names the
+store on a Hive machine. PassBook names the standard, and is kept free of Hive
 branding so an unrelated project can adopt it without adopting a product.
 
-## What you need installed
+### Settings
 
-Nothing, beyond the one file.
+Everything that is about how the machine works rather than what is in it lives
+one press away.
 
-An app that vendors `passbook.py` reads the store on its own — no daemon, no CLI,
-no PassBook application. A store written by HivemindOS is read by the Content
-Studio with nothing else present, and the reverse is equally true, because both
-resolve the same path by the same rule.
+![Settings: security, permissions, apps, advanced](docs/app-settings.png)
 
-Everything else layers on and stays optional:
-
-| | Needed for | Without it |
-|---|---|---|
-| the store implementation | anything at all | — |
-| `passbook install` | the commands on your PATH | apps still work; you just have no CLI |
-| the broker | policy enforcement, a complete record | reads fall back to the files |
-| a policy | asking, windows, unlocks | everything resolves as it always did |
-| the app | the strongest approval surface | approve from the CLI or the studio |
-
-A policy is enforced by the broker, so writing one cannot strand a machine that
-has no broker — and a brokerless read pays no socket timeout, so the common case
-never subsidises the rare one. There are tests for each of those, because they
-are the sort of promise that erodes one convenience at a time.
-
-## What it will not do
-
-- **Print a value.** Every status, diagnostic and error surface returns key
-  *names*. There is no read-back path for a stored value, including for its
-  owner.
-- **Overwrite a key you did not ask it to.** Another app on the machine is
-  probably using it.
-- **Create a second store.** If an implementation seems to need one, it has
-  misread the spec — including inside a macOS App Sandbox, where `~` silently
-  becomes a private container. PassBook detects that case and refuses, because
-  the alternative looks like missing credentials rather than a packaging bug.
-
-## What it does not claim
-
-`passbook_seal.py` protects the store **at rest** — a stolen laptop, a backup, a
-synced home folder. It does not stop code running as you from reading a key;
-nothing that hands values to your own processes can. That needs a broker that
-can refuse, which is what `request()` exists to make possible later.
-
-`passbook_broker.py` makes reads **recorded and narrow**, not impossible — see
-the three reasons above. It is an audit boundary and a blast-radius limiter, and
-calling it an access control would be a lie that someone eventually relies on.
-
-`passbook_stamp.py` is **tamper-evident, not tamper-proof**. It does not prevent
-an access; it makes one impossible to hide. The rows are hash-chained in
-GitLawb's proof format, so GitLawb's own verifier reads them.
+---
 
 ## License
 
-Apache License 2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
 Permissive on purpose. `passbook.py` is meant to be copied into a project as a
 single file, and a copyleft licence would make the thing the spec asks you to do

@@ -41,6 +41,9 @@ import re
 import shutil
 import socket
 import subprocess
+import time
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from typing import Any
 
 # The ports a HivemindOS collector may answer on. A peer that answers one of
@@ -49,6 +52,27 @@ from typing import Any
 COLLECTOR_PORTS = ("8798", "8799", "8787")
 PROBE_TIMEOUT = 0.35
 _IPV4 = re.compile(r"^\d+\.\d+\.\d+\.\d+$")
+
+# How long a discovery answer stays good, and where it is kept.
+#
+# Every probe is a TCP connect to another machine, and `describe()` sits inside
+# `passbook state`, which the window calls every five seconds. Unmeasured, that
+# was nineteen blocking connects per call and 2.9 of the 3.5 seconds the whole
+# state command took — the window spent two of every five seconds asking the
+# tailnet a question whose answer changes when someone reboots a laptop.
+#
+# So the answer is cached across processes: the CLI is a new process each time
+# and has nowhere else to keep one. Only what `describe()` already returns is
+# written, which is hostnames and ports — never an address.
+CACHE_FILENAME = ".passbook-fleet.json"
+CACHE_SECONDS = 45.0
+
+# Probes run together rather than one after another. They are independent waits
+# on unrelated machines, and done in sequence one unreachable peer delays every
+# peer behind it by the full timeout.
+PROBE_WORKERS = 12
+
+_STATUS_CACHE: dict[str, Any] | None = None
 
 
 def available() -> tuple[bool, str]:
@@ -71,6 +95,20 @@ def _tailscale_cli() -> str:
 
 
 def _status() -> dict[str, Any]:
+    """`tailscale status`, run at most once per process.
+
+    `describe()` used to call this three times — once to check the tailnet was
+    there, once for the peers and once for this machine — and each call is a
+    subprocess. They cannot disagree within one command, so they share an answer.
+    """
+    global _STATUS_CACHE
+    if _STATUS_CACHE is not None:
+        return _STATUS_CACHE
+    _STATUS_CACHE = _read_status()
+    return _STATUS_CACHE
+
+
+def _read_status() -> dict[str, Any]:
     cli = _tailscale_cli()
     if not cli:
         return {}
@@ -119,7 +157,7 @@ def peers(*, probe: bool = True) -> list[dict[str, Any]]:
     data = _status()
     if not data:
         return []
-    out: list[dict[str, Any]] = []
+    found: list[tuple[dict[str, Any], str]] = []
     for entry in (data.get("Peer") or {}).values():
         if not isinstance(entry, dict) or entry.get("Online") is False:
             continue
@@ -128,16 +166,35 @@ def peers(*, probe: bool = True) -> list[dict[str, Any]]:
             continue
         ip = next((str(v) for v in entry.get("TailscaleIPs") or []
                    if _IPV4.match(str(v))), "")
-        port = _reachable_collector(ip) if (probe and ip) else ""
-        out.append({
+        found.append(({
             "host": host,
             "os": str(entry.get("OS") or "").lower(),
             # "replicates" is the honest word. It does not say the peer is
             # trusted or granted anything; it says this store reaches it.
-            "replicates": bool(port),
-            "collector_port": port,
-        })
-    return sorted(out, key=lambda row: row["host"])
+            "replicates": False,
+            "collector_port": "",
+        }, ip if probe else ""))
+
+    ports = _probe_all([ip for _, ip in found])
+    for (row, ip), port in zip(found, ports):
+        row["collector_port"] = port
+        row["replicates"] = bool(port)
+    return sorted((row for row, _ in found), key=lambda row: row["host"])
+
+
+def _probe_all(addresses: list[str]) -> list[str]:
+    """Probe every peer at once. Order is preserved; a blank address stays blank.
+
+    Sequentially this cost one full timeout per unreachable peer, paid by every
+    peer after it. The waits are independent, so they overlap: the whole sweep
+    now takes about as long as the slowest single peer.
+    """
+    if not any(addresses):
+        return ["" for _ in addresses]
+    live = [ip for ip in addresses if ip]
+    with ThreadPoolExecutor(max_workers=min(PROBE_WORKERS, len(live))) as pool:
+        answers = dict(zip(live, pool.map(_reachable_collector, live)))
+    return [answers.get(ip, "") if ip else "" for ip in addresses]
 
 
 def reachable(*, timeout: float = PROBE_TIMEOUT) -> list[dict[str, str]]:
@@ -170,17 +227,67 @@ def this_machine() -> dict[str, Any]:
     return {"host": _clean_host(me) if me else "", "os": str(me.get("OS") or "").lower()}
 
 
-def describe(*, probe: bool = True) -> dict[str, Any]:
-    """What the Machines page needs, in one call."""
+def _cache_path(root: Path | None = None) -> Path:
+    if root is not None:
+        return Path(root) / CACHE_FILENAME
+    import passbook
+
+    return passbook.root() / CACHE_FILENAME
+
+
+def _cached(root: Path | None = None) -> dict[str, Any] | None:
+    """A recent discovery, or None. Never raises: a bad cache is no cache."""
+    try:
+        path = _cache_path(root)
+        held = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(held, dict):
+            return None
+        if time.time() - float(held.get("at") or 0) > CACHE_SECONDS:
+            return None
+        answer = held.get("fleet")
+        return answer if isinstance(answer, dict) else None
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def _remember(answer: dict[str, Any], root: Path | None = None) -> None:
+    """Keep a discovery for the next process. Failing to is not an error."""
+    try:
+        path = _cache_path(root)
+        path.write_text(json.dumps({"at": time.time(), "fleet": answer}),
+                        encoding="utf-8")
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
+def describe(*, probe: bool = True, fresh: bool = False,
+             root: Path | None = None) -> dict[str, Any]:
+    """What the Machines page needs, in one call.
+
+    Answered from a recent cache when there is one. Discovery is a sweep of TCP
+    connects across the tailnet, and it sat on the path of a command the window
+    runs every five seconds; a peer that went offline a moment ago is worth
+    knowing about, but not twelve times a minute. `fresh=True` skips the cache
+    for the case where somebody pressed refresh and means it.
+    """
+    if not fresh and probe:
+        held = _cached(root)
+        if held is not None:
+            return {**held, "cached": True}
+
     ok, detail = available()
     if not ok:
         return {"available": False, "detail": detail, "peers": [], "replicating": 0}
     found = peers(probe=probe)
     replicating = [row for row in found if row["replicates"]]
-    return {
+    answer = {
         "available": True,
         "detail": "tailnet peers discovered from this machine",
         "self": this_machine(),
         "peers": found,
         "replicating": len(replicating),
     }
+    if probe:
+        _remember(answer, root)
+    return answer

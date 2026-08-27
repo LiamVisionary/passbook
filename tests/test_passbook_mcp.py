@@ -108,7 +108,7 @@ def test_listing_says_what_this_agent_may_actually_read(machine):
 
 def test_listing_groups_what_it_returns(machine):
     payload = _call(_session(), "list_credentials")
-    assert payload["groups"]["Openai"] == ["OPENAI_API_KEY", "OPENAI_BASE_URL"]
+    assert payload["groups"]["OpenAI"] == ["OPENAI_API_KEY", "OPENAI_BASE_URL"]
 
 
 def test_listing_can_be_narrowed(machine):

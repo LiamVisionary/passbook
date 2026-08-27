@@ -109,7 +109,10 @@ reason names which bound stopped it, and none of them is a bug to work around:
   nearest git root. If a key is limited to a project that is not this one, it is
   not this project's key — say so and stop. Do not set `PASSBOOK_PROJECT` to
   something else to get past it.
-- **Agents.** `passbook agents` says which agents a key is for.
+- **Apps.** `passbook apps` says which apps a key is for. Say who you are with
+  `--app`, or set `PASSBOOK_APP` once and every PassBook call in your process
+  tree carries it — including anything `passbook run` starts. Unset, a command
+  records itself (`passbook-get`), which means "a person at a terminal".
 - **Changes may need a person.** If `passbook confirm` shows `add`, `modify` or
   `delete` set to ask, writing waits for the owner to approve it in the PassBook
   window. That is not a hang; do not retry in a loop, and do not look for

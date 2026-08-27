@@ -120,6 +120,34 @@ def _store_values() -> dict[str, str]:
     return passbook.load()
 
 
+def caller(default: str, args: argparse.Namespace | None = None) -> str:
+    """Who is asking, in the order the answer should be trusted.
+
+    Every access decision this project makes — audiences, per-app modes,
+    projects — is keyed on this name, and until now only `passbook get` could
+    be told it. `run` is the command an agent actually uses to get an
+    environment, and it always called itself `passbook-run`, so no policy could
+    ever name the agent behind it and every agent on a machine was one
+    indistinguishable row in the record.
+
+      1. `--app`, which is this call, said on purpose.
+      2. `PASSBOOK_APP`, which is this process tree. An agent harness sets it
+         once and everything it spawns is attributed without threading a flag
+         through code it does not own — including whatever `run` execs, since
+         the child inherits the environment.
+      3. the command's own name, which means you, at a terminal.
+
+    It is a claim in every case, exactly as an agent's MCP name is. It decides
+    policy and fills the record; it is not a password, and a process that can
+    set an environment variable could equally pass a flag.
+    """
+    said = str(getattr(args, "app", "") or "").strip()
+    if said:
+        return said
+    ambient = os.environ.get("PASSBOOK_APP", "").strip()
+    return ambient or default
+
+
 # ── commands ───────────────────────────────────────────────────────────────
 
 
@@ -136,7 +164,7 @@ def cmd_check(args: argparse.Namespace) -> int:
     and **missing** is genuinely absent. Each gets the remedy that matches, and
     only one of them is `add`.
     """
-    _use_broker_for_sealed_values("passbook-check", "presence check")
+    _use_broker_for_sealed_values(caller("passbook-check", args), "presence check")
     values = _store_values()
     held = set(passbook.key_names())
 
@@ -207,7 +235,7 @@ def _write_values(values, *, overwrite: bool, exact: bool = False,
     return None
 
 
-def _confirm_change(kind: str, keys, *, reason: str = "") -> bool:
+def _confirm_change(kind: str, keys, *, reason: str = "", app: str = "") -> bool:
     """Stop and ask, when the policy says this kind of change needs asking.
 
     True means go ahead — including when confirmation is switched off, which is
@@ -239,8 +267,11 @@ def _confirm_change(kind: str, keys, *, reason: str = "") -> bool:
     names = sorted({str(k) for k in keys})
     print(f"Waiting for you to approve this {kind} in PassBook…", file=sys.stderr)
     sys.stderr.flush()
+    # The same name the write itself is recorded under. These were resolved
+    # separately, so the notification asked about one caller and the record
+    # then named a different one for the very change it approved.
     answer = passbook_broker.confirm_change(
-        kind, names, app=os.environ.get("PASSBOOK_APP", "passbook-cli"),
+        kind, names, app=app or os.environ.get("PASSBOOK_APP", "").strip() or "passbook-cli",
         reason=reason or f"{kind} {', '.join(names[:4])}")
     if answer.get("ok"):
         return True
@@ -324,13 +355,14 @@ def cmd_add(args: argparse.Namespace) -> int:
     held = set(passbook.key_names())
     fresh = [k for k in values if k not in held]
     existing = [k for k in values if k in held]
-    if fresh and not _confirm_change("add", fresh, reason="add a new credential"):
+    who = caller("passbook-add", args)
+    if fresh and not _confirm_change("add", fresh, reason="add a new credential", app=who):
         return 1
     if existing and args.replace and not _confirm_change(
-            "modify", existing, reason="replace an existing credential"):
+            "modify", existing, reason="replace an existing credential", app=who):
         return 1
     try:
-        result = _write_values(values, overwrite=args.replace, app="passbook-add")
+        result = _write_values(values, overwrite=args.replace, app=who)
         if result is None:
             return 1
     except passbook.ContainerisedHomeError as error:
@@ -349,7 +381,8 @@ def cmd_add(args: argparse.Namespace) -> int:
 
 def cmd_remove(args: argparse.Namespace) -> int:
     """Delete keys. The one operation that can break another app on this box."""
-    if not _confirm_change("delete", args.keys, reason="remove a credential"):
+    if not _confirm_change("delete", args.keys, reason="remove a credential",
+                           app=caller("passbook-delete", args)):
         return 1
     try:
         result = passbook.remove_values(args.keys)
@@ -369,7 +402,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         command.pop(0)
     if not command:
         return _fail("Nothing to run.", "Usage: passbook-run -- your-command --flags")
-    _use_broker_for_sealed_values("passbook-run", f"run {Path(command[0]).name}")
+    who = caller("passbook-run", args)
+    _use_broker_for_sealed_values(who, f"run {Path(command[0]).name}")
     child = dict(_store_values())
     # `load()` merges the process environment, so an empty result never happens.
     # The question that matters is whether the STORE's own keys resolved: if it
@@ -381,6 +415,11 @@ def cmd_run(args: argparse.Namespace) -> int:
         print("The credential store is encrypted and locked; running without it.", file=sys.stderr)
         print("Sign in first:  passbook signin", file=sys.stderr)
     child.update({key: value for key, value in os.environ.items() if value})
+    # Hand the name down. Whatever this runs may call PassBook itself — a test
+    # script asking for one key, a tool that shells out — and those reads belong
+    # to whoever asked for this environment, not to `passbook-run`. Set after
+    # the merge so an explicit --app beats an inherited variable.
+    child["PASSBOOK_APP"] = who
     try:
         os.execvpe(command[0], command, child)
     except FileNotFoundError:
@@ -401,7 +440,7 @@ def cmd_get(args: argparse.Namespace) -> int:
     wanted = [key.strip() for key in args.keys if key.strip()]
     if not wanted:
         return _fail("Which keys?", "Usage: passbook get --json KEY [KEY …]")
-    granted = passbook.request(wanted, app=args.app or "passbook-get",
+    granted = passbook.request(wanted, app=caller("passbook-get", args),
                                reason=args.reason or "read by a script")
     if args.json:
         print(json.dumps(granted, indent=2 if args.pretty else None))
@@ -556,9 +595,11 @@ def _ask_password(prompt: str = "Vault password: ", *, confirm: bool = False,
     return first
 
 
-def _open_vault(module, profile: str, *, from_stdin: bool = False) -> tuple[bytes, str] | None:
+def _open_vault(module, profile: str, *, from_stdin: bool = False,
+                workspace: str = "") -> tuple[bytes, str] | None:
     """Get a data key for a maintenance command, by asking the person running it."""
-    profile = profile or module.active_profile_id()
+    root = module.workspace_root(workspace) if workspace else None
+    profile = profile or module.active_profile_id(root=root)
     if not profile:
         print("There is no profile yet.", file=sys.stderr)
         print("Run:  passbook profile create <name>", file=sys.stderr)
@@ -572,7 +613,7 @@ def _open_vault(module, profile: str, *, from_stdin: bool = False) -> tuple[byte
         print(str(error), file=sys.stderr)
         return None
     try:
-        return module.unlock_with_password(profile, password), profile
+        return module.unlock_with_password(profile, password, root=root), profile
     except module.VaultError as error:
         print(str(error), file=sys.stderr)
         return None
@@ -721,7 +762,8 @@ def cmd_profile(args: argparse.Namespace) -> int:
     module = _vault_or_fail()
     if module is None:
         return _fail("The vault is not installed on this machine.", "Run:  passbook install")
-    listed = module.profiles()
+    where = getattr(args, "workspace", "") or ""
+    listed = module.profiles(root=module.workspace_root(where) if where else None)
     if getattr(args, "json", False):
         print(json.dumps(listed, indent=2))
         return 0
@@ -749,11 +791,27 @@ def cmd_profile_create(args: argparse.Namespace) -> int:
         return 1
     except ValueError as error:
         return _fail(str(error))
+    where = getattr(args, "workspace", "") or ""
     try:
-        made = module.create_profile(args.label, password=password)
+        # A workspace's key lives beside its own store. Naming one here is how a
+        # workspace stops sharing the machine's vault and gets its own.
+        root = module.workspace_root(where) if where else None
+        if root is not None:
+            root.mkdir(parents=True, exist_ok=True)
+        made = module.create_profile(args.label, password=password, root=root,
+                                     make_active=getattr(args, "use", False))
     except module.VaultError as error:
         return _fail(str(error))
-    print(f"Created profile {made['label']}.")
+    except (OSError, ValueError) as error:
+        return _fail(str(error))
+    print(f"Created profile {made['label']}" + (f" in {where}." if where else "."))
+    if made["active"]:
+        print(f"It is now the profile you sign in to.")
+    else:
+        # Its data key opens nothing that is already sealed, so switching to it
+        # is a separate decision with consequences worth seeing first.
+        print(f"You are still signed in to whatever you were. To use it:  "
+              f"passbook profile use {made['label']}")
     print("Nothing is encrypted yet. Seal the store with:  passbook seal")
     return 0
 
@@ -839,6 +897,13 @@ def cmd_vault(args: argparse.Namespace) -> int:
             "signed_in_profile": live.get("profile", ""),
             "factor": live.get("factor", ""),
             "expires_in": live.get("expires_in", 0),
+            # How many sealed values the held key opens. "Unlocked" says a key
+            # is held; this says whether it is the right one.
+            "opens": live.get("opens", 0),
+            # Which workspaces have a key held for them right now, so the
+            # picker can say which are open without asking one by one.
+            "unlocked_workspaces": live.get("unlocked_workspaces", []),
+            "workspace": live.get("workspace", ""),
             "profiles": state["profiles"],
             "active": state["active"],
             "sealed": state["sealed"],
@@ -910,7 +975,8 @@ def cmd_passkey_enrol(args: argparse.Namespace) -> int:
         prf = base64.urlsafe_b64decode(supplied + "=" * (-len(supplied) % 4))
     except Exception:  # noqa: BLE001
         return _fail("That is not base64url.")
-    opened = _open_vault(module, getattr(args, "profile", ""),
+    where = getattr(args, "workspace", "") or ""
+    opened = _open_vault(module, getattr(args, "profile", ""), workspace=where,
                          from_stdin=getattr(args, "password_stdin", False))
     if opened is None:
         return 1
@@ -918,7 +984,8 @@ def cmd_passkey_enrol(args: argparse.Namespace) -> int:
     try:
         made = module.add_passkey_factor(
             profile, dek=dek, credential_id=args.credential_id, prf_secret=prf,
-            label=args.label or "passkey", rp_id=args.rp_id)
+            label=args.label or "passkey", rp_id=args.rp_id,
+            root=module.workspace_root(where) if where else None)
     except module.VaultError as error:
         return _fail(str(error))
     print(f"Enrolled {made['label']}. It can now open this profile on any device it syncs to.")
@@ -1241,7 +1308,7 @@ def cmd_agents(args: argparse.Namespace) -> int:
             print(json.dumps(rule, indent=2))
             return 0
         if rule["mode"] == "all":
-            print(f"{args.key}: every agent")
+            print(f"{args.key}: every app")
         else:
             print(f"{args.key}: {rule['mode']} {', '.join(rule['agents'])}")
         return 0
@@ -1252,8 +1319,8 @@ def cmd_agents(args: argparse.Namespace) -> int:
         print(json.dumps({n: r for n, r in restricted}, indent=2))
         return 0
     if not restricted:
-        print(f"All {len(names)} keys are readable by every agent (the default).")
-        print("Narrow one with:  passbook agents set KEY --only AGENT")
+        print(f"All {len(names)} keys are readable by every app (the default).")
+        print("Narrow one with:  passbook apps set KEY --only APP")
         return 0
     for name, rule in restricted:
         print(f"  {name}: {rule['mode']} {', '.join(rule['agents'])}")
@@ -1274,14 +1341,14 @@ def cmd_agents_set(args: argparse.Namespace) -> int:
     elif args.block:
         mode, agents = "exclude", args.block
     else:
-        return _fail("Say who.", "Use --everyone, --only AGENT [...], or --block AGENT [...]")
+        return _fail("Say who.", "Use --everyone, --only APP [...], or --block APP [...]")
     try:
         rule = access.set_audience(args.key, mode, agents, policy)
     except ValueError as error:
         return _fail(str(error))
     access.write_policy(policy)
     if rule["mode"] == "all":
-        print(f"{args.key}: every agent")
+        print(f"{args.key}: every app")
     else:
         print(f"{args.key}: {rule['mode']} {', '.join(rule['agents'])}")
     return 0
@@ -1873,7 +1940,7 @@ def cmd_workspace_use(args: argparse.Namespace) -> int:
 
 
 def cmd_matrix(args: argparse.Namespace) -> int:
-    """Which agents can read which keys, as a grid you can actually scan."""
+    """Which apps can read which keys, as a grid you can actually scan."""
     catalog = _catalog()
     if catalog is None:
         return _fail("The matrix needs the catalogue module.", "Run:  passbook install")
@@ -1883,8 +1950,8 @@ def cmd_matrix(args: argparse.Namespace) -> int:
     names = passbook.key_names()
     agents = args.agent or catalog.agents_seen(policy=policy)
     if not agents:
-        print("No agents have asked for a credential yet, and none are configured.")
-        print("Name one to preview:  passbook matrix --agent claude-code")
+        print("No apps have asked for a credential yet, and none are configured.")
+        print("Name one to preview:  passbook matrix --app claude-code")
         return 0
     if args.group:
         names = [n for n in names if catalog.group_of(n, policy).lower() == args.group.lower()]
@@ -1910,8 +1977,8 @@ def cmd_matrix(args: argparse.Namespace) -> int:
         print(f"{row['key'][:width].ljust(width)}  " + "  ".join(cells))
         shown += 1
     if not shown:
-        print("(every key is readable by every agent — nothing is restricted yet)")
-    print(f"\n{shown} key(s) x {len(grid['agents'])} agent(s).  yes = granted, "
+        print("(every key is readable by every app — nothing is restricted yet)")
+    print(f"\n{shown} key(s) x {len(grid['agents'])} app(s).  yes = granted, "
           f"ask = waits for you, NO = refused")
     return 0
 
@@ -1919,19 +1986,28 @@ def cmd_matrix(args: argparse.Namespace) -> int:
 def cmd_signin(args: argparse.Namespace) -> int:
     import passbook_broker
 
+    # Signing in *means* "hold my key in the broker", so a missing broker is a
+    # step in that job rather than a reason to refuse it. This sent people away
+    # to run one command so they could come back and run this one, and the app's
+    # own sign-in card had been claiming for weeks that signing in starts it.
     if not passbook_broker.running():
-        return _fail("No broker is running, so there is nothing to sign in to.",
-                     "Run:  passbook broker start")
+        started = passbook_broker.start()
+        if not started.get("ok"):
+            return _fail("No broker is running, and one would not start.",
+                         f"Start it by hand:  passbook broker start"
+                         f"   ({started.get('detail', '')})".rstrip())
+        print(f"Started the broker on {started['path']} (pid {started['pid']}).")
     if args.passkey:
         supplied = sys.stdin.readline().strip()
         if not supplied:
             return _fail("No PRF secret arrived on stdin.")
         answer = passbook_broker.signin(
-            profile=args.profile, credential_id=args.passkey,
+            profile=args.profile, workspace=args.workspace, credential_id=args.passkey,
             prf_secret=base64.urlsafe_b64decode(supplied + "=" * (-len(supplied) % 4)),
             duration=args.duration)
     elif args.device:
-        answer = passbook_broker.signin(profile=args.profile, device=True, duration=args.duration)
+        answer = passbook_broker.signin(profile=args.profile, workspace=args.workspace,
+                                        device=True, duration=args.duration)
     elif getattr(args, "recovery", False):
         try:
             code = _ask_password("Recovery code: ",
@@ -1941,8 +2017,8 @@ def cmd_signin(args: argparse.Namespace) -> int:
             return 1
         except ValueError as error:
             return _fail(str(error))
-        answer = passbook_broker.signin(profile=args.profile, recovery=code,
-                                        duration=args.duration)
+        answer = passbook_broker.signin(profile=args.profile, workspace=args.workspace,
+                                        recovery=code, duration=args.duration)
     else:
         try:
             password = _ask_password(from_stdin=getattr(args, "password_stdin", False))
@@ -1951,10 +2027,20 @@ def cmd_signin(args: argparse.Namespace) -> int:
             return 1
         except ValueError as error:
             return _fail(str(error))
-        answer = passbook_broker.signin(profile=args.profile, password=password,
-                                        duration=args.duration)
+        answer = passbook_broker.signin(profile=args.profile, workspace=args.workspace,
+                                        password=password, duration=args.duration)
     if not answer.get("ok"):
-        return _fail(answer.get("error", "Sign-in failed."))
+        error = answer.get("error", "Sign-in failed.")
+        # The broker is long-running, so it can be older than the command
+        # talking to it: `always` means "no expiry" to this CLI and is not a
+        # duration to a broker that started before that existed. It reads as a
+        # typo, and the fix is nothing to do with what you typed.
+        if "is not a duration" in error and str(args.duration).strip().lower() \
+                in getattr(passbook_broker, "FOREVER_WORDS", frozenset()):
+            return _fail(error,
+                         "That broker started before this option existed. "
+                         "Restart it:  passbook broker restart")
+        return _fail(error)
     print(answer.get("detail", "Signed in."))
     return 0
 
@@ -1962,10 +2048,17 @@ def cmd_signin(args: argparse.Namespace) -> int:
 def cmd_signout(args: argparse.Namespace) -> int:
     import passbook_broker
 
-    answer = passbook_broker.signout()
+    answer = passbook_broker.signout(workspace=getattr(args, "workspace", ""),
+                                     everything=getattr(args, "all", False))
     if not answer.get("ok"):
         return _fail(answer.get("error", "Could not lock the vault."))
-    print("Locked." if answer.get("was_unlocked") else "Already locked.")
+    where = answer.get("workspace") or ""
+    if not answer.get("was_unlocked"):
+        print("Already locked.")
+    elif where:
+        print(f"Locked {where}.")
+    else:
+        print("Locked every workspace.")
     return 0
 
 
@@ -2192,7 +2285,28 @@ def _access():
     return passbook_access
 
 
-def machine_state() -> dict:
+def _workspace_factors(name: str) -> dict:
+    """Which ways into one workspace exist. Never a secret, only their kinds."""
+    blank = {"has_vault": False, "has_password": False, "has_passkey": False,
+             "has_device": False, "profiles": 0}
+    try:
+        import passbook_vault
+    except ImportError:
+        return blank
+    try:
+        path = passbook_vault.workspace_vault_path(name)
+        if not path.is_file():
+            return blank
+        held = passbook_vault.profiles(root=path.parent)
+    except Exception:  # noqa: BLE001 — a picker must render on a broken vault
+        return blank
+    kinds = {str(f.get("kind")) for profile in held for f in profile.get("factors") or []}
+    return {"has_vault": bool(held), "profiles": len(held),
+            "has_password": "password" in kinds, "has_passkey": "passkey" in kinds,
+            "has_device": "device" in kinds}
+
+
+def machine_state(*, verify: bool = False) -> dict:
     """Everything a management surface needs, in one call, with no values.
 
     A native app or a web panel should not have to know which optional modules
@@ -2200,6 +2314,12 @@ def machine_state() -> dict:
     section reports its own availability, so a surface renders what is there and
     says plainly what is not — rather than showing an empty panel that looks like
     a bug.
+
+    Verifying the hash chain is not part of it. This runs every five seconds
+    behind an open window, and re-hashing a six-megabyte ledger at that rate is
+    not what makes the ledger trustworthy — it is just the most expensive thing
+    left in the call. `verify=True` (`passbook state --verify`) does it, and the
+    Record page asks for it when somebody is actually looking at the chain.
     """
     state: dict = {"store": passbook.status(), "spec_version": passbook.SPEC_VERSION}
     # The window offers to write an export somewhere, and has no other way to
@@ -2272,7 +2392,12 @@ def machine_state() -> dict:
             # person recognises and whether switching would do anything at all.
             "workspace_rows": [
                 {"id": name, "label": passbook.workspace_label(name),
-                 "active": name == here, "inherits": passbook.workspace_inherits(name)}
+                 "active": name == here, "inherits": passbook.workspace_inherits(name),
+                 # What the picker needs to know before it asks for anything:
+                 # whether this workspace has a key of its own at all, and which
+                 # ways in it offers. A tile that offered a passkey button for a
+                 # workspace with no passkey could only ever refuse.
+                 **_workspace_factors(name)}
                 for name in passbook.workspaces()
             ],
             "workspace_pinned": passbook.workspace_pinned(),
@@ -2344,18 +2469,60 @@ def machine_state() -> dict:
     try:
         import passbook_stamp
 
-        verification = passbook_stamp.verify_chain()
-        state["record"] = {"available": True, "intact": verification["ok"],
-                           "detail": verification["detail"],
-                           "rows": passbook_stamp.read_stamps(limit=100)}
+        state["record"] = {"available": True, "intact": None,
+                           "detail": "The chain has not been checked in this call.",
+                           "rows": _record_rows(passbook_stamp)}
+        if verify:
+            verification = passbook_stamp.verify_chain()
+            state["record"]["intact"] = verification["ok"]
+            state["record"]["detail"] = verification["detail"]
         # Summarised here rather than fetched per key: a list of several hundred
         # keys should not mean several hundred round trips to render.
-        state["usage"] = passbook_stamp.usage_by_key()
+        state["usage"] = _usage_summary(passbook_stamp)
     except ImportError:
-        state["record"] = {"available": False, "rows": [], "detail": "No access record is kept."}
+        state["record"] = {"available": False, "intact": None, "rows": [],
+                           "detail": "No access record is kept."}
         state["usage"] = {}
 
     return state
+
+
+# The window renders the last forty rows of the record and three fields of the
+# usage summary. It used to be sent a hundred rows and everything else besides:
+# 501KB of record and 81KB of usage in a 632KB payload, parsed on the window's
+# main thread every five seconds to draw a page that was usually not even open.
+RECORD_ROWS_SENT = 40
+RECORD_KEYS_PER_ROW = 12
+
+
+def _record_rows(stamps) -> list[dict]:
+    """The tail of the record, with long key lists cut short.
+
+    One bulk read stamps every key it touched, so a single row on this machine
+    carried 281 names and the hundred rows carried 501KB between them. The row
+    already says how many keys it was; the names past the first few are for a
+    person who is going to open the key's own history anyway.
+    """
+    rows = []
+    for row in stamps.read_stamps(limit=RECORD_ROWS_SENT):
+        keys = row.get("keys") or []
+        if len(keys) > RECORD_KEYS_PER_ROW:
+            row = {**row, "keys": list(keys[:RECORD_KEYS_PER_ROW])}
+        rows.append(row)
+    return rows
+
+
+def _usage_summary(stamps) -> dict[str, dict]:
+    """Last used, by what, how often — the three things a key row shows.
+
+    `usage_by_key` also collects every app that has ever asked for each key,
+    which nothing renders and which grows with the ledger.
+    """
+    return {
+        name: {"count": entry.get("count", 0), "last": entry.get("last", ""),
+               "last_app": entry.get("last_app", "")}
+        for name, entry in stamps.usage_by_key().items()
+    }
 
 
 def cmd_history(args: argparse.Namespace) -> int:
@@ -2389,7 +2556,7 @@ def cmd_reveal(args: argparse.Namespace) -> int:
     stamped as a `reveal`, so looking at your own key is visible in the record
     rather than indistinguishable from an app consuming it.
     """
-    value = passbook.reveal(args.key, app="passbook-cli", reason=args.reason)
+    value = passbook.reveal(args.key, app=caller("passbook-cli", args), reason=args.reason)
     if not value:
         # Three answers, not two — the same three `check` and `get` give. A key
         # that is present but encrypted is not a key that is missing, and
@@ -2406,7 +2573,8 @@ def cmd_reveal(args: argparse.Namespace) -> int:
 
 def cmd_state(args: argparse.Namespace) -> int:
     """One JSON object describing this machine's PassBook. Never a value."""
-    print(json.dumps(machine_state(), indent=2 if args.pretty else None))
+    print(json.dumps(machine_state(verify=getattr(args, "verify", False)),
+                     indent=2 if args.pretty else None))
     return 0
 
 
@@ -2835,19 +3003,23 @@ def build_parser() -> argparse.ArgumentParser:
     check.add_argument("keys", nargs="+")
     check.add_argument("--length", action="store_true", help="also show each value's length")
     check.add_argument("--quiet", "-q", action="store_true", help="exit code only")
+    check.add_argument("--app", default="", help="who is asking; recorded")
     check.set_defaults(func=cmd_check)
 
     add = subs.add_parser("add", help="add keys; a bare KEY prompts without echo")
     add.add_argument("pairs", nargs="*", metavar="KEY[=value]")
     add.add_argument("--replace", action="store_true", help="overwrite a key that is already set")
     add.add_argument("--stdin", action="store_true", help="read KEY=value lines from stdin")
+    add.add_argument("--app", default="", help="who is asking; recorded")
     add.set_defaults(func=cmd_add)
 
     remove = subs.add_parser("remove", aliases=["delete"], help="delete keys from the store")
     remove.add_argument("keys", nargs="+")
+    remove.add_argument("--app", default="", help="who is asking; recorded")
     remove.set_defaults(func=cmd_remove)
 
     run = subs.add_parser("run", help="run a command with the store loaded as a base")
+    run.add_argument("--app", default="", help="who is asking; recorded")
     run.add_argument("command", nargs=argparse.REMAINDER)
     run.set_defaults(func=cmd_run)
 
@@ -2900,13 +3072,19 @@ def build_parser() -> argparse.ArgumentParser:
     secure.add_argument("--password-stdin", dest="password_stdin", action="store_true")
     secure.set_defaults(func=cmd_secure)
 
-    profile_cmd = subs.add_parser("profile", help="who can open this machine's vault")
+    profile_cmd = subs.add_parser("profile", help="who can open a workspace's vault")
     profile_cmd.add_argument("--json", action="store_true")
+    profile_cmd.add_argument("--workspace", default="",
+                             help="which workspace's profiles; omit for the active one")
     profile_cmd.set_defaults(func=cmd_profile)
     profile_subs = profile_cmd.add_subparsers(dest="profile_command")
 
     profile_create = profile_subs.add_parser("create", help="create a profile with a vault password")
     profile_create.add_argument("label", help="what to call it")
+    profile_create.add_argument("--use", action="store_true",
+                                help="also make it the profile you sign in to")
+    profile_create.add_argument("--workspace", default="",
+                                help="give this workspace a key of its own")
     profile_create.add_argument("--password-stdin", dest="password_stdin",
         action="store_true", help="read the password from stdin instead of prompting")
     profile_create.set_defaults(json=False, func=cmd_profile_create)
@@ -2930,8 +3108,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     signin = subs.add_parser("signin", help="open the vault so apps can read credentials")
     signin.add_argument("--profile", default="", help="which profile; omit for the active one")
+    signin.add_argument("--workspace", default="",
+                        help="which workspace to open; omit for the active one")
     signin.add_argument("--for", dest="duration", default="", metavar="DURATION",
-                        help="how long to stay open, e.g. 8h; omit for the default")
+                        help="how long to stay open: 8h, 2d, or `always`. Omit it and "
+                             "the workspace keeps whatever it is already on, or `always` "
+                             "if it is not open yet")
     signin.add_argument("--device", action="store_true",
                         help="use this machine's device factor instead of a password")
     signin.add_argument("--passkey", default="", metavar="CREDENTIAL_ID",
@@ -2959,6 +3141,8 @@ def build_parser() -> argparse.ArgumentParser:
     passkey_enrol.add_argument("--label", default="passkey")
     passkey_enrol.add_argument("--rp-id", default="", help="the relying party it was made for")
     passkey_enrol.add_argument("--profile", default="")
+    passkey_enrol.add_argument("--workspace", default="",
+                               help="which workspace's vault; omit for the active one")
     passkey_enrol.add_argument("--password-stdin", dest="password_stdin", action="store_true",
                                help="read the vault password from stdin, after the PRF secret")
     passkey_enrol.set_defaults(json=False, func=cmd_passkey_enrol)
@@ -3014,25 +3198,30 @@ def build_parser() -> argparse.ArgumentParser:
     group_set.set_defaults(json=False, verbose=False, func=cmd_group_set)
 
     # No positional on the parent: an optional positional beside subparsers makes
-    # `agents set KEY` ambiguous, and argparse resolves it by trying to parse the
+    # `apps set KEY` ambiguous, and argparse resolves it by trying to parse the
     # key as a subcommand.
-    agents_cmd = subs.add_parser("agents", help="who each key is for")
-    agents_cmd.add_argument("--json", action="store_true")
-    agents_cmd.set_defaults(key="", func=cmd_agents)
-    agents_subs = agents_cmd.add_subparsers(dest="agents_command")
+    #
+    # `agents` is the name this had when the page was called Agents, and the
+    # things it lists turned out to be daemons, command lines and builds. The
+    # alias stays because someone's script says `agents`, and breaking that to
+    # win a naming argument is not worth it.
+    apps_cmd = subs.add_parser("apps", aliases=["agents"], help="who each key is for")
+    apps_cmd.add_argument("--json", action="store_true")
+    apps_cmd.set_defaults(key="", func=cmd_agents)
+    agents_subs = apps_cmd.add_subparsers(dest="apps_command")
 
     agents_show = agents_subs.add_parser("show", help="the audience for one key")
     agents_show.add_argument("key")
     agents_show.set_defaults(json=False, func=cmd_agents)
     agents_set = agents_subs.add_parser("set", help="limit or open up one key")
     agents_set.add_argument("key")
-    agents_set.add_argument("--everyone", action="store_true", help="the default: every agent")
-    agents_set.add_argument("--only", nargs="+", metavar="AGENT", help="only these agents")
-    agents_set.add_argument("--block", nargs="+", metavar="AGENT", help="every agent except these")
+    agents_set.add_argument("--everyone", action="store_true", help="the default: every app")
+    agents_set.add_argument("--only", nargs="+", metavar="APP", help="only these apps")
+    agents_set.add_argument("--block", nargs="+", metavar="APP", help="every app except these")
     agents_set.set_defaults(json=False, func=cmd_agents_set)
 
     # No positional on the parent — an optional one beside subparsers makes
-    # `scope set KEY` parse the key as a subcommand. Same trap as `agents`.
+    # `scope set KEY` parse the key as a subcommand. Same trap as `apps`.
     scope_cmd = subs.add_parser("scope", help="how far each key reaches across workspaces")
     scope_cmd.add_argument("--json", action="store_true")
     scope_cmd.set_defaults(key="", func=cmd_scope)
@@ -3130,14 +3319,19 @@ def build_parser() -> argparse.ArgumentParser:
     workspace_use.add_argument("name")
     workspace_use.set_defaults(json=False, func=cmd_workspace_use)
 
-    matrix = subs.add_parser("matrix", help="which agents can read which keys")
-    matrix.add_argument("--agent", nargs="+", default=[], help="only these agents")
+    matrix = subs.add_parser("matrix", help="which apps can read which keys")
+    matrix.add_argument("--app", "--agent", nargs="+", default=[], dest="agent",
+                        metavar="APP", help="only these apps")
     matrix.add_argument("--group", default="", help="only this group")
     matrix.add_argument("--restricted", action="store_true", help="hide rows where everything is granted")
     matrix.add_argument("--json", action="store_true")
     matrix.set_defaults(func=cmd_matrix)
 
     signout = subs.add_parser("signout", help="lock the vault; credentials go dark again")
+    signout.add_argument("--workspace", default="",
+                         help="which workspace to lock; omit for the active one")
+    signout.add_argument("--all", action="store_true",
+                         help="lock every workspace this machine has open")
     signout.set_defaults(func=cmd_signout)
     seal.add_argument("--status", action="store_true", help="report without changing anything")
     seal.set_defaults(func=cmd_seal)
@@ -3180,11 +3374,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     reveal_cmd = subs.add_parser("reveal", help="print one value — the only command that does")
     reveal_cmd.add_argument("key")
+    reveal_cmd.add_argument("--app", default="", help="who is asking; recorded")
     reveal_cmd.add_argument("--reason", default="", help="recorded alongside the reveal")
     reveal_cmd.set_defaults(func=cmd_reveal)
 
     state_cmd = subs.add_parser("state", help="everything a management surface needs, as JSON")
     state_cmd.add_argument("--pretty", action="store_true")
+    state_cmd.add_argument("--verify", action="store_true",
+                           help="also re-hash the whole access record to check the chain")
     state_cmd.set_defaults(func=cmd_state)
 
     unlock = subs.add_parser("unlock", help="hold access open for a stated period")

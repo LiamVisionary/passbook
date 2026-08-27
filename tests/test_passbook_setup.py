@@ -254,3 +254,25 @@ def test_every_module_in_the_repo_is_declared_for_install():
     stale = declared - on_disk
     assert not missing, f"modules in the repo but not installed: {sorted(missing)}"
     assert not stale, f"modules declared but absent from the repo: {sorted(stale)}"
+
+
+def test_every_verb_is_also_a_hyphenated_command():
+    """`--help` promises every subcommand hyphenated. Two lists have to agree.
+
+    `passbook install` writes a shim per verb, derived from the parser, so it
+    is always complete. `pip install` and `uv tool install` read the hand-kept
+    list in pyproject, which drifted: nine verbs including `sync`, `export` and
+    `recovery` had no console script, so `passbook-sync` existed for anyone who
+    ran the installer and did not exist for anyone who used pip.
+    """
+    import tomllib
+
+    repo = Path(__file__).resolve().parents[1]
+    declared = set(
+        tomllib.loads((repo / "pyproject.toml").read_text())["project"]["scripts"]
+    ) - {"passbook"}
+    derived = set(passbook_cli.aliases())
+    missing = derived - declared
+    stale = declared - derived
+    assert not missing, f"verbs with no console script: {sorted(missing)}"
+    assert not stale, f"console scripts for verbs that do not exist: {sorted(stale)}"

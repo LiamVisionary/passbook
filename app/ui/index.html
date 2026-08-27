@@ -116,8 +116,11 @@
 
   /* Whether anything can read a credential right now is the one fact worth
      seeing from every page, so it sits at the foot of the source list. */
+  /* Settings and the vault footer travel together at the bottom of the list,
+     so one `margin-top: auto` does for both. */
+  .navbottom { margin-top: auto; display: flex; flex-direction: column; gap: 8px; }
   .navfoot {
-    -webkit-app-region: no-drag; margin-top: auto;
+    -webkit-app-region: no-drag;
     display: flex; align-items: center; gap: 4px; width: 100%;
     padding: 5px 6px 5px 9px; border: 1px solid var(--line); border-radius: 9px;
     background: var(--card); color: var(--ink1);
@@ -257,11 +260,65 @@
   /* One field and a button: the three-column grid stretched the button over
      half the window, which read as a second text field. */
   .addrow.two { grid-template-columns: minmax(0,1fr) auto; }
-  .keyrow { padding: 10px 14px; }
+  .addrow.one { grid-template-columns: minmax(0,1fr); }
+  .addrow.three { grid-template-columns: minmax(0,1fr) auto auto; }
+  /* Consecutive rows of one form are one form, not a stack of cards. */
+  .addrow + .addrow { border-top: 0; padding-top: 0; }
+  .keyrow { padding: 7px 14px; }
+  .keyrow.open { background: var(--bg2); padding-bottom: 12px; }
+  /* The chevron turns down when the row is open — the only thing on the row
+     that says which of a few hundred is the one you opened. */
+  .disclose svg { transition: transform .18s cubic-bezier(.2,.8,.3,1); }
+  .keyrow.open .disclose svg { transform: rotate(90deg); }
+  /* Two columns: the labels, then a column exactly as wide as the widest
+     control in it. Laying these out as flex rows with the control pushed right
+     put a hand's width of nothing between a label and the thing it labels, and
+     made it worse on a wider window. `display: contents` on the row lets both
+     of its children join the grid, so every control starts at the same x. */
+  .keydetail {
+    margin: 9px 0 0; padding: 6px 0 0;
+    display: grid; grid-template-columns: 150px minmax(0, max-content);
+    gap: 5px 14px; align-items: center; justify-content: start; justify-items: start;
+    border-top: 1px solid var(--line);
+  }
+  .drow { display: contents; }
+  .dfull { grid-column: 1 / -1; }
+  .usedline { margin: 2px 0 6px; font-size: 12px; color: var(--ink3); }
+  .dlabel { font-size: 12.5px; color: var(--ink2); min-height: 28px; display: flex;
+            align-items: center; }
+  /* Names to choose from, as things you press rather than a column of
+     checkboxes — the same shape as the switch above them. */
+  .pickrow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 2px 0 6px; }
+  .pickchip {
+    border: 1px solid var(--line2); border-radius: 999px; padding: 3px 11px;
+    background: var(--card); color: var(--ink2); cursor: default;
+    font: 11.5px ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .pickchip:hover { border-color: var(--ink3); color: var(--ink1); }
+  .pickchip[aria-pressed="true"] {
+    background: var(--accent); border-color: var(--accent); color: var(--accent-ink);
+  }
+  .keydetail .addrow { margin: 0 0 6px; }
+  .confirmstrip {
+    display: flex; align-items: center; gap: 10px; margin-top: 8px;
+    padding: 8px 10px; border-radius: 8px; background: var(--warn-soft);
+    font-size: 12px; color: var(--ink1);
+  }
+  .confirmstrip .grow { flex: 1; }
+  /* Search on the left, the two things you do occasionally on the right. */
+  .toolbar {
+    display: flex; align-items: center; gap: 8px; padding: 10px 12px;
+    border-bottom: 1px solid var(--line);
+  }
+  .toolbar .grow { flex: 1; }
+  .countnote { text-align: center; margin-top: 12px; }
   .keyrow + .keyrow { border-top: 1px solid var(--line); }
   .keyrow:hover { background: var(--bg2); }
   .keyrow .head { display: flex; align-items: center; gap: 8px; }
-  .keyrow .named { flex: 1; min-width: 0; display: flex; align-items: center; gap: 9px; }
+  .keyrow .named {
+    flex: 1; min-width: 0; display: flex; align-items: center; gap: 9px;
+    align-self: stretch; cursor: default;
+  }
   .keyrow .head .mono { flex: 0 1 auto; min-width: 0; overflow-wrap: anywhere; font-size: 12.5px; }
   .keyrow .val {
     width: 100%; margin-top: 7px; font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -344,11 +401,24 @@
     background: var(--bg2); color: var(--ink1);
   }
   .err { color: var(--warn); }
+  /* Pinned to the bottom of the scroll, not appended to the end of it.
+     It used to be the last child of a page that can be several screens long,
+     so a refused sign-in put its reason somewhere nobody was looking and the
+     button read as dead. An error you have to scroll to find is an error you
+     did not report. */
   .noticebar {
+    position: sticky; bottom: 0; z-index: 5;
     display: flex; gap: 8px; align-items: flex-start; margin-top: 14px;
     padding: 10px 12px; border-radius: 10px; font-size: 12.5px;
     background: var(--warn-soft); color: var(--warn);
+    box-shadow: 0 6px 22px rgba(0, 0, 0, .18);
+    border: 1px solid currentColor;
   }
+  .noticebar .grow { flex: 1; }
+  .noticebar button {
+    all: unset; cursor: pointer; opacity: .65; display: flex; padding: 0 2px;
+  }
+  .noticebar button:hover { opacity: 1; }
   .noticebar.good { background: var(--good-soft); color: var(--good); }
   .noticebar svg { margin-top: 1px; }
 
@@ -363,6 +433,14 @@
   .grouprow:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
   .grouprow .caret { color: var(--ink3); display: flex; transition: transform .13s ease; }
   .grouprow[aria-expanded="true"] .caret { transform: rotate(90deg); }
+  .morerow {
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    width: 100%; padding: 11px 14px; font: inherit; font-size: 12px;
+    color: var(--ink3); background: var(--bg2); border: 0;
+    border-top: 1px solid var(--line); cursor: pointer;
+  }
+  .morerow:hover { background: var(--chip); color: var(--ink); }
+  .morerow .caret, .morerow svg { transform: rotate(90deg); }
   .avatar {
     width: 24px; height: 24px; flex: 0 0 24px; border-radius: 7px;
     display: flex; align-items: center; justify-content: center;
@@ -441,16 +519,241 @@
     display: inline-flex; align-items: center; gap: 6px; }
   .bulkbar.confirm { background: var(--warn-soft); }
   .bulkbar .note { flex-basis: 100%; margin: 0; padding: 4px 0 0; }
+
+  /* A panel that is present without asking to be looked at. */
+  .group.quiet { background: transparent; border-style: dashed; box-shadow: none; }
+  .group.quiet .row { color: var(--ink3); }
+  .pathval { font-size: 11.5px; color: var(--ink3); margin-left: auto;
+             overflow-wrap: anywhere; text-align: right; }
+
+  /* ── folded-away explanation ─────────────────────────────── */
+  .aside { margin: 8px 12px 10px; }
+  .aside > summary {
+    list-style: none; cursor: default; display: inline-flex; align-items: center; gap: 5px;
+    font-size: 12px; color: var(--ink3); padding: 2px 0;
+  }
+  .aside > summary::-webkit-details-marker { display: none; }
+  .aside > summary::before {
+    content: ""; width: 5px; height: 5px; border-right: 1.4px solid currentColor;
+    border-bottom: 1.4px solid currentColor; transform: rotate(-45deg); margin-right: 2px;
+    transition: transform .16s ease;
+  }
+  .aside[open] > summary::before { transform: rotate(45deg); }
+  .aside > summary:hover { color: var(--ink2); }
+  .asidebody { font-size: 12px; line-height: 1.55; color: var(--ink3); padding: 4px 0 2px; }
+  .asidebody p { margin: 0 0 7px; }
+  .asidebody p:last-child { margin-bottom: 0; }
+
+  /* ── settings shelf ──────────────────────────────────────── */
+  /* One row per pane, the shape macOS uses for the same job: an icon, a name,
+     a line saying what is inside, and a chevron. Nothing on this page does
+     anything by itself — it only takes you somewhere. */
+  .group.tight { padding: 6px; }
+  .settingrow {
+    display: flex; align-items: center; gap: 12px; width: 100%; text-align: left;
+    padding: 10px 10px; border: 0; border-radius: 10px; background: transparent;
+    color: var(--ink1); font: inherit; cursor: default;
+  }
+  .settingrow + .settingrow { box-shadow: 0 -1px 0 var(--line); }
+  .settingrow:hover { background: var(--sel); box-shadow: none; }
+  .settingrow:hover + .settingrow { box-shadow: none; }
+  .settingrow .grow { flex: 1; min-width: 0; display: grid; gap: 1px; }
+  .settingname { font-weight: 550; font-size: 13.5px; }
+  .settingrow > svg:last-child { color: var(--ink3); flex: 0 0 13px; }
+  .backlink {
+    display: inline-flex; align-items: center; gap: 3px; margin: 0 0 2px -6px;
+    padding: 3px 8px 3px 6px; border: 0; border-radius: 7px; background: transparent;
+    color: var(--accent); font: inherit; font-size: 12.5px; cursor: default;
+  }
+  .backlink:hover { background: var(--sel); }
+  .backlink svg { transform: rotate(180deg); }
+
+  /* ── the gate ─────────────────────────────────────────────────────────── */
+  /* Who's working? — the same screen Hivemind Content Studio opens with, so
+     the two apps ask the same question the same way. A workspace is a store
+     and, now, a key: picking one is picking both. */
+  #gate {
+    position: fixed; inset: 0; z-index: 100; display: grid; place-items: center;
+    padding: 24px; background: var(--bg); overflow-y: auto;
+    -webkit-app-region: drag;
+  }
+  /* An id beats [hidden] on specificity, so `display: grid` above would keep
+     this on screen after gate.hidden = true — an empty, opaque, full-window
+     sheet over the store, which is what a signed-in window would show. The
+     attribute has to be given a rule of its own to mean anything here. */
+  #gate[hidden] { display: none; }
+  #gate > * { -webkit-app-region: no-drag; }
+  .gwrap { width: min(860px, 100%); display: grid; gap: 28px; justify-items: center; }
+  .ghead { display: grid; justify-items: center; gap: 6px; margin-bottom: 4px; }
+  .gmark {
+    width: 40px; height: 40px; display: grid; place-items: center; border-radius: 10px;
+    background: var(--accent-soft); color: var(--accent);
+  }
+  .geyebrow {
+    margin: 0; font-size: 10px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: .1em; color: var(--accent); text-align: center;
+  }
+  #gate h1 { margin: 6px 0 0; font-size: 28px; font-weight: 650; letter-spacing: -.02em; text-align: center; }
+  .glede { margin: 8px 0 0; color: var(--ink3); font-size: 13px; line-height: 1.55; text-align: center; max-width: 44ch; }
+  .gtiles { display: flex; flex-wrap: wrap; gap: 22px; justify-content: center; padding: 0; margin: 0; list-style: none; }
+  .gtile { display: grid; gap: 10px; justify-items: center; background: none; border: 0; padding: 0; cursor: pointer; font: inherit; color: inherit; }
+  /* The tile as an object rather than a swatch.
+   *
+   *  The first version was the studio's rule copied onto a different page: a
+   *  short two-stop gradient with the near-black page colour as its letter.
+   *  That works on #0c0c0e, where a saturated square is the only lit thing on
+   *  screen. On a light background the same square has nothing to separate it
+   *  from the page, and black-on-mid-purple is a letter stamped on top instead
+   *  of a letter belonging to it.
+   *
+   *  So: a wider ramp with a hue turn across it, a light source (the inset
+   *  highlight along the top edge, a shadow beneath), a rim that keeps its
+   *  edge on a pale page, and a letter in the tile's own light rather than in
+   *  the page's ink. */
+  .gav {
+    position: relative; width: 118px; height: 118px; border-radius: 26px;
+    display: grid; place-items: center; isolation: isolate;
+    font-size: 46px; font-weight: 700; letter-spacing: -.02em;
+    color: rgba(255, 255, 255, .95);
+    text-shadow: 0 1px 2px rgba(0, 0, 0, .22);
+    box-shadow:
+      inset 0 1.5px 0 rgba(255, 255, 255, .45),
+      inset 0 0 0 1px rgba(255, 255, 255, .16),
+      0 10px 20px -8px var(--gav-cast, rgba(0, 0, 0, .38)),
+      0 2px 6px -2px rgba(0, 0, 0, .18);
+    transition: transform .18s cubic-bezier(.2, .8, .3, 1), box-shadow .18s ease;
+  }
+  /* The sheen. A single soft highlight off the top-left, which is what makes a
+     flat gradient read as a surface with a light on it. */
+  .gav::after {
+    content: ""; position: absolute; inset: 0; border-radius: inherit; z-index: -1;
+    background: radial-gradient(120% 88% at 22% 4%, rgba(255, 255, 255, .34), transparent 62%);
+  }
+  .gtile:hover .gav, .gtile:focus-visible .gav {
+    transform: translateY(-3px) scale(1.035);
+    box-shadow:
+      inset 0 1.5px 0 rgba(255, 255, 255, .5),
+      inset 0 0 0 1px rgba(255, 255, 255, .2),
+      0 18px 30px -10px var(--gav-cast, rgba(0, 0, 0, .45)),
+      0 3px 8px -2px rgba(0, 0, 0, .2);
+  }
+  /* Dashed, and drawn as a real border rather than an inset shadow — a shadow
+     cannot be dashed, and the dashes are what say "this one is not a workspace
+     yet, it is the way to make one". */
+  .gav.add {
+    background: none; color: var(--ink3); font-size: 34px; font-weight: 300;
+    text-shadow: none; box-shadow: none;
+    border: 2px dashed var(--line2);
+  }
+  .gav.add::after { background: none; }
+  .gtile:hover .gav.add, .gtile:focus-visible .gav.add {
+    color: var(--ink1); border-color: var(--ink3); box-shadow: none;
+  }
+  .gtile:focus-visible { outline: none; }
+  .gname { font-size: 14px; color: var(--ink3); transition: color .16s; }
+  .gtile:hover .gname, .gtile:focus-visible .gname { color: var(--ink1); }
+  .gbadge { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--ink3); }
+  .gbadge.on { color: var(--ok); }
+  /* Three stops with a hue turn, so the ramp has somewhere to go across 118px
+     — two stops of one hue is the thing that reads as a placeholder swatch.
+     `--gav-cast` tints the shadow with the tile's own colour, which is what
+     stops six squares looking like six stickers on the same grey page. */
+  .c-amber  { background: linear-gradient(145deg, #ffcc4d, #f2a413 52%, #dc7d05);
+              --gav-cast: rgba(217, 138, 8, .45); }
+  .c-violet { background: linear-gradient(145deg, #b79dff, #8b6cf3 52%, #6741e0);
+              --gav-cast: rgba(103, 65, 224, .45); }
+  /* Started a stop lighter and the white letter sat on top of it rather than
+     in it. Every ramp here has to keep enough weight under the monogram. */
+  .c-teal   { background: linear-gradient(145deg, #4fdcc4, #1cbda8 52%, #0a8a80);
+              --gav-cast: rgba(10, 138, 128, .45); }
+  .c-rose   { background: linear-gradient(145deg, #ffb3bd, #fb6f86 52%, #e8365a);
+              --gav-cast: rgba(232, 54, 90, .45); }
+  .c-sky    { background: linear-gradient(145deg, #93dcfd, #38b3f0 52%, #0b82d4);
+              --gav-cast: rgba(11, 130, 212, .45); }
+  .c-lime   { background: linear-gradient(145deg, #cdf58a, #97d63f 52%, #629f16);
+              --gav-cast: rgba(98, 159, 22, .45); }
+  .gcard {
+    width: min(400px, 100%); display: grid; gap: 14px; padding: 30px;
+    border: 1px solid var(--line); border-radius: 14px; background: var(--bg2);
+    box-shadow: 0 24px 64px -24px rgba(0, 0, 0, .55);
+  }
+  .gcard h2 { margin: 0; font-size: 19px; font-weight: 640; letter-spacing: -.01em; }
+  .gwho { display: flex; align-items: center; gap: 12px; }
+  .gwho .gav { width: 46px; height: 46px; border-radius: 13px; font-size: 20px;
+               box-shadow: inset 0 1px 0 rgba(255, 255, 255, .4),
+                           inset 0 0 0 1px rgba(255, 255, 255, .14),
+                           0 4px 10px -4px var(--gav-cast, rgba(0, 0, 0, .35)); }
+  .gwho .gav.add { font-size: 22px; box-shadow: inset 0 0 0 2px var(--line2); }
+  .gcard button { min-height: 46px; border: 0; border-radius: 10px; font: 600 14px inherit; cursor: pointer; }
+  /* The one colour in this file that was written down instead of named. It was
+     a near-black brown, chosen when the accent was amber, and it stayed put
+     when the accent went blue — black text on a blue button. `--accent-ink` is
+     the token that already means "legible on the accent", in both themes. */
+  .gprimary {
+    background: var(--accent); color: var(--accent-ink);
+    display: flex; align-items: center; justify-content: center; gap: 9px;
+  }
+  .gprimary:disabled { opacity: .55; cursor: default; }
+  .gsecondary { background: var(--chip); color: var(--ink1); border: 1px solid var(--line2) !important; }
+  .gdiv { display: flex; align-items: center; gap: 12px; color: var(--ink3); font-size: 11px; text-transform: uppercase; letter-spacing: .12em; }
+  .gdiv::before, .gdiv::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+  .gcard form { display: grid; gap: 10px; }
+  .gcard label { display: grid; gap: 6px; font-size: 12px; font-weight: 500; color: var(--ink3); }
+  .gcard input[type="password"], .gcard input[type="text"] {
+    width: 100%; height: 44px; padding: 0 14px; border: 1px solid var(--line);
+    border-radius: 10px; background: var(--chip); color: var(--ink1); font: inherit; font-size: 14px; outline: 0;
+  }
+  .gcard input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  /* One line, a switch on the right — the shape every settings row in this app
+     already has. It was a bare `input type=checkbox` inside a label that is
+     `display: grid`, so it stacked above its own words at whatever size the
+     platform draws an unstyled box. Nothing else in PassBook uses a checkbox. */
+  .gopt {
+    display: flex; align-items: center; gap: 12px; padding: 11px 14px;
+    border: 1px solid var(--line); border-radius: 10px; background: var(--chip);
+  }
+  .gopt-text { flex: 1; font-size: 13px; color: var(--ink1); white-space: nowrap; }
+  .gswitch {
+    flex: 0 0 40px; width: 40px; height: 23px; min-height: 0 !important; padding: 0;
+    border-radius: 999px !important; background: var(--line2); border: 0; cursor: pointer;
+    position: relative; transition: background .18s ease;
+  }
+  .gswitch::after {
+    content: ""; position: absolute; top: 2.5px; left: 2.5px; width: 18px; height: 18px;
+    border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .3);
+    transition: transform .18s cubic-bezier(.2, .8, .3, 1);
+  }
+  .gswitch[aria-checked="true"] { background: var(--accent); }
+  .gswitch[aria-checked="true"]::after { transform: translateX(17px); }
+  .gswitch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .gerror { margin: 0; color: var(--danger); font-size: 12px; line-height: 1.5; }
+  .gerror:empty { display: none; }
+  .gback { background: none !important; border: 0 !important; color: var(--ink3); font: inherit; font-size: 12px; cursor: pointer; padding: 4px; min-height: 0 !important; }
+  .gback:hover { color: var(--ink2); }
+  /* Agent access, on the lock screen, because that is where somebody is
+     already thinking about what stays open while they are away. */
+  .gagents {
+    display: flex; align-items: center; gap: 10px; padding: 12px 14px;
+    border: 1px solid var(--line); border-radius: 12px; background: var(--bg2);
+    width: min(400px, 100%); font-size: 12px; color: var(--ink2);
+  }
+  .gagents .grow { flex: 1; }
+  .gagents button { min-height: 0; padding: 6px 11px; border-radius: 8px;
+    background: var(--chip); color: var(--ink1); border: 1px solid var(--line2);
+    font: 600 12px inherit; cursor: pointer; }
 </style>
 
 <nav id="nav"></nav>
-<main id="main"><p class="empty">Reading this machine…</p></main>
+<main id="main"><p class="empty">Reading this device…</p></main>
+<div id="gate" hidden></div>
 
 <script>
 (() => {
   const invoke = window.__TAURI__?.core?.invoke;
   const nav = document.getElementById("nav");
   const main = document.getElementById("main");
+  const gate = document.getElementById("gate");
   const esc = (v) => String(v ?? "").replace(/[&<>"]/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
 
   /** The icon set.
@@ -511,12 +814,30 @@
     window: ["In hours", "Allowed inside a schedule, refused outside it."],
     never:  ["Never", "Always refused."],
   };
+  /** The source list, and everything that is not on it.
+   *
+   *  Eight destinations, six of which were about how the thing works rather
+   *  than what is in it: a page for the daemon, a page for the ledger, a page
+   *  for machine grants, a page that repeated every key so it could carry a
+   *  three-way switch. Nothing was missing and nothing could be found.
+   *
+   *  Three places you go, and a Settings shelf for the rest. Everything that
+   *  moved is still a page and still reachable — it is one press further away
+   *  instead of permanently on screen.
+   */
   const PAGES = [
-    ["keys", "Keys", "key"], ["vault", "Vault", "lock"],
-    ["signins", "Sign-ins", "person"], ["access", "Access", "sliders"],
-    ["agents", "Agents", "chip"],
-    ["machines", "Machines", "monitor"],
-    ["broker", "Broker", "hub"], ["record", "Record", "doc"],
+    ["keys", "Keys", "key"],
+    ["signins", "Sign-ins", "person"],
+    ["machines", "Devices", "monitor"],
+    ["record", "Activity", "doc"],
+  ];
+
+  /** Settings rows: label, page, glyph, and the one line that says why to go. */
+  const SETTINGS = [
+    ["vault", "Security", "lock", "Sign-in, encryption and backup"],
+    ["access", "Permissions", "sliders", "What happens when something asks"],
+    ["apps", "Apps", "chip", "Which apps can read what"],
+    ["broker", "Advanced", "hub", "Background access and diagnostics"],
   ];
 
   let state = null, page = "keys", busy = false, notice = "";
@@ -524,7 +845,15 @@
   // store" but "may anything read it right now" — so it is fetched separately
   // and is allowed to be missing on an older CLI without blanking the window.
   let vault = null;
-  let vaultForm = { profile: "", label: "" };
+  let vaultForm = { profile: "", label: "", duration: "always" };
+  /** How long a sign-in lasts. No expiry first, because it is the default and
+   *  because the machines this runs on are working while nobody is watching. */
+  const SESSION_LENGTHS = [
+    ["always", "Until I lock it"],
+    ["8h", "8 hours"],
+    ["1d", "1 day"],
+    ["7d", "7 days"],
+  ];
   // Which groups are folded shut, and the lazily-fetched access grid. A grid
   // over a few hundred keys is not something to ship with every 5s refresh.
   let collapsed = {};
@@ -546,13 +875,26 @@
   // timer wiping the second one's tick.
   let copied = {};
   const copiedTimers = {};
+  // The chain check: its answer, and whether one is in flight. Held here
+  // rather than in `state` because `state` is replaced by every poll and the
+  // answer is not something a poll produces.
+  let chain = { answer: null, busy: false };
   // Backup: which shape, where, and the last thing that happened. The
   // passphrase is never held here — it goes straight from its field to the CLI
   // and the field is cleared, because a paint would otherwise put it back.
-  let backup = { shape: "encrypted", note: "", busy: "", said: "", ok: false };
+  let backup = { shape: "encrypted", note: "", busy: "", said: "", ok: false,
+                 // Writing a file out and reading one back in are two jobs that
+                 // share a card. Stacked, they were five unlabelled input rows
+                 // with no seam between them, and the passphrase an export
+                 // needs sat under the button that had already run.
+                 tab: "export" };
+  let addingProfile = false;
   let recoveryCode = "";
   // Which row is mid-edit. The background refresh must not wipe a half-typed
   // value out from under someone, so polling pauses while this is set.
+  let expanded = {};    // key -> true while its settings are open
+  let selectMode = false;   // whether rows show a checkbox
+  let adding = false;       // whether the add-a-key fields are on screen
   let revealed = {};    // key -> true once its value has been fetched and shown
   let values = {};      // key -> value, held only while revealed
   let confirming = null;
@@ -574,6 +916,55 @@
     finally { busy = false; paint(); }
   }
 
+  /** Approval requests, put in front of you by PassBook itself.
+   *
+   *  The broker used to post these with `osascript -e 'display notification'`,
+   *  which posts under Script Editor's identity because `osascript` is one of
+   *  its helpers — so the banner wore an AppleScript icon, and clicking it
+   *  brought up Script Editor's open-a-file panel. A notification about your
+   *  credentials should be from the app that holds them, and should open it.
+   *
+   *  The window is the only place a request can be answered, so this is also
+   *  the right place to raise one: it is announced by the process that can act
+   *  on it, and the broker's job is reduced to making sure that process exists.
+   */
+  const announced = new Set();
+  let canNotify = false;
+
+  async function readyNotifications() {
+    const api = window.__TAURI__?.notification;
+    if (!api) return;
+    try {
+      canNotify = await api.isPermissionGranted();
+      if (!canNotify) canNotify = (await api.requestPermission()) === "granted";
+      // Clicking the banner is somebody saying "yes, show me" — so land on the
+      // page with the buttons, not wherever they happened to leave the window.
+      api.onAction?.(() => { page = "access"; notice = ""; paint(); });
+    } catch { canNotify = false; }
+  }
+
+  function announce(pending) {
+    const live = new Set((pending || []).map((p) => p.id));
+    for (const id of [...announced]) if (!live.has(id)) announced.delete(id);
+    if (!canNotify) return;
+    const api = window.__TAURI__?.notification;
+    for (const request of pending || []) {
+      if (announced.has(request.id)) continue;
+      announced.add(request.id);
+      const names = (request.keys || []).slice(0, 3).join(", ");
+      const rest = (request.keys || []).length - 3;
+      const verb = { add: "wants to add", modify: "wants to change",
+                     delete: "wants to remove" }[request.kind] || "wants to read";
+      try {
+        api.sendNotification({
+          title: "PassBook",
+          body: `${request.app} ${verb} ${names || "a credential"}${
+            rest > 0 ? ` and ${rest} more` : ""}`,
+        });
+      } catch { /* a refused notification must not stop the request */ }
+    }
+  }
+
   async function refreshVault() {
     try { vault = await invoke("vault_state"); }
     catch { vault = null; }
@@ -588,6 +979,29 @@
   }
 
   const APP = "hivemind-content-studio";
+
+  /** How many key rows are built at a time, and how many are built right now.
+   *
+   *  A store of 281 keys is 11,351 nodes and 800KB of markup, and this window
+   *  rebuilds its page from a string on every state change — so ticking one
+   *  checkbox, copying one value or typing one letter into the search box each
+   *  cost a full rebuild of all of it. Measured in the same webview: 50ms a
+   *  keystroke, which is exactly the amount of lag a person notices while
+   *  typing.
+   *
+   *  So a page of rows is built, and more are added as they are scrolled to.
+   *  Everything above stays honest — the count in the header, the group counts,
+   *  the search, the bulk selection — because those are computed over the whole
+   *  filtered set. Only the rows nobody has scrolled to yet are missing.
+   */
+  const ROW_PAGE = 60;
+  let rowLimit = ROW_PAGE;
+  let rowGrower = null;
+
+  /** Back to one page of rows. Anything that changes which keys are listed
+   *  calls this: a filter that leaves a long list scrolled halfway is a filter
+   *  that looks like it did nothing. */
+  function resetRows() { rowLimit = ROW_PAGE; }
 
   /** Keys the current search matches. Case-insensitive substring, because a
    *  person hunting OPENAI_API_KEY types "openai", not a prefix. */
@@ -649,13 +1063,55 @@
 
   /** How many of a thing each page is about, so the list carries the shape of
    *  the store rather than eight identical words. */
+  /** Whether the page on screen lives on the Settings shelf. The sidebar entry
+   *  stays lit while you are inside one, so you always know where you are. */
+  const inSettings = () => page === "settings"
+    || SETTINGS.some(([id]) => id === page);
+
+  /** The way back out of a settings pane. */
+  function settingsBack(title) {
+    return `<button class="backlink" data-goto="settings">
+      ${icon("chevron", "tinyicon")} Settings</button>
+      <h2>${esc(title)}</h2>`;
+  }
+
+  function settingsPage() {
+    const pending = (state?.broker?.pending || []).length;
+    return `
+      <h2>Settings</h2>
+      <div class="group tight">
+        ${SETTINGS.map(([id, label, glyph, blurb]) => `
+          <button class="settingrow" data-goto="${id}">
+            <span class="statustile plain sm">${icon(glyph)}</span>
+            <span class="grow"><span class="settingname">${esc(label)}</span>
+              <span class="sub">${esc(blurb)}</span></span>
+            ${id === "access" && pending ? '<span class="dot"></span>' : ""}
+            ${icon("chevron", "tinyicon")}
+          </button>`).join("")}
+      </div>`;
+  }
+
+  /** An explanation that is true, worth having, and not worth reading twice.
+   *
+   *  This app explained itself in paragraphs: why a profile is not a store,
+   *  what a project name is worth as a claim, why an export is in the ledger.
+   *  All of it correct, all of it permanently on screen, and the effect of
+   *  putting it everywhere was a window that looked like documentation with
+   *  controls embedded in it. Folded away it costs one line until asked for.
+   */
+  function aside(html, label = "Why") {
+    return `<details class="aside"><summary>${esc(label)}</summary>
+      <div class="asidebody">${html}</div></details>`;
+  }
+
   function navCounts() {
     const links = state?.links || {};
     return {
       keys: (state?.store?.keys || []).length,
       signins: (signins || []).length,
-      agents: (state?.catalog?.agents || []).length,
-      machines: (links.lent || []).length + (links.borrowed || []).length,
+      // What the page lists, so the badge and the list cannot disagree.
+      machines: (links.lent || []).length + (links.tailnet || []).length
+              + (links.borrowed || []).length,
     };
   }
 
@@ -698,8 +1154,8 @@
           <span class="navfoot-s">${esc(exposed || !where ? detail : `${where} \u00b7 ${detail}`)}</span>
         </span>
       </button>
-      ${open ? `<button class="iconbtn navlock" data-locknow title="Lock and switch workspace"
-        aria-label="Lock and switch workspace">${icon("lock")}</button>` : ""}
+      <button class="iconbtn navlock" data-locknow title="Lock this window"
+        aria-label="Lock this window">${icon("lock")}</button>
     </div>`;
   }
 
@@ -711,19 +1167,29 @@
       <div class="navlist">${PAGES.map(([id, label, glyph]) => `
         <button data-page="${id}" aria-current="${page === id}">
           ${icon(glyph, "navicon")}<span class="navlabel">${label}</span>
-          ${id === "access" && pending ? '<span class="dot"></span>'
-            : counts[id] ? `<span class="navcount">${counts[id]}</span>` : ""}
+          ${counts[id] ? `<span class="navcount">${counts[id]}</span>` : ""}
         </button>`).join("")}</div>
-      ${navFoot()}`;
+      <div class="navbottom">
+        <div class="navlist">
+          <button data-page="settings" aria-current="${inSettings()}">
+            ${icon("sliders", "navicon")}<span class="navlabel">Settings</span>
+            ${pending ? '<span class="dot"></span>' : ""}
+          </button>
+        </div>
+        ${navFoot()}
+      </div>`;
     nav.querySelectorAll("[data-page]").forEach((b) =>
-      b.onclick = () => { page = b.dataset.page; paint(); });
-    // Lock and go straight to the screen you would need next. Locking and then
-    // leaving someone on the Keys page is how a lock button gets pressed twice.
-    nav.querySelectorAll("[data-locknow]").forEach((b) => b.onclick = async () => {
-      page = "switch";
-      revealed = {}; values = {}; history = {};
-      await callVault("vault_signout");
-    });
+      b.onclick = () => {
+        page = b.dataset.page; resetRows(); paint();
+        // Opening the Record is the moment somebody wants to know, so ask then
+        // — rather than on every poll, whatever page they were on.
+        if (page === "record" && !chain.answer && !chain.busy) checkChain();
+      });
+    // Lock puts the WINDOW away — nothing else. It used to sign the broker out,
+    // which meant closing the app at the end of the day also stopped every
+    // agent reading credentials overnight; what agent access does is decided on
+    // the lock screen this drops you on, by somebody already thinking about it.
+    nav.querySelectorAll("[data-locknow]").forEach((b) => b.onclick = () => lockWindow());
   }
 
   // Mirrors the HivemindOS agent-env card: name and actions on one line, the
@@ -740,44 +1206,144 @@
     return new Set(Array.isArray(listed) ? listed : []);
   }
 
+  /** One key, one line.
+   *
+   *  What was here before put every policy a key has on the row itself: a
+   *  reach dropdown, an audience sentence with its own Change button, a
+   *  project button, and the last-used line — three lines and five controls,
+   *  multiplied by a few hundred. On a store this size the page rendered 363
+   *  buttons and 60 dropdowns before you had done anything, and the key names
+   *  were the smallest thing on it.
+   *
+   *  A row is now a name, whether it is hidden, and the two things people
+   *  actually do (look, copy). Everything else is a key's *settings*, and it
+   *  opens when you ask for it — the same trade every list on this platform
+   *  makes, and the reason those lists stay readable at any length.
+   */
   function keyRow(k, readable) {
     const shown = revealed[k];
+    const open = expanded[k];
     const pending = confirming === k;
     // A key nobody encrypted is not protected by the vault, whatever the vault
     // says about itself. Saying so on the row is the whole point: this app told
     // someone "Vault locked" in the sidebar while the eye icon beside every key
     // still worked, and the sentence that explained why was below 279 rows.
     const bare = readable ? readable.has(k) : false;
-    return `<div class="keyrow">
+    return `<div class="keyrow${open ? " open" : ""}">
       <div class="head">
-        <input type="checkbox" class="pick" data-pick="${esc(k)}"
-          ${picked[k] ? "checked" : ""} aria-label="Select ${esc(k)}" />
-        <span class="named"><span class="mono">${esc(k)}</span>
-          ${shown || pending ? "" : `<span class="masked" title="Hidden">••••••••••</span>`}
+        ${selectMode ? `<input type="checkbox" class="pick" data-pick="${esc(k)}"
+          ${picked[k] ? "checked" : ""} aria-label="Select ${esc(k)}" />` : ""}
+        <span class="named" data-open="${esc(k)}"><span class="mono">${esc(k)}</span>
+          ${shown ? "" : `<span class="masked" title="Hidden">••••••••••</span>`}
           ${bare ? `<span class="bare" title="This value is not encrypted. Anything running as you can read it, signed in or not.">${icon("unlock", "tinyicon")} readable</span>` : ""}</span>
-        ${pending ? `
-          <span class="confirming"><span class="sub">Remove it? Another app may be using it,
-            and the value is not recoverable from here.</span></span>
-          <button class="act" data-cancel="1">Cancel</button>
-          <button class="act destructive" data-rmgo="${esc(k)}" ${busy ? "disabled" : ""}>
-            ${icon("trash")} Remove</button>
-        ` : `
-          <button class="iconbtn ${shown ? "on" : ""}" data-reveal="${esc(k)}"
-            title="${shown ? "Hide value" : "Reveal value"}"
-            aria-label="${shown ? "Hide value" : "Reveal value"}">${icon(shown ? "eyeOff" : "eye")}</button>
-          <button class="iconbtn ${copied[k] ? "done" : ""}" data-copy="${esc(k)}"
-            title="${copied[k] ? "Copied" : "Copy value"}"
-            aria-label="${copied[k] ? "Copied" : "Copy value"}">${icon(copied[k] ? "check" : "copy")}</button>
-          <button class="iconbtn ${history[k] ? "on" : ""}" data-hist="${esc(k)}"
-            title="Who has used this key" aria-label="Who has used this key">${icon("history")}</button>
-          <button class="iconbtn danger" data-remove="${esc(k)}" title="Remove"
-            aria-label="Remove">${icon("trash")}</button>
-        `}
+        <button class="iconbtn ${shown ? "on" : ""}" data-reveal="${esc(k)}"
+          title="${shown ? "Hide value" : "Reveal value"}"
+          aria-label="${shown ? "Hide value" : "Reveal value"}">${icon(shown ? "eyeOff" : "eye")}</button>
+        <button class="iconbtn ${copied[k] ? "done" : ""}" data-copy="${esc(k)}"
+          title="${copied[k] ? "Copied" : "Copy value"}"
+          aria-label="${copied[k] ? "Copied" : "Copy value"}">${icon(copied[k] ? "check" : "copy")}</button>
+        <button class="iconbtn danger" data-remove="${esc(k)}" title="Remove"
+          aria-label="Remove ${esc(k)}">${icon("trash")}</button>
+        <button class="iconbtn disclose" data-open="${esc(k)}"
+          title="${open ? "Hide settings" : "Settings for this key"}"
+          aria-expanded="${open}"
+          aria-label="Settings for ${esc(k)}">${icon("chevron")}</button>
       </div>
       ${shown ? `<input class="val" data-val="${esc(k)}" value="${esc(values[k] ?? "")}"
         spellcheck="false" autocapitalize="off" placeholder="empty" />` : ""}
-      ${audienceBlock(k, usedLine(k))}
-      ${history[k] ? historyBlock(k) : ""}
+      ${pending ? `<div class="confirmstrip">
+        <span class="grow">Remove it? Another app may be using it, and the value is
+          not recoverable from here.</span>
+        <button class="act" data-cancel="1">Cancel</button>
+        <button class="act destructive" data-rmgo="${esc(k)}" ${busy ? "disabled" : ""}>
+          ${icon("trash")} Remove</button>
+      </div>` : ""}
+      ${open ? keyDetail(k) : ""}
+    </div>`;
+  }
+
+  /** A key's settings, shown only while its row is open.
+   *
+   *  Every control that used to sit on the row lives here, plus the one that
+   *  used to have a page of its own: whether a read is answered, asked about
+   *  or refused. That was a list of all 281 keys with a three-way switch on
+   *  each — 854 buttons to change one of them, on a page whose other half was
+   *  about something else entirely.
+   *
+   *  Two columns, and the second one is only as wide as the widest control in
+   *  it. The first version pushed each control to the right edge of the panel
+   *  with `margin-left: auto`, which on a full-width window left a hand's
+   *  width of nothing between a label and the thing it labels — the eye has to
+   *  travel it on every row, and on a wide screen it gets worse, not better.
+   *
+   *  Nothing here opens a different view. Apps and Projects each used to be a
+   *  button that replaced the whole panel with an editor, three clicks and a
+   *  Save to change what is now one click on a switch that was already on
+   *  screen. They are the same three-way choice as the row above them, so they
+   *  are drawn the same way and applied the same way: immediately.
+   */
+  function keyDetail(k) {
+    const cat = state.catalog || {};
+    const aud = cat.audiences?.[k];
+    const proj = cat.projects?.[k];
+    const used = usedLine(k);
+    const mode = modeOf(k);
+
+    // A draft exists only between choosing "Only chosen" and picking the first
+    // name, because until then there is no rule that could be saved.
+    const audDraft = (audienceFor === k && audienceDraft)
+      || { mode: aud?.mode || "all", agents: [...(aud?.agents || [])] };
+    const projDraft = (projectsFor === k && projectsDraft)
+      || { mode: proj?.mode || "all", projects: [...(proj?.projects || [])] };
+
+    const seg = (attr, chosen, options) => `<div class="seg">${options.map(([id, label]) =>
+      `<button data-${attr}="${id}" data-key="${esc(k)}" aria-pressed="${chosen === id}"
+        ${busy ? "disabled" : ""}>${esc(label)}</button>`).join("")}</div>`;
+
+    const chips = (attr, all, chosen, empty) => `<div class="dfull pickrow">
+      ${all.length ? all.map((name) => `
+        <button class="pickchip" data-${attr}="${esc(name)}" data-key="${esc(k)}"
+          aria-pressed="${chosen.includes(name)}" ${busy ? "disabled" : ""}
+          >${esc(name)}</button>`).join("")
+        : `<span class="sub">${esc(empty)}</span>`}
+      ${chosen.length ? "" : `<span class="sub">Pick at least one — nothing changes until you do.</span>`}
+    </div>`;
+
+    const known = cat.agents || [];
+    const seenProjects = [...new Set([...(cat.projects_seen || []),
+                                      ...(cat.project ? [cat.project] : []),
+                                      ...projDraft.projects])].sort();
+
+    return `<div class="keydetail">
+      ${used ? `<p class="usedline dfull">${esc(used)}</p>` : ""}
+
+      <div class="drow"><span class="dlabel">When something asks</span>
+        ${seg("mode", mode, [["always", MODE.always[0]], ["ask", MODE.ask[0]],
+                             ["never", MODE.never[0]]])}</div>
+
+      <div class="drow"><span class="dlabel">Shared with</span>${scopePicker(k)}</div>
+
+      <div class="drow"><span class="dlabel">Apps</span>
+        ${seg("audmode", audDraft.mode, [["all", "Every app"], ["include", "Only chosen"],
+                                         ["exclude", "All except"]])}</div>
+      ${audDraft.mode === "all" ? ""
+        : chips("audagent", known, audDraft.agents,
+                "No app has asked for a credential yet, so there is nobody to choose.")}
+
+      <div class="drow"><span class="dlabel">Projects</span>
+        ${seg("projmode", projDraft.mode, [["all", "Every project"], ["include", "Only these"],
+                                           ["exclude", "All except"]])}</div>
+      ${projDraft.mode === "all" ? "" : `
+        ${chips("projname", seenProjects, projDraft.projects, "")}
+        <div class="dfull addrow two">
+          <input id="proj-new" placeholder="Another project name" spellcheck="false"
+            value="${esc(projectTyped)}" />
+          <button class="act" data-projadd data-key="${esc(k)}">${icon("plus")} Add</button>
+        </div>`}
+
+      <div class="drow"><span class="dlabel">History</span>
+        <button class="act" data-hist="${esc(k)}">${history[k] ? "Hide" : "Who has used this"}</button></div>
+      ${history[k] ? `<div class="dfull">${historyBlock(k)}</div>` : ""}
     </div>`;
   }
 
@@ -815,14 +1381,14 @@
       <span class="grow"><strong>${on.length}</strong> selected</span>
       ${bulkConfirm ? `
         <span class="warn">${icon("alert")} Remove ${on.length} key${on.length === 1 ? "" : "s"}?
-          Other apps on this machine may be using ${on.length === 1 ? "it" : "them"},
+          Other apps on this device may be using ${on.length === 1 ? "it" : "them"},
           and ${on.length === 1 ? "it is" : "they are"} not recoverable from here.</span>
         <button class="act" data-bulkcancel>Cancel</button>
         <button class="act destructive" data-bulkgo ${busy ? "disabled" : ""}>
           ${icon("trash")} Remove ${on.length}</button>
       ` : `
         <select class="scope" data-bulkscope ${busy ? "disabled" : ""}>
-          <option value="">Set reach…</option>
+          <option value="">Share with…</option>
           ${(cat?.scope_options || []).map((s) =>
             `<option value="${s}">${esc(SCOPE_WORDS[s] || s)}</option>`).join("")}
         </select>
@@ -830,8 +1396,8 @@
         <button class="act" data-bulkclear>Clear</button>
       `}
       ${locked.length && !bulkConfirm ? `<div class="note">${locked.length} of these
-        ${locked.length === 1 ? "is" : "are"} owned by another workspace — their reach
-        will not change.</div>` : ""}
+        ${locked.length === 1 ? "is" : "are"} owned by another workspace and will not
+        change.</div>` : ""}
     </div>`;
   }
 
@@ -842,11 +1408,26 @@
    *  tagging — and a search collapses back to a flat list, because when you are
    *  hunting one key the headings are in the way.
    */
+  /** The row that says how many are not built yet, and loads them when reached.
+   *
+   *  Kept as a real element rather than a scroll handler: an observer fires
+   *  once when it comes into view, where a scroll handler fires on every pixel
+   *  and then has to measure the page to decide it has nothing to do. It is
+   *  also a button, so this works from the keyboard and without the observer.
+   */
+  function moreRow(remaining) {
+    if (remaining <= 0) return "";
+    return `<button class="morerow" data-more="1">${icon("chevron", "tinyicon")}
+      Show ${Math.min(remaining, ROW_PAGE)} more · ${remaining} not shown</button>`;
+  }
+
   function groupedKeys(keys) {
     if (!keys.length) return "";
     const cat = state.catalog;
     const readable = readableSet();
-    if (!cat?.available || query.trim()) return keys.map((k) => keyRow(k, readable)).join("");
+    const flat = () => keys.slice(0, rowLimit).map((k) => keyRow(k, readable)).join("")
+      + moreRow(keys.length - rowLimit);
+    if (!cat?.available || query.trim()) return flat();
 
     const shown = new Set(keys);
     const buckets = [];
@@ -854,12 +1435,31 @@
       const here = members.filter((m) => shown.has(m));
       if (here.length) buckets.push([group, here]);
     }
-    if (buckets.length < 2) return keys.map((k) => keyRow(k, readable)).join("");
+    if (buckets.length < 2) return flat();
 
-    return buckets.map(([group, members]) => {
+    // The window ends where the rows run out, headings included. An earlier
+    // version kept emitting every group and only withheld their rows, which
+    // left thirty group headers with nothing under them — indistinguishable
+    // from thirty empty groups. A list that simply stops, with a count of what
+    // is below it, is the one people already know how to read.
+    //
+    // A group's count is the whole group in the current filter, not the part
+    // that happens to be built: a number that changed as you scrolled would be
+    // no use for deciding whether to open one.
+    let budget = rowLimit;
+    let held = 0;
+    const parts = [];
+    for (const [group, members] of buckets) {
       const shut = collapsed[group];
+      // A group somebody folded shut costs no rows, so it stays a landmark
+      // however far down the list it is, and none of it counts as withheld —
+      // it is not shown because it was closed, which is a different thing.
+      if (!shut && budget <= 0) { held += members.length; continue; }
+      const room = shut ? [] : members.slice(0, budget);
+      budget -= room.length;
+      held += members.length - room.length - (shut ? members.length : 0);
       const restricted = members.filter((m) => cat.audiences?.[m]).length;
-      return `<div class="grouprow" data-group="${esc(group)}" role="button" tabindex="0"
+      parts.push(`<div class="grouprow" data-group="${esc(group)}" role="button" tabindex="0"
                 aria-expanded="${!shut}">
           <span class="caret">${icon("chevron", "tinyicon")}</span>
           ${avatar(group)}
@@ -868,14 +1468,15 @@
           ${restricted ? `<span class="grestricted">${icon("shield", "tinyicon")}
             ${restricted} restricted</span>` : ""}
         </div>
-        ${shut ? "" : members.map((k) => keyRow(k, readable)).join("")}`;
-    }).join("");
+        ${room.map((k) => keyRow(k, readable)).join("")}`);
+    }
+    return parts.join("") + moreRow(held);
   }
 
   const SCOPE_WORDS = {
-    workspace: "This workspace",
-    machine: "All workspaces here",
-    tailnet: "All workspaces + linked machines",
+    workspace: "This workspace only",
+    machine: "This device",
+    tailnet: "All my devices",
   };
 
   /** How far a key reaches, and whether this workspace may say.
@@ -898,157 +1499,47 @@
         · set by ${esc(rule.owner)}</span>`;
     }
     return `<select class="scope" data-scope="${esc(k)}" ${busy ? "disabled" : ""}
-      title="How far this key reaches">${options}</select>`;
+      title="Where this key can be used">${options}</select>`;
   }
 
-  /** Who a key is for, as a line under the row — and the control to change it. */
-  function audienceBlock(k, used = "") {
-    const cat = state.catalog;
-    if (!cat?.available) return used ? `<div class="sub">${used}</div>` : "";
-    const rule = cat.audiences?.[k];
-    const editing = audienceFor === k;
-    const label = !rule ? "every agent"
-      : rule.mode === "include" ? `only ${rule.agents.join(", ")}`
-      : `all except ${rule.agents.join(", ")}`;
-
-    if (!editing) {
-      const prule = cat.projects?.[k];
-      const plabel = !prule ? ""
-        : prule.mode === "include" ? `only in ${prule.projects.join(", ")}`
-        : `not in ${prule.projects.join(", ")}`;
-      return `<div class="sub aud">
-        ${used ? `<span class="used">${used}</span>` : ""}
-        ${scopePicker(k)}
-        <span class="${rule ? "restricted" : ""}">${rule ? icon("shield", "tinyicon") : ""}
-          Readable by ${esc(label)}</span>
-        <button class="icon" data-aud="${esc(k)}">${icon("pencil", "tinyicon")} Change</button>
-        ${prule ? `<span class="restricted">${icon("folder", "tinyicon")} ${esc(plabel)}</span>` : ""}
-        <button class="icon" data-proj="${esc(k)}">${icon("folder", "tinyicon")}
-          ${prule ? "Projects" : "Limit to a project"}</button>
-      </div>${projectsFor === k ? projectEditor(k) : ""}`;
-    }
-    const known = cat.agents || [];
-    const draft = audienceDraft || { mode: rule?.mode || "all", agents: [...(rule?.agents || [])] };
-    const needsAgents = draft.mode !== "all";
-    const ready = !needsAgents || draft.agents.length > 0;
-    const modeLabel = (m) => ({ all: "Every agent", include: "Only chosen", exclude: "All except" }[m]);
-    const summary = draft.mode === "all"
-      ? "every agent will be able to read it"
-      : draft.agents.length
-        ? (draft.mode === "include"
-            ? `only ${draft.agents.join(", ")} will be able to read it`
-            : `everyone except ${draft.agents.join(", ")} will be able to read it`)
-        : "now pick which agents";
-
-    return `<div class="audedit">
-      <div class="sub">Who may read <span class="mono">${esc(k)}</span>?</div>
-      <div class="audmodes">
-        ${["all", "include", "exclude"].map((m) =>
-          `<button class="act ${draft.mode === m ? "primary" : ""}" data-audmode="${m}"
-            aria-pressed="${draft.mode === m}">${modeLabel(m)}</button>`).join("")}
-      </div>
-      ${needsAgents ? (known.length ? `<div class="audlist">
-        ${known.map((a) => `<label><input type="checkbox" data-audagent="${esc(a)}"
-          ${draft.agents.includes(a) ? "checked" : ""} /> ${esc(a)}</label>`).join("")}
-      </div>` : `<p class="note">No agents have asked for a credential yet, so there is
-        nobody to choose. They appear here the first time one asks.</p>`) : ""}
-      <p class="note">${draft.mode === "exclude"
-        ? "Excluding an agent is final: it is refused whatever the access mode says, and no approval or unlock overrides it."
-        : `Result: ${esc(summary)}.`}</p>
-      <div class="audmodes">
-        <button class="act primary" data-audsave="${esc(k)}" ${ready && !busy ? "" : "disabled"}>Save</button>
-        <button class="act" data-audcancel="1">Cancel</button>
-      </div>
-    </div>`;
-  }
-
-  /** Which projects a key is for.
+  /** The store.
    *
-   *  The same three modes as the agent audience, because it is the same
-   *  question asked about a different noun. A project is a claim its caller
-   *  makes — usually the basename of a git root — which is exactly the standing
-   *  an agent name has, and it buys the same thing: a key limited to one
-   *  checkout is not handed to an agent running in another, so an instruction
-   *  smuggled into one repository cannot spend another repository's credentials.
+   *  The page used to open with a paragraph explaining what a store is, a
+   *  headline reading "281 STORED · WORKSPACE MAIN", a permanently open
+   *  two-field add form, a checkbox on every row, and the file path in grey at
+   *  the bottom. All of that was on screen before you had asked for any of it.
+   *
+   *  What is left is a search box and the keys. Adding one and selecting
+   *  several are both things you do occasionally and deliberately, so both are
+   *  a press away; the path and the encryption panel moved to Settings, where
+   *  the rest of the machine's plumbing already lives.
    */
-  function projectEditor(k) {
-    const cat = state.catalog || {};
-    const rule = cat.projects?.[k];
-    const draft = projectsDraft
-      || { mode: rule?.mode || "all", projects: [...(rule?.projects || [])] };
-    const known = [...new Set([...(cat.projects_seen || []),
-                               ...(cat.project ? [cat.project] : []),
-                               ...draft.projects])].sort();
-    const needs = draft.mode !== "all";
-    const ready = !needs || draft.projects.length > 0;
-    const modeLabel = (m) => ({ all: "Every project", include: "Only these",
-                                exclude: "All except" }[m]);
-    const summary = draft.mode === "all"
-      ? "readable from any project"
-      : draft.projects.length
-        ? (draft.mode === "include"
-            ? `readable only from ${draft.projects.join(", ")}`
-            : `readable everywhere except ${draft.projects.join(", ")}`)
-        : "now pick which projects";
-
-    return `<div class="audedit">
-      <div class="sub">Which projects may read <span class="mono">${esc(k)}</span>?</div>
-      <div class="audmodes">
-        ${["all", "include", "exclude"].map((m) =>
-          `<button class="act ${draft.mode === m ? "primary" : ""}" data-projmode="${m}"
-            aria-pressed="${draft.mode === m}">${modeLabel(m)}</button>`).join("")}
-      </div>
-      ${needs ? `
-        ${known.length ? `<div class="audlist">
-          ${known.map((name) => `<label><input type="checkbox" data-projname="${esc(name)}"
-            ${draft.projects.includes(name) ? "checked" : ""} /> ${esc(name)}${
-              name === cat.project ? " (here)" : ""}</label>`).join("")}
-        </div>` : ""}
-        <div class="addrow two">
-          <input id="proj-new" placeholder="Another project name" spellcheck="false"
-            value="${esc(projectTyped)}" />
-          <button class="act" data-projadd>${icon("plus")} Add</button>
-        </div>` : ""}
-      <p class="note">${draft.mode === "exclude"
-        ? "Excluding a project is final: a caller working there is refused whatever the access mode says."
-        : `Result: ${esc(summary)}.`}</p>
-      <p class="note">A project is what the caller says it is \u2014 the name of its git root,
-      or <span class="mono">PASSBOOK_PROJECT</span>. It is a claim, like an agent's name, not a
-      password. It stops a confused agent reaching across checkouts; it does not stop someone
-      who already runs code as you.</p>
-      <div class="audmodes">
-        <button class="act primary" data-projsave="${esc(k)}" ${ready && !busy ? "" : "disabled"}>Save</button>
-        <button class="act" data-projcancel="1">Cancel</button>
-      </div>
-    </div>`;
-  }
-
   function keysPage() {
     const s = state.store || {};
-    const seal = state.sealing || {};
     const keys = shownKeys();
+    const all = (s.keys || []).length;
     return `
       <h2>Keys</h2>
-      <p class="lede">One store, shared by every app on this Mac. Paste a key once and
-      they all have it. Reveal shows a value and records that you looked.</p>
       <div class="group">
-        <div class="grouphead">
-          <h3>${countLabel(keys.length, (s.keys || []).length)} · workspace ${esc(s.workspace || "main")}</h3>
+        <div class="toolbar">
           ${searchField("q-keys")}
+          <span class="grow"></span>
+          ${all ? `<button class="act ${selectMode ? "primary" : ""}" data-selectmode="1">
+            ${selectMode ? "Done" : "Select"}</button>` : ""}
+          <button class="act ${adding ? "primary" : ""}" data-addopen="1">
+            ${icon("plus")} Add key</button>
         </div>
-        <div class="addrow">
-          <input id="k" placeholder="KEY_NAME" spellcheck="false" autocapitalize="off" />
-          <input id="v" type="password" placeholder="value" />
-          <button class="act primary" id="addgo" ${busy ? "disabled" : ""}>${icon("plus")} Add</button>
-        </div>
-        ${bulkBar(keys)}
+        ${adding ? `<div class="addrow">
+          <input id="k" placeholder="Name" spellcheck="false" autocapitalize="off" />
+          <input id="v" type="password" placeholder="Value" />
+          <button class="act primary" id="addgo" ${busy ? "disabled" : ""}>Add</button>
+        </div>` : ""}
+        ${selectMode ? bulkBar(keys) : ""}
         ${groupedKeys(keys)
           || `<div class="empty">${query.trim()
                 ? `Nothing matches “${esc(query)}”.` : "No keys yet."}</div>`}
-        <p class="note">${esc(s.path || "")}${s.writes_to && s.writes_to !== s.path
-          ? `<br>New keys are written to this workspace: ${esc(s.writes_to)}` : ""}</p>
       </div>
-      ${encryptionPanel(seal)}`;
+      ${query.trim() || !all ? "" : `<p class="note countnote">${countLabel(keys.length, all)}</p>`}`;
   }
 
   /** Encryption at rest, with the way to fix it in the same box.
@@ -1065,38 +1556,37 @@
 
     let action = "";
     if (!v?.supported) {
-      action = `<p class="note">This machine has no vault runtime yet.
+      action = `<p class="note">This device has no vault runtime yet.
         Run <code>passbook install</code> to add one.</p>`;
     } else if (!v.profiles?.length) {
       // One action, one password. Creating a profile, sealing, starting the
       // broker and signing in are never useful apart, and a first-run screen
       // that asks for the same password four times is one people abandon.
       action = `
-        <p class="note">One step: this makes a profile to hold the key, encrypts
-        every value under it, and signs you in. Values behind a framework's public
-        prefix stay readable — a build inlines those into a browser bundle long
-        before anyone could sign in, so encrypting them protects nothing.</p>
+        <p class="note">One step: this makes a profile to hold the key, encrypts every
+        value under it, and signs you in.</p>
         <div class="addrow">
           <input id="sec-label" placeholder="Your name" spellcheck="false" value="Owner" />
           <input id="sec-pw" type="password" placeholder="New vault password" />
-          <button class="act primary" id="sec-go" ${busy ? "disabled" : ""}>Secure this machine</button>
+          <button class="act primary" id="sec-go" ${busy ? "disabled" : ""}>Secure this device</button>
         </div>
-        <p class="note">Nothing else on this machine stores that password, so pick
-        something you will not lose. You can undo the whole thing later.</p>`;
+        <p class="note">Nothing else on this device stores that password, so pick
+        something you will not lose. You can undo the whole thing later.</p>
+        ${aside(`<p>Values behind a framework's public prefix stay readable \u2014 a build
+          inlines those into a browser bundle long before anyone could sign in, so
+          encrypting them protects nothing.</p>`, "What stays readable")}`;
     } else if (!sealed) {
       action = `
-        <p class="note">${readable} value${readable === 1 ? "" : "s"}
-        ${readable === 1 ? "is" : "are"} still readable by anything running as you.
-        Sealing encrypts ${readable === 1 ? "it" : "them"} under your profile;
-        nothing can read ${readable === 1 ? "it" : "them"} again until you sign in.</p>
+        <p class="note">Encrypting ${readable === 1 ? "it" : "them"} means nothing can
+        read ${readable === 1 ? "it" : "them"} again until you sign in.</p>
         <div class="addrow two">
           <input id="seal-pw" type="password" placeholder="Vault password" />
-          <button class="act primary" id="seal-go" ${busy ? "disabled" : ""}>Seal the store</button>
+          <button class="act primary" id="seal-go" ${busy ? "disabled" : ""}>Encrypt everything</button>
         </div>`;
     } else if (!v.unlocked) {
       action = `
         <p class="note">Everything is encrypted and the vault is shut, so apps on
-        this machine currently have no credentials. Sign in to give them some.</p>
+        this device currently have no credentials. Sign in to give them some.</p>
         <div class="addrow two">
           <input id="si-pw2" type="password" placeholder="Vault password" />
           <button class="act primary" id="si-go2" ${busy ? "disabled" : ""}>Sign in</button>
@@ -1109,14 +1599,20 @@
 
     return `
       <div class="group">
-        <h3>Encryption at rest</h3>
+        <h3>Encryption</h3>
         <div class="row"><div class="grow">${esc(detail)}</div>
           <span class="tag ${sealed ? "on" : "off"}">${sealed ? "Encrypted" : "Readable"}</span></div>
         ${action}
-        <p class="note">Sealing protects the store on a stolen laptop, a backup, a
-        synced home folder, or a copy that ends up in a repo. While you are signed
-        in, code running as you can still ask the broker for a key — that is what
-        Access rules are for.</p>
+        ${sealed && v?.unlocked ? `<div class="addrow two">
+          <input id="sl-pw" type="password" placeholder="Vault password" />
+          <button class="act" id="unseal-go" ${busy ? "disabled" : ""}>Turn off encryption</button>
+        </div>` : ""}
+        ${aside(`<p>Encryption protects the store on a stolen laptop, a backup, a synced
+          home folder, or a copy that ends up in a repo. While you are signed in, code
+          running as you can still ask for a key \u2014 that is what Permissions are
+          for.</p>${sealed ? `<p>Turning it off puts every value back in the clear on
+          disk. The way out is here on purpose \u2014 an encryption you cannot reverse is
+          one nobody turns on.</p>` : ""}`)}
       </div>`;
   }
 
@@ -1124,13 +1620,13 @@
   const sentence = (s) => String(s || "").replace(/^./, (c) => c.toUpperCase());
 
   function profileLabel(id) {
-    return (vault?.profiles || []).find((p) => p.id === id)?.label || id || "this machine";
+    return (vault?.profiles || []).find((p) => p.id === id)?.label || id || "this device";
   }
 
   const BACKUP_SHAPES = {
     encrypted: ["Encrypted", "A passphrase you choose. Portable, needs nothing installed at the other end."],
     gpg: ["GPG", "An armoured GPG message, symmetric under a passphrase."],
-    plain: ["Plain text", "Every value readable. For moving to a machine that has no PassBook yet."],
+    plain: ["Plain text", "Every value readable. For moving to a device that has no PassBook yet."],
   };
 
   function defaultExportPath(shape) {
@@ -1147,101 +1643,145 @@
    *  purpose: "export" reads like "back up", and a plaintext backup is a copy
    *  of every credential you own.
    */
+  /** Writing the store out, and reading one back in.
+   *
+   *  Both used to be on screen at once: five unlabelled input rows in a column,
+   *  with no seam between the two jobs and the passphrase an export needs
+   *  sitting *under* the button that had already run without it. They are one
+   *  job at a time, so they are one at a time.
+   */
   function backupPanel() {
     const v = vault;
     const shape = backup.shape;
     const [, blurb] = BACKUP_SHAPES[shape];
     const needsPass = shape !== "plain";
     const locked = v?.supported && v.fully_sealed && !v.unlocked;
+    const exporting = backup.tab !== "import";
+
+    const out = `
+      ${locked ? `<p class="note">The vault is shut, so there is nothing readable to
+        export. Sign in first.</p>` : ""}
+      <div class="row"><span class="dlabel">Format</span>
+        <div class="seg">${Object.entries(BACKUP_SHAPES).map(([id, [label]]) =>
+          `<button data-bshape="${id}" aria-pressed="${shape === id}">${label}</button>`).join("")}</div>
+      </div>
+      <p class="note">${esc(blurb)}</p>
+      ${needsPass ? `<div class="addrow one">
+        <input id="bk-pass" type="password" placeholder="Passphrase for the file" />
+      </div>` : `<p class="note err">${icon("alert", "tinyicon")} Every value in that file
+        will be readable by anything that can open it. It is not a backup you keep; it is
+        a thing you move and then destroy.</p>`}
+      <div class="addrow two">
+        <input id="bk-path" value="${esc(backup.path || defaultExportPath(shape))}"
+          spellcheck="false" placeholder="Where to write it" />
+        <button class="act ${shape === "plain" ? "danger" : "primary"}" id="bk-export"
+          ${busy || locked ? "disabled" : ""}>${icon("out")} Export</button>
+      </div>`;
+
+    const back = `
+      <p class="note">Encrypted, GPG and plain text are all recognised by looking at
+      the file.</p>
+      <div class="addrow one">
+        <input id="bk-inpass" type="password" placeholder="Its passphrase, if it has one" />
+      </div>
+      <div class="addrow three">
+        <input id="bk-in" placeholder="Path to an export" spellcheck="false" />
+        <button class="act" id="bk-inspect" ${busy ? "disabled" : ""}>${icon("eye")} Inspect</button>
+        <button class="act primary" id="bk-import" ${busy ? "disabled" : ""}>${icon("into")} Import</button>
+      </div>`;
 
     return `
       <div class="group">
-        <h3>Backup and transfer</h3>
-        ${locked ? `<p class="note">The vault is shut, so there is nothing readable to
-          export. Sign in first.</p>` : ""}
-        <div class="row">
-          <div class="grow">Write every key in this store to one file.</div>
-          <div class="seg">${Object.entries(BACKUP_SHAPES).map(([id, [label]]) =>
-            `<button data-bshape="${id}" aria-pressed="${shape === id}">${label}</button>`).join("")}</div>
+        <div class="grouphead">
+          <h3>Backup</h3>
+          <div class="seg">
+            <button data-btab="export" aria-pressed="${exporting}">Export</button>
+            <button data-btab="import" aria-pressed="${!exporting}">Import</button>
+          </div>
         </div>
-        <p class="note">${esc(blurb)}</p>
-        <div class="addrow two">
-          <input id="bk-path" value="${esc(backup.path || defaultExportPath(shape))}"
-            spellcheck="false" placeholder="Where to write it" />
-          <button class="act ${shape === "plain" ? "danger" : "primary"}" id="bk-export"
-            ${busy || locked ? "disabled" : ""}>${icon("out")} Export</button>
-        </div>
-        ${needsPass ? `<div class="addrow two">
-          <input id="bk-pass" type="password" placeholder="Passphrase for the export" />
-          <span class="tag">${shape === "gpg" ? "gpg, symmetric" : "scrypt + AES-GCM"}</span>
-        </div>` : `<p class="note err">${icon("alert", "tinyicon")} Every value in that file
-          will be readable by anything that can open it. It is not a backup you keep; it is
-          a thing you move and then destroy.</p>`}
-
-        <div class="row"><div class="grow">Read an export back in. Encrypted, GPG and
-          plain text are all recognised by looking at the file.</div></div>
-        <div class="addrow two">
-          <input id="bk-in" placeholder="Path to an export" spellcheck="false" />
-          <button class="act" id="bk-inspect" ${busy ? "disabled" : ""}>${icon("eye")} Inspect</button>
-        </div>
-        <div class="addrow two">
-          <input id="bk-inpass" type="password" placeholder="Its passphrase, if it has one" />
-          <button class="act" id="bk-import" ${busy ? "disabled" : ""}>${icon("into")} Import</button>
-        </div>
+        ${exporting ? out : back}
         ${backup.said ? `<pre class="snippet">${esc(backup.said)}</pre>` : ""}
-        <p class="note">An import never overwrites a key this store already holds; it says
-        which ones it kept. Everything here is recorded by name in the ledger \u2014 an
-        export is the largest read anyone performs against a store, so it would be a
-        strange one to leave out.</p>
-      </div>
+        ${aside(`<p>An import never overwrites a key this store already holds; it says
+          which ones it kept. Exports and imports are both recorded by name in
+          Activity.</p>`)}
+      </div>`;
+  }
 
+  /** The two ways back in if the password goes.
+   *
+   *  A recovery code and a trusted device answer the same question, and they
+   *  were two cards apart with the store's whole backup section between them —
+   *  one of them a card containing nothing but a collapsed line.
+   */
+  function recoveryPanel() {
+    const v = vault;
+    return `
       <div class="group">
-        <h3>If you forget the password</h3>
+        <h3>If you lose the password</h3>
         ${recoveryCode ? `
           <div class="row">
             <span class="statustile good">${icon("shield")}</span>
-            <div class="grow"><strong>Write this down, somewhere this machine is not.</strong>
+            <div class="grow"><strong>Write this down, somewhere this device is not.</strong>
               <div class="recovery mono">${esc(recoveryCode)}</div></div>
             <button class="iconbtn ${copied.__recovery ? "done" : ""}"
               data-copytext="${esc(recoveryCode)}" data-copymark="__recovery"
               title="Copy" aria-label="Copy the recovery code">${icon(copied.__recovery ? "check" : "copy")}</button>
           </div>
-          <p class="note">Shown once. It opens the vault on its own, so it is as good as the
-          password \u2014 PassBook keeps only enough to check it, and cannot show it again.</p>
+          <p class="note">Shown once. It opens the vault on its own, so it is as good as
+          the password \u2014 PassBook cannot show it again.</p>
           <div class="addrow two"><span></span>
             <button class="act" data-recoverydone>I have written it down</button></div>
         ` : `
-          <div class="row"><div class="grow">Your data key is wrapped by your password and
-            nothing else, so a forgotten password is the end of this store. A recovery code
-            is a second wrapping.</div></div>
+          <div class="row"><div class="grow">A recovery code is a second way in. Without
+            one, a forgotten password is the end of this store.</div></div>
           <div class="addrow two">
             <input id="rc-pw" type="password" placeholder="Vault password" />
             <button class="act" id="rc-go" ${busy || !v?.profiles?.length ? "disabled" : ""}>
               ${icon("shield")} Make a recovery code</button>
           </div>`}
+        ${aside(`<p>${esc(sentence(v?.keystore?.describe || "no OS keystore on this platform"))}.
+          ${v?.keystore?.available
+            ? "Trusting this device would let jobs start at boot without you \u2014 at the cost of letting anything running as you open the vault. Add it with <code>passbook profile trust-device</code>."
+            : "Sign-in here is by password, which works the same on every platform."}</p>`,
+          "Unlock with this device instead")}
       </div>`;
   }
 
   function vaultPage() {
     const v = vault;
-    if (!v) return `<h2>Vault</h2><p class="lede">Reading the vault…</p>`;
+    if (!v) return settingsBack("Security") + `<p class="lede">Reading…</p>`;
     if (!v.supported) {
-      return `<h2>Vault</h2>
-        <p class="lede">This machine has no vault runtime yet.</p>
-        <div class="group"><p class="note">Run <code>passbook install</code> to add one,
+      return settingsBack("Security") + `
+        <p class="lede">This device cannot encrypt keys yet.</p>
+        <div class="group"><p class="note">Run <code>passbook install</code> to add it,
         then reopen this window.</p></div>`;
     }
 
+    // A held key is not the same claim as a readable store. Each profile has
+    // its own key and the profile is bound into every value, so signing in to
+    // the wrong one holds a perfectly good key that opens nothing.
+    const sealedCount = (v.sealed || []).length;
+    const opens = v.opens ?? sealedCount;
+    const wrongProfile = v.unlocked && sealedCount > 0 && opens === 0;
+    const partial = v.unlocked && opens > 0 && opens < sealedCount;
+
     const openState = v.unlocked
-      ? `<div class="row"><span class="statustile good">${icon("unlock")}</span>
-         <div class="grow"><strong>Open</strong> —
+      ? `<div class="row"><span class="statustile ${wrongProfile ? "warn" : "good"}">${
+           icon(wrongProfile ? "alert" : "unlock")}</span>
+         <div class="grow"><strong>${wrongProfile ? "Open, and reading nothing" : "Open"}</strong> —
            signed in as ${esc(profileLabel(v.signed_in_profile))} by ${esc(v.factor || "password")}${
-             v.expires_in ? `, ${humanTime(v.expires_in)} left` : ""}.</div>
+             v.expires_in ? `, ${humanTime(v.expires_in)} left`
+                          : ", and it stays open until you lock it"}.
+           ${wrongProfile ? `<div class="sub">None of the ${sealedCount} encrypted values open with
+             this profile — they were sealed by another one. Sign out and sign in to the profile
+             that holds them.</div>`
+             : partial ? `<div class="sub">${opens} of ${sealedCount} encrypted values open with
+               this profile; the rest were sealed by another one.</div>` : ""}</div>
          <button class="act" data-signout ${busy ? "disabled" : ""}>${icon("lock")} Lock</button></div>`
       : `<div class="row"><span class="statustile warn">${icon("lock")}</span>
          <div class="grow"><strong>Locked</strong> —
            ${v.fully_sealed
-             ? "apps on this machine have no credentials right now."
+             ? "apps on this device have no credentials right now."
              : "though the store is not sealed, so values are readable anyway."}</div>
          <span class="tag off">Locked</span></div>`;
 
@@ -1255,14 +1795,28 @@
           </select>` : ""}
         <div class="addrow two">
           <input id="si-pw" type="password" placeholder="Vault password" />
+          <select id="si-for" title="How long to stay open">
+            ${SESSION_LENGTHS.map(([value, label]) => `<option value="${value}"${
+              value === vaultForm.duration ? " selected" : ""}>${label}</option>`).join("")}
+          </select>
           <button class="act primary" id="si-go" ${busy ? "disabled" : ""}>Sign in</button>
         </div>
+        ${aside(`<p>Staying open is the default. Nothing locks itself — a vault that
+          shut at four in the morning would stop the work it exists to allow. Lock it
+          whenever you want to.</p>`, "About staying signed in")}
         ${!v.running ? `<p class="note">The broker is not running; signing in starts it.</p>` : ""}
       </div>`;
 
+    // Adding a profile is a once-a-year act, and its form was permanently open
+    // under the list — a third "Vault password" box on a screen that already
+    // had two, asking for a new one rather than the one you have.
     const profiles = `
       <div class="group">
-        <h3>Profiles</h3>
+        <div class="grouphead">
+          <h3>Profiles</h3>
+          <button class="act ${addingProfile ? "primary" : ""}" data-addprofile="1">
+            ${addingProfile ? "Cancel" : "Add profile"}</button>
+        </div>
         ${v.profiles.length ? v.profiles.map((p) => `
           <div class="row">
             <div class="grow">
@@ -1276,47 +1830,25 @@
             ${p.active ? "" : `<button class="act" data-use="${esc(p.label)}">Use</button>`}
           </div>`).join("")
           : `<div class="empty">No profiles yet.</div>`}
-        <div class="addrow">
-          <input id="np-label" placeholder="New profile name" spellcheck="false" />
-          <input id="np-pw" type="password" placeholder="Vault password" />
-          <button class="act" id="np-create" ${busy ? "disabled" : ""}>Add profile</button>
-        </div>
-        <p class="note">A profile is a sign-in and the key it holds. Passwords work
-        on every machine; a passkey can be enrolled from HivemindOS or Hivemind
-        Content Studio and works the same way here.</p>
+        ${addingProfile ? `<div class="addrow">
+          <input id="np-label" placeholder="Name for the new profile" spellcheck="false" />
+          <input id="np-pw" type="password" placeholder="A password for it" />
+          <button class="act primary" id="np-create" ${busy ? "disabled" : ""}>Create</button>
+        </div>` : ""}
+        ${aside(`<p>A profile is a sign-in and the key it holds, not a separate store.
+          Every profile lists the same keys; what changes is whose key opens them.</p>
+          <p>Adding one does not switch to it — press <strong>Use</strong> when you mean
+          to, then sign in again.</p>`, "What a profile is")}
       </div>`;
 
-    const encryption = `
-      <div class="group">
-        <h3>The store</h3>
-        <div class="row"><div class="grow">${esc(v.detail || "")}</div>
-          <span class="tag ${v.fully_sealed ? "on" : "off"}">${v.fully_sealed ? "Encrypted" : "Readable"}</span></div>
-        ${v.legacy_v1?.length ? `<p class="note">${v.legacy_v1.length} value(s) still use the
-          older machine-key encryption. Sealing again moves them onto your profile.</p>` : ""}
-        <div class="addrow two">
-          <input id="sl-pw" type="password" placeholder="Vault password" />
-          ${v.fully_sealed
-            ? `<button class="act" id="unseal-go" ${busy ? "disabled" : ""}>Decrypt back to plaintext</button>`
-            : `<button class="act primary" id="seal-go2" ${busy ? "disabled" : ""}>Seal the store</button>`}
-        </div>
-        <p class="note">${v.fully_sealed
-          ? "Decrypting puts every value back in the clear on disk. The way out is here on purpose — an encryption you cannot reverse is one nobody turns on."
-          : "Sealing encrypts every value under your profile key."}</p>
-      </div>`;
+    // One encryption panel, not two. This page and the Keys page each carried
+    // their own; they disagreed about first run, because only one of them knew
+    // how to make a profile and seal in a single step.
+    const encryption = encryptionPanel(state.sealing || {});
 
-    const device = `
-      <div class="group">
-        <h3>This device</h3>
-        <p class="note">${esc(sentence(v.keystore?.describe || "no OS keystore on this platform"))}.
-        ${v.keystore?.available
-          ? "A device factor could let jobs start at boot without you — at the cost of letting anything running as you open the vault. Add one with <code>passbook profile trust-device</code>."
-          : "Sign-in here is by password, which works the same on every platform."}</p>
-      </div>`;
-
-    return `<h2>Vault</h2>
-      <p class="lede">Whether anything on this machine can read your credentials right now.</p>
+    return settingsBack("Security") + `
       <div class="group">${openState}</div>
-      ${signIn}${encryption}${profiles}${backupPanel()}${device}`;
+      ${signIn}${encryption}${profiles}${recoveryPanel()}${backupPanel()}`;
   }
 
   function lockBanner() {
@@ -1324,14 +1856,14 @@
     return `<div class="banner">
       ${icon("lock")}
       <div class="body"><strong>The vault is locked.</strong>
-      Every value is encrypted, so apps on this machine have no credentials until you sign in.
+      Every value is encrypted, so apps on this device have no credentials until you sign in.
       <div class="acts"><button data-goto="vault">Sign in</button></div></div>
     </div>`;
   }
 
-  /** The grid: every key against every agent that has actually asked.
+  /** The grid: every key against every app that has actually asked.
    *
-   *  The agents listed are read out of the access ledger, not just the ones
+   *  The apps listed are read out of the access ledger, not just the ones
    *  somebody remembered to configure — those are usually the interesting ones.
    */
   const STATE_TAG = {
@@ -1388,14 +1920,14 @@
     }).join("") : `<div class="empty">No sign-ins yet.</div>`;
 
     return `<h2>Sign-ins</h2>
-      <p class="lede">Accounts this machine holds, kept alive so agents never see a dead token.</p>
+      <p class="lede">Accounts this device holds, kept signed in so agents never
+      meet a dead one.</p>
       <div class="group">
         ${rows}
-        <p class="note">A sign-in's tokens live in this store like any other credential —
-        sealed with it, held to the same access rules, and in the same record. What is
-        different is the clock: the broker renews one on the way past when something
-        reads it, so an agent never has to handle refresh, and a grant does not die
-        just because the app that created it is closed.</p>
+        ${aside(`<p>A sign-in is stored like any other credential \u2014 encrypted with
+          them, held to the same rules, in the same record. What is different is the
+          clock: it is renewed on the way past when something reads it, so nothing has
+          to handle that itself.</p>`, "How these stay alive")}
       </div>
       <div class="group">
         <h3>Add a sign-in</h3>
@@ -1403,17 +1935,17 @@
         Nothing is connected until you sign in.</p>
         <pre class="snippet">passbook oauth add google work --client-id &lt;your client id&gt;
 passbook oauth connect google:work</pre>
-        <p class="note">No vendor's own client id ships with PassBook. Some CLIs sign in
-        with a client they registered for themselves, and borrowing one is between you
-        and that vendor's terms — not something this app should decide for you.</p>
+        ${aside(`<p>No vendor's own client id ships with PassBook. Some tools sign in
+          with a client they registered for themselves, and borrowing one is between
+          you and that vendor's terms \u2014 not something this app should decide for
+          you.</p>`, "Why you need your own client id")}
       </div>`;
   }
 
-  function agentsPage() {
+  function appsPage() {
     const cat = state.catalog;
     if (!cat?.available) {
-      return `<h2>Agents</h2>
-        <p class="lede">Grouping is not installed on this machine.</p>
+      return settingsBack("Apps") + `
         <div class="group"><p class="note">Run <code>passbook install</code>, then reopen.</p></div>`;
     }
     const known = cat.agents || [];
@@ -1422,8 +1954,8 @@ passbook oauth connect google:work</pre>
     const summary = `
       <div class="group">
         <div class="row">
-          <div class="grow"><strong>${known.length}</strong> agent${known.length === 1 ? "" : "s"}
-            have asked this machine for a credential.</div>
+          <div class="grow"><strong>${known.length}</strong> app${known.length === 1 ? "" : "s"}
+            have asked this device for a credential.</div>
           <span class="tag ${restricted.length ? "info" : ""}">${restricted.length
             ? `${restricted.length} restricted` : "nothing restricted"}</span>
         </div>
@@ -1436,35 +1968,32 @@ passbook oauth connect google:work</pre>
             return `<span class="chip mono" title="${asks} recorded read${asks === 1 ? "" : "s"}">${esc(a)}
               <span class="asks">${asks}</span></span>`;
           }).join("")}</div>`
-          : `<p class="note">None yet. An agent appears here the first time it asks —
+          : `<p class="note">None yet. An app appears here the first time it asks —
              including ones you never configured, which is the point.</p>`}
-        <p class="note">An agent's name is a claim it makes when it connects, not a
-        proof. It decides policy and fills the record; it is not a password. The
-        number beside each is how many reads it has on record \u2014 a name with one
-        is usually a test that ran once, not something to write a rule about.</p>
-        <p class="note">PassBook's own commands are not listed. <code>passbook run</code>
-        asking for a credential is you running PassBook, and restricting it would be
-        restricting yourself. They are all in the Record.</p>
+        ${aside(`<p>These are the names things give when they ask. A name is a claim,
+          not a proof: it chooses the policy and fills the record, but it is not a
+          password. The number beside each is how many reads it has on record \u2014 a
+          name with one is usually a test that ran once.</p>
+          <p>PassBook's own commands are not listed; restricting them would be
+          restricting yourself. They are all in Activity.</p>`, "About these names")}
       </div>`;
 
     const mcp = `
       <div class="group">
         <h3>Give an agent access</h3>
-        <p class="note">PassBook speaks MCP, so an agent can list what exists and ask
-        for one credential at a time — checked and recorded — instead of you pasting
-        keys into a chat.</p>
+        <p class="note">So an agent can ask for one credential at a time instead of you
+        pasting keys into a chat.</p>
         <pre class="snippet">claude mcp add passbook -- passbook mcp</pre>
-        <p class="note">For anything else, point it at <code>passbook mcp</code> over stdio.</p>
+        ${aside(`<p>For anything else, point it at <code>passbook mcp</code> over
+          stdio.</p>`, "Other agents")}
       </div>`;
 
     if (!grid) {
-      return `<h2>Agents</h2>
-        <p class="lede">Which agents can read which credentials.</p>
+      return settingsBack("Apps") + `
         ${summary}
         <div class="group">
-          <div class="row"><div class="grow">Build the grid to see every key against
-            every agent.</div>
-            <button class="act primary" data-grid="1" ${busy ? "disabled" : ""}>Show the matrix</button></div>
+          <div class="row"><div class="grow">See every key against every app.</div>
+            <button class="act" data-grid="1" ${busy ? "disabled" : ""}>Show the grid</button></div>
         </div>
         ${mcp}`;
     }
@@ -1473,13 +2002,12 @@ passbook oauth connect google:work</pre>
       !gridOnlyRestricted || r.audience.mode !== "all"
       || Object.values(r.agents).some((c) => c.outcome !== "grant"));
 
-    return `<h2>Agents</h2>
-      <p class="lede">Which agents can read which credentials.</p>
+    return settingsBack("Apps") + `
       ${summary}
       <div class="group">
         <div class="row">
           <div class="grow">${rows.length} key${rows.length === 1 ? "" : "s"} ×
-            ${grid.agents.length} agent${grid.agents.length === 1 ? "" : "s"}</div>
+            ${grid.agents.length} app${grid.agents.length === 1 ? "" : "s"}</div>
           <button class="act ${gridOnlyRestricted ? "primary" : ""}" data-gridfilter="1">
             ${gridOnlyRestricted ? "Showing restricted" : "Show all"}</button>
           <button class="act" data-grid="1">Refresh</button>
@@ -1504,7 +2032,7 @@ passbook oauth connect google:work</pre>
             </tbody>
           </table>
         </div>
-        ${rows.length ? "" : `<div class="empty">Nothing is restricted — every agent
+        ${rows.length ? "" : `<div class="empty">Nothing is restricted — every app
           can read every key.</div>`}
       </div>
       ${mcp}`;
@@ -1529,15 +2057,15 @@ passbook oauth connect google:work</pre>
         <div class="grow">
           <div><strong>${esc(row.label || row.id)}</strong>${row.active ? " \u00b7 active" : ""}</div>
           <div class="sub mono">${esc(row.id)}${row.inherits ? ""
-            : " \u00b7 does not inherit the machine store"}</div>
+            : " \u00b7 does not inherit the shared store"}</div>
         </div>
         ${row.active
           ? `<span class="tag on">Here</span>`
           : `<button class="act" data-workspace="${esc(row.id)}" ${busy || pinned ? "disabled" : ""}>
                Switch</button>`}
       </div>`).join("")
-      : `<div class="empty">This machine has no workspaces \u2014 everything lives in the
-         machine store.</div>`;
+      : `<div class="empty">This device has no workspaces \u2014 everything lives in the
+         shared store.</div>`;
 
     const signIn = !v?.supported ? "" : v.unlocked ? `
       <div class="group">
@@ -1548,7 +2076,7 @@ passbook oauth connect google:work</pre>
               ? `, ${humanTime(v.expires_in)} left` : ""}.</div>
           <button class="act" data-signout ${busy ? "disabled" : ""}>${icon("lock")} Lock</button>
         </div>
-        <p class="note">Locking closes the vault for everything on this machine, not just
+        <p class="note">Locking closes the vault for everything on this device, not just
         this window. Anything mid-request gets refused rather than served stale.</p>
       </div>`
       : `
@@ -1565,13 +2093,13 @@ passbook oauth connect google:work</pre>
           <input id="sw-pw" type="password" placeholder="Vault password" />
           <button class="act primary" id="sw-go" ${busy ? "disabled" : ""}>${icon("unlock")} Sign in</button>
         </div>
-        ${(v.profiles || []).length ? "" : `<p class="note">No profile on this machine yet.
+        ${(v.profiles || []).length ? "" : `<p class="note">No profile on this device yet.
           Set one up on the Vault page.</p>`}
       </div>`;
 
     return `
       <h2>Workspace</h2>
-      <p class="lede">Which set of credentials this machine is working with, and
+      <p class="lede">Which set of credentials this device is working with, and
       whether anything can read them.</p>
       ${signIn}
       <div class="group">
@@ -1583,7 +2111,7 @@ passbook oauth connect google:work</pre>
           client \u2014 and a switch made in this window should not quietly re-point it.</p>`
           : `<p class="note">Switching writes HivemindOS's own workspace manifest, so both
           apps agree on which one is active. Keys stay where they are; what changes is which
-          store this machine reads first and where a new key is written.</p>`}
+          store this device reads first and where a new key is written.</p>`}
       </div>`;
   }
 
@@ -1593,14 +2121,21 @@ passbook oauth connect google:work</pre>
     delete: ["Removing a key", "Gone from this store; the value is not recoverable from here."],
   };
 
+  /** What happens when something asks — the rules that are not about one key.
+   *
+   *  Two thirds of this page used to be a list of all 281 keys with a
+   *  three-way switch on each: 843 buttons, kept up to date with the identical
+   *  list on the Keys page, so that changing one key meant finding it twice.
+   *  That switch now lives on the key, where it is a property of the key. What
+   *  is left here is the part that is genuinely global.
+   */
   function accessPage() {
     const a = state.access || {};
     const cat = state.catalog || {};
     const pending = state.broker?.pending || [];
     const open = a.sessions || [];
     return `
-      <h2>Access</h2>
-      <p class="lede">How each key is answered when something asks for it.</p>
+      ${settingsBack("Permissions")}
       ${pending.map((p) => `
         <div class="banner">
           ${icon("alert")}
@@ -1616,15 +2151,11 @@ passbook oauth connect google:work</pre>
           </div>
         </div>`).join("")}
       <div class="group">
-        <h3>Before a key changes</h3>
-        <div class="row"><div class="grow">Everything else on this page is about
-          <em>reads</em>. These are about <em>changes</em>: whether adding, replacing or
-          removing a key stops and asks you first.</div></div>
+        <h3>Ask before changing a key</h3>
         ${(cat.confirm_ops || ["add", "modify", "delete"]).map((op) => {
           const on = !!(cat.confirm || {})[op];
           const [label, blurb] = CONFIRM_WORDS[op];
           return `<div class="row">
-            <span class="statustile ${on ? "good" : "plain"} sm">${icon(on ? "shield" : "plus")}</span>
             <div class="grow"><div><strong>${label}</strong></div>
               <div class="sub">${blurb}</div></div>
             <div class="seg">
@@ -1633,11 +2164,6 @@ passbook oauth connect google:work</pre>
             </div>
           </div>`;
         }).join("")}
-        <p class="note">A change that asks waits in this window and raises a system
-        notification, and nothing is written until you answer. Turning one on when no
-        broker is running would leave nobody to ask, so a change is refused rather than
-        allowed through \u2014 a toggle whose enforcement disappears with a daemon is not
-        a toggle.</p>
       </div>
       <div class="group">
         <h3>Stop being asked</h3>
@@ -1646,38 +2172,13 @@ passbook oauth connect google:work</pre>
               ? `<span class="mono">${esc(u.keys.join(", "))}</span>` : "Every key"}</div>
             <span class="tag on">${Math.round(u.remaining_seconds / 60)}m left</span>
             <button class="act" data-lock="1" ${busy ? "disabled" : ""}>Close now</button></div>`).join("")
-          : `<div class="row"><div class="grow">Open access for a while; it closes on its own.</div>
+          : `<div class="row"><div class="grow">Answer everything without asking, for a while.
+             It closes on its own.</div>
              <div class="seg">${(a.presets || ["15m","1h","4h"]).map((p) =>
-               `<button data-unlock="${p}">${p}</button>`).join("")}</div></div>
-             <p class="note">While it is open, anything running as you can use these keys
-             without asking. That is what it is for — but it should never be something
-             you did without noticing.</p>`}
+               `<button data-unlock="${p}">${p}</button>`).join("")}</div></div>`}
       </div>
-      <div class="group">
-        <div class="grouphead">
-          <h3>Per key · ${countLabel(shownKeys().length, (state.store?.keys || []).length)}</h3>
-          ${searchField("q-access")}
-        </div>
-        ${shownKeys().map((k) => {
-          const m = modeOf(k);
-          // The default mode's sentence, repeated under every key, is a wall of
-          // one sentence. What differs between rows is the group a key is in,
-          // and the mode — but only when somebody has changed it.
-          const dflt = state?.access?.default_mode || "always";
-          const group = state.catalog?.groups
-            ? Object.keys(state.catalog.groups).find((g) => state.catalog.groups[g].includes(k))
-            : "";
-          const under = m === dflt
-            ? (group && group !== "Ungrouped" ? esc(group) : "")
-            : esc(MODE[m][1]);
-          return `<div class="row"><div class="grow"><div class="mono">${esc(k)}</div>
-            ${under ? `<div class="sub">${under}</div>` : ""}</div>
-            <div class="seg">${["always","ask","never"].map((x) =>
-              `<button data-key="${esc(k)}" data-mode="${x}" aria-pressed="${m === x}">${MODE[x][0]}</button>`).join("")}</div>
-          </div>`; }).join("")
-          || `<div class="empty">${query.trim()
-                ? `Nothing matches “${esc(query)}”.` : "No keys yet."}</div>`}
-      </div>`;
+      <p class="note">Each key also has its own answer — open a key on the Keys page to
+      set it.</p>`;
   }
 
   function machinesPage() {
@@ -1692,23 +2193,23 @@ passbook oauth connect google:work</pre>
       ...(l.borrowed || []),
     ];
     return `
-      <h2>Machines</h2>
-      <p class="lede">Every machine that holds this store \u2014 the ones you granted it
-      to, and the ones that receive it because they share your tailnet.</p>
+      <h2>Devices</h2>
+      <p class="lede">Every device that holds this store \u2014 the ones you paired with,
+      and the ones that have it because they are on your network.</p>
       <div class="group">
-        <h3>This machine</h3>
+        <h3>This device</h3>
         <div class="row">
           <span class="statustile plain">${icon("monitor")}</span>
           <div class="grow"><div class="mono">${esc(l.fingerprint || "—")}</div>
-            <div class="sub">Both ends read this aloud before a key moves.</div></div>
+            <div class="sub">Pairing code \u2014 both ends read this aloud before a key moves.</div></div>
           ${l.fingerprint ? `<button class="iconbtn ${copied.__fingerprint ? "done" : ""}"
             data-copytext="${esc(l.fingerprint)}" data-copymark="__fingerprint"
-            title="${copied.__fingerprint ? "Copied" : "Copy fingerprint"}"
-            aria-label="Copy fingerprint">${icon(copied.__fingerprint ? "check" : "copy")}</button>` : ""}
+            title="${copied.__fingerprint ? "Copied" : "Copy pairing code"}"
+            aria-label="Copy pairing code">${icon(copied.__fingerprint ? "check" : "copy")}</button>` : ""}
         </div>
       </div>
       <div class="group">
-        <h3>Linked machines</h3>
+        <h3>Paired devices</h3>
         ${rows.map((r) => `
           <div class="row">
             <span class="statustile plain sm">${icon(r.lent ? "out" : "into")}</span>
@@ -1716,8 +2217,8 @@ passbook oauth connect google:work</pre>
               <div>${r.lent ? "Lent to" : "Borrowed from"}
                 <span class="mono">${esc(r.host || r.fingerprint || r.did)}</span>
                 ${r.via === "tailnet"
-                  ? `<span class="viatag" title="Trusted because it shares your tailnet. No fingerprint was compared.">${icon("globe", "tinyicon")} tailnet</span>`
-                  : `<span class="viatag grant" title="A signed grant. Both ends compared a fingerprint.">${icon("shield", "tinyicon")} granted</span>`}</div>
+                  ? `<span class="viatag" title="Trusted because it is on your network. No pairing code was compared.">${icon("globe", "tinyicon")} network</span>`
+                  : `<span class="viatag grant" title="Both ends compared a pairing code.">${icon("shield", "tinyicon")} paired</span>`}</div>
               ${(r.keys || []).length > 8
                 ? `<div class="sub">${(r.keys || []).length} keys \u2014 everything whose reach allows it</div>`
                 : `<div class="chips inline">${(r.keys || []).map((k) =>
@@ -1727,10 +2228,10 @@ passbook oauth connect google:work</pre>
                   ? `<button class="act" data-forget="${esc(r.host)}" ${busy ? "disabled" : ""}>Forget</button>`
                   : `<button class="act" data-revoke="${esc(r.did)}" ${busy ? "disabled" : ""}>Revoke</button>`)
               : `<span class="tag ${r.active ? "on" : "off"}">${r.revoked ? "Revoked" : r.active ? "Active" : "Expired"}</span>`}
-          </div>`).join("") || `<div class="empty">No linked machines.</div>`}
-        <p class="note">A link is a signed grant naming which keys may move, and it can
-        be revoked from here. It is not the only way a machine ends up holding this
-        store \u2014 see below.</p>
+          </div>`).join("") || `<div class="empty">No other devices.</div>`}
+        ${aside(`<p>A pairing names which keys may move, and it can be undone from
+          here. It is not the only way a device ends up holding this store \u2014 see
+          below.</p>`)}
       </div>
       ${fleetPanel()}`;
   }
@@ -1748,8 +2249,8 @@ passbook oauth connect google:work</pre>
     if (!f) return "";
     if (!f.available) {
       return `<div class="group">
-        <h3>On the tailnet</h3>
-        <p class="note">${esc(f.detail || "This machine cannot see a tailnet.")}</p>
+        <h3>Your network</h3>
+        <p class="note">${esc(f.detail || "This device cannot see your network.")}</p>
       </div>`;
     }
     // Machines already recorded above are not repeated here. What is left is
@@ -1759,9 +2260,8 @@ passbook oauth connect google:work</pre>
     const replicating = rows.filter((p) => p.replicates);
     if (!rows.length) {
       return `<div class="group">
-        <h3>Rest of the tailnet</h3>
-        <p class="note">Every machine on this tailnet that receives the store is listed
-        above. Nothing else here.</p>
+        <h3>Rest of your network</h3>
+        <p class="note">Every device that receives the store is listed above.</p>
       </div>`;
     }
     return `
@@ -1769,10 +2269,10 @@ passbook oauth connect google:work</pre>
         <div class="row">
           <span class="statustile ${replicating.length ? "warn" : "plain"}">${icon("globe")}</span>
           <div class="grow">${replicating.length
-            ? `<strong>${replicating.length}</strong> more machine${replicating.length === 1 ? "" : "s"}
+            ? `<strong>${replicating.length}</strong> more device${replicating.length === 1 ? "" : "s"}
                receive${replicating.length === 1 ? "s" : ""} this store but ${replicating.length === 1 ? "is" : "are"}
                not recorded above. Run <code>passbook sync</code> to record ${replicating.length === 1 ? "it" : "them"}.`
-            : `The rest of this tailnet. ${rows.length} machine${rows.length === 1 ? "" : "s"}
+            : `The rest of your network. ${rows.length} device${rows.length === 1 ? "" : "s"}
                ${rows.length === 1 ? "is" : "are"} reachable but ${rows.length === 1 ? "does" : "do"} not
                receive the store.`}</div>
           <span class="tag ${replicating.length ? "info" : ""}">${rows.length} other${rows.length === 1 ? "" : "s"}</span>
@@ -1783,72 +2283,209 @@ passbook oauth connect google:work</pre>
             <div class="grow">
               <div class="mono">${esc(p.host)}</div>
               <div class="sub">${esc(p.os || "unknown")}${p.replicates
-                ? " \u00b7 running a collector" : " \u00b7 no collector \u2014 does not receive the store"}</div>
+                ? " \u00b7 set up" : " \u00b7 not set up \u2014 does not receive the store"}</div>
             </div>
             ${p.replicates
-              ? `<span class="tag off">Replicated</span>`
-              : `<span class="tag">Not replicated</span>`}
-          </div>`).join("") || `<div class="empty">No other machines on this tailnet.</div>`}
-        <p class="note">A machine appears here until <code>passbook sync</code> has seen
-        it, after which it is listed above with the rest. Replication itself is still
-        driven by HivemindOS; PassBook decides what may leave (a key's reach), and the
-        two are joined at the point a key is sent.</p>
+              ? `<span class="tag off">Has the store</span>`
+              : `<span class="tag">Not shared</span>`}
+          </div>`).join("") || `<div class="empty">No other devices on your network.</div>`}
+        ${aside(`<p>A device stays here until <code>passbook sync</code> has seen it,
+          after which it joins the list above.</p>`)}
       </div>`;
   }
 
+  /** The drawer everything technical was moved into.
+   *
+   *  The background service had a page in the source list, level with Keys.
+   *  Nobody opens an app to look at a daemon — but the day it is not running
+   *  is the day you need to find it, so it is one press inside Settings
+   *  rather than gone. The store's path on disk joins it here; it was in grey
+   *  under 281 keys, where it was decoration for everyone who did not need it
+   *  and unfindable for the one person who did.
+   */
   function brokerPage() {
     const b = state.broker || {};
+    const st = state.store || {};
     return `
-      <h2>Broker</h2>
-      <p class="lede">One door for credential reads, so the record does not depend on
-      each app choosing to keep one.</p>
+      ${settingsBack("Advanced")}
       <div class="group">
-        <h3>Status</h3>
+        <h3>Background access</h3>
         <div class="row">
           <span class="statustile ${b.running ? "good" : "warn"}">${icon("hub")}</span>
           <div class="grow">${b.running
-            ? `Reads go through the broker, default <b>${esc(b.mode || "always")}</b>.`
-            : "Not running — each app records its own reads, so the record has gaps."}</div>
-          <span class="tag ${b.running ? "on" : "off"}">${b.running ? "Running" : "Stopped"}</span>
+            ? "Running. Every read goes through one door and is recorded."
+            : "Not running — each app records its own reads, so Activity has gaps."}</div>
+          <span class="tag ${b.running ? "on" : "off"}">${b.running ? "On" : "Off"}</span>
           <button class="act ${b.running ? "" : "primary"}" data-broker="${b.running ? "stop" : "start"}"
-            ${busy ? "disabled" : ""}>${icon("power")} ${b.running ? "Stop" : "Start"}</button></div>
-        <p class="note">${esc(b.limits || "")}</p>
+            ${busy ? "disabled" : ""}>${icon("power")} ${b.running ? "Turn off" : "Turn on"}</button></div>
+        ${b.limits ? aside(`<p>${esc(b.limits)}</p>`, "What this does not stop") : ""}
+      </div>
+      <div class="group">
+        <h3>On this device</h3>
+        <div class="row"><span class="dlabel">Store</span>
+          <span class="mono pathval">${esc(st.path || "—")}</span></div>
+        ${st.writes_to && st.writes_to !== st.path ? `
+          <div class="row"><span class="dlabel">New keys go to</span>
+            <span class="mono pathval">${esc(st.writes_to)}</span></div>` : ""}
+        <div class="row"><span class="dlabel">Workspace</span>
+          <span class="mono pathval">${esc(st.workspace || "main")}</span></div>
       </div>`;
   }
 
-  /** What each kind of entry did, as a glyph. */
-  const OP_ICON = {
-    read: "eye", write: "pencil", set: "pencil", add: "plus", remove: "trash",
-    signin: "unlock", signout: "lock", seal: "lock", unseal: "unlock",
-    link: "link", revoke: "cross", grant: "check", refuse: "cross",
+  /** What each kind of entry did, in words — one entry per ledger operation.
+   *
+   *  Both halves matter. `did` is what happened; `didnt` is what the same row
+   *  means when `granted` is false, and it is not one sentence for all of them:
+   *  a refused sign-in was refused, but a read that comes back false only means
+   *  some of the names asked for were not in the store. This app said "was
+   *  refused" for both, which turned 438 ordinary rows into security events and
+   *  buried the one row on this machine that really was a refusal.
+   *
+   *  `bare` marks the operations that are about the store rather than about
+   *  particular keys, so they do not get "1 key" glued to the end of them.
+   *
+   *  Keep this in step with OPERATIONS in passbook_stamp.py — a missing entry
+   *  prints the raw op verbatim, which is how "hivemindos reveal 1 keys" got on
+   *  screen. There is a test that fails if the two drift apart.
+   */
+  const OP_WORD = {
+    read:      { did: "read", didnt: "read", partial: "some were not there" },
+    reveal:    { did: "revealed", didnt: "could not reveal" },
+    write:     { did: "changed", didnt: "could not change" },
+    denied:    { did: "was refused", didnt: "was refused" },
+    ask:       { did: "asked to use", didnt: "asked to use" },
+    approve:   { did: "was allowed", didnt: "was allowed" },
+    unlock:    { did: "opened access to", didnt: "could not open access to" },
+    lock:      { did: "closed access to", didnt: "closed access to" },
+    refresh:   { did: "renewed", didnt: "could not renew" },
+    export:    { did: "exported", didnt: "could not export" },
+    import:    { did: "imported", didnt: "could not import" },
+    link:      { did: "was given", didnt: "could not be given" },
+    unlink:    { did: "no longer has", didnt: "no longer has" },
+    provision: { did: "set up", didnt: "could not set up" },
+    signin:    { did: "signed in", didnt: "was refused a sign-in", bare: true },
+    signout:   { did: "locked the vault", didnt: "locked the vault", bare: true },
+    seal:      { did: "encrypted the store", didnt: "could not encrypt the store", bare: true },
+    unseal:    { did: "decrypted the store", didnt: "could not decrypt the store", bare: true },
+    recovery:  { did: "made a recovery code", didnt: "could not make one", bare: true },
   };
+
+  /** What each kind of entry did, as a glyph. Same vocabulary, same test. */
+  const OP_ICON = {
+    read: "eye", reveal: "eye", write: "pencil", denied: "cross", ask: "alert",
+    approve: "check", unlock: "unlock", lock: "lock", refresh: "history",
+    export: "out", import: "into", link: "link", unlink: "cross",
+    provision: "plus", signin: "unlock", signout: "lock", seal: "lock",
+    unseal: "unlock", recovery: "shield",
+  };
+
+  /** The same thing, over and over, as one row that says how many times.
+   *
+   *  675 of the 2,208 rows on this machine share a timestamp to the second
+   *  with another row: one caller read a single key 29 times inside one
+   *  second. Printing 29 identical lines is accurate and useless — it fills
+   *  the page with one event and pushes everything else off it. Folded up,
+   *  with the count kept, nothing is hidden and the rest is visible.
+   */
+  function foldRuns(rows) {
+    const out = [];
+    for (const row of rows) {
+      const run = out[out.length - 1];
+      const same = run && run.row.app === row.app && run.row.op === row.op
+        && run.row.granted === row.granted
+        && (run.row.keyCount || 0) === (row.keyCount || 0)
+        && (run.row.keys || []).join() === (row.keys || []).join();
+      // Rows arrive newest first, so the head of a run keeps the time shown
+      // and the tail is remembered for the tooltip. Folding must never lose
+      // when something happened — only how many lines it takes to say so.
+      if (same) { run.times += 1; run.oldest = row.at; }
+      else out.push({ row, times: 1, oldest: row.at });
+    }
+    return out;
+  }
+
+  /** Re-hash the whole chain and say whether it holds.
+   *
+   *  Not part of the five-second refresh: it walks every row of a ledger that
+   *  is megabytes long, and it was costing that on every poll to answer a
+   *  question only this page asks. Asked once when the page opens, and again
+   *  whenever somebody presses the button.
+   */
+  async function checkChain() {
+    if (chain.busy) return;
+    chain.busy = true; paint();
+    try { chain.answer = await invoke("verify_record"); }
+    catch (e) { chain.answer = { intact: null, detail: String(e) }; }
+    finally { chain.busy = false; paint(); }
+  }
 
   function recordPage() {
     const r = state.record || {};
     const rows = (r.rows || []).slice(-40).reverse();
-    const broken = r.intact === false;
-    return `
-      <h2>Record</h2>
-      <p class="lede">Every read, hash-chained. Key names and times — never a value.</p>
-      <div class="group">
+    // `state` no longer verifies, so `intact` arrives as null and only this
+    // page's own check fills it in. Null is not "fine" — a chain nobody has
+    // checked must not be labelled Intact, which is the whole point of it.
+    const checked = chain.answer || (r.intact === null ? null : r);
+    const intact = checked ? checked.intact : null;
+    const broken = intact === false;
+    const tone = broken ? "warn" : intact ? "good" : "plain";
+    const word = chain.busy ? "Checking…" : broken ? "Tampered" : intact ? "Verified" : "Not checked";
+    const detail = chain.busy ? "Checking every entry."
+      : broken ? (checked.detail || "This record has been altered.")
+      : intact ? "Nothing in this record has been altered."
+      : "This record has not been verified yet.";
+    // Tamper-evidence belongs at the top only when it has something to say.
+    // A green "Intact" badge above every visit is a badge nobody reads; the
+    // one time this matters it should be the first thing on the page.
+    const check = `<div class="group${broken ? "" : " quiet"}">
         <div class="row">
-          <span class="statustile ${broken ? "warn" : "good"}">${icon(broken ? "alert" : "shield")}</span>
-          <div class="grow">${esc(r.detail || "")}</div>
-          <span class="tag ${broken ? "off" : "on"}">${broken ? "Broken" : "Intact"}</span>
+          <span class="statustile ${tone} sm">${icon(broken ? "alert" : "shield")}</span>
+          <div class="grow">${broken ? `<strong>${esc(detail)}</strong>` : esc(detail)}</div>
+          <span class="tag ${broken ? "off" : intact ? "on" : ""}">${word}</span>
+          <button class="act" data-verify="1" ${chain.busy ? "disabled" : ""}>
+            ${intact === null ? "Verify" : "Verify again"}</button>
         </div>
-      </div>
-      <div class="group">
-        <h3>Latest ${rows.length}</h3>
-        ${rows.map((row) => `
-          <div class="row">
-            <span class="statustile plain sm" title="${esc(row.op || "")}">${icon(OP_ICON[row.op] || "doc")}</span>
-            <div class="grow">
-              <div class="mono">${esc((row.keys || []).join(", ")) || esc(row.op || "—")}</div>
-              <div class="sub">${esc(row.app || "unknown")}${row.granted === false ? " · refused" : ""}</div>
-            </div>
-            <span class="tag">${esc(ago(row.at) || row.op || "")}</span>
-          </div>`).join("") || `<div class="empty">Nothing recorded yet.</div>`}
       </div>`;
+    return `
+      <h2>Activity</h2>
+      <p class="lede">What has been read on this device, and by what. Names and times \u2014
+      never a value.</p>
+      ${broken ? check : ""}
+      <div class="group">
+        ${foldRuns(rows).map(({ row, times, oldest }) => {
+          const names = row.keys || [];
+          const total = row.keyCount || names.length;
+          const ok = row.granted !== false;
+          const said = OP_WORD[row.op];
+          // The actor and the verb read first. This used to lead with twelve
+          // monospace key names wrapped over three lines, under which the app
+          // that did it — the one thing you scan this page for — was the
+          // smallest grey text on the row.
+          const verb = said ? (ok ? said.did : said.didnt) : (row.op || "used");
+          // A row is only alarming when the operation itself is. A read that
+          // comes back false is a name the store did not have, not a refusal.
+          const wrong = !ok && !said?.partial;
+          const what = said?.bare ? ""
+            : total === 1 && names.length ? `<span class="mono">${esc(names[0])}</span>`
+            : total === 1 ? "1 key"
+            : total ? `${total} keys` : "";
+          const aside = !ok && said?.partial ? said.partial : "";
+          return `
+          <div class="row">
+            <span class="statustile ${wrong ? "warn" : "plain"} sm"
+              title="${esc(row.op || "")}">${icon(OP_ICON[row.op] || "doc")}</span>
+            <div class="grow">
+              <div><strong>${esc(row.app || "unknown")}</strong> ${esc(verb)} ${what}${
+                times > 1 ? ` <span class="sub">\u00d7${times}</span>` : ""}</div>
+              ${aside ? `<div class="sub">${esc(aside)}</div>`
+                : total > 1 && total <= 4 ? `<div class="sub mono">${esc(names.join(", "))}</div>` : ""}
+            </div>
+            <span class="tag"${times > 1 ? ` title="${times} times, ${
+              esc(ago(oldest))} to ${esc(ago(row.at))}"` : ""
+              }>${esc(ago(row.at) || "")}</span>
+          </div>`; }).join("") || `<div class="empty">Nothing recorded yet.</div>`}
+      </div>
+      ${broken ? "" : check}`;
   }
 
   /** The last thing that happened, said once, in the colour it deserves. */
@@ -1856,10 +2493,14 @@ passbook oauth connect google:work</pre>
     if (!notice) return "";
     const good = /\bcopied\.$/.test(notice);
     return `<div class="noticebar ${good ? "good" : ""}">${icon(good ? "check" : "alert")}
-      <span>${esc(notice)}</span></div>`;
+      <span class="grow">${esc(notice)}</span>
+      <button data-noticeclear="1" title="Dismiss" aria-label="Dismiss">${icon("cross", "tinyicon")}</button>
+      </div>`;
   }
 
-  const PAGE_ICON = Object.fromEntries(PAGES.map(([id, , glyph]) => [id, glyph]));
+  const PAGE_ICON = Object.fromEntries([...PAGES, ...SETTINGS]
+    .map(([id, , glyph]) => [id, glyph]));
+  PAGE_ICON.settings = "sliders";
   // Reached from the source list's foot rather than from the list itself: it is
   // where you go to leave or to come back, not a section you browse.
   PAGE_ICON.switch = "building";
@@ -1893,20 +2534,664 @@ passbook oauth connect google:work</pre>
     });
   }
 
+
+  /** Who's working? — the gate.
+   *
+   *  Locking used to mean one thing, and it meant the wrong one: pressing Lock
+   *  signed the broker out, so putting the app away at the end of the day also
+   *  stopped every agent reading credentials overnight. What people do about
+   *  that is stop locking anything, which is worse than the risk it was
+   *  guarding against.
+   *
+   *  So there are two decisions and two controls. Locking is about who is at
+   *  the keyboard: it closes this window and nothing else. Agent access is
+   *  about what runs while nobody is, and it lives on this screen — the moment
+   *  somebody is already thinking about what they leave open.
+   */
+  const GATE_COLOURS = ["amber", "violet", "teal", "rose", "sky", "lime"];
+
+  /** Whether the window is locked, and why that has to outlive the window.
+   *
+   *  Lock deliberately does not sign the broker out — agents read credentials
+   *  at four in the morning and a window closing must not stop them. The cost
+   *  of that is that "is the vault open" can no longer answer "may this person
+   *  see it", so the window has to remember being locked on its own. Held only
+   *  in a variable, it forgot the moment you quit: press Lock, quit, reopen,
+   *  and the vault was still open so the gate never appeared.
+   *
+   *  This stops a person at the keyboard, which is what Lock is for. It does
+   *  not stop code running as you, and nothing here could — that code can read
+   *  the store directly. Do not let the padlock imply otherwise.
+   */
+  const LOCK_KEY = "passbook.window-locked";
+  // Storage is scoped to the origin, and the origin carries the port. The app
+  // asks for a fixed one so this survives a restart; if every candidate was
+  // taken it says so here rather than losing the lock without a word.
+  const lockIsRemembered = new URLSearchParams(location.search).get("steady") !== "0";
+  const lockedOnDisk = () => {
+    try { return localStorage.getItem(LOCK_KEY) === "1"; } catch { return false; }
+  };
+  const rememberLock = (on) => {
+    try { if (on) localStorage.setItem(LOCK_KEY, "1"); else localStorage.removeItem(LOCK_KEY); }
+    catch { /* a window with no storage still locks for as long as it lives */ }
+  };
+  let appLocked = lockedOnDisk();
+  // What this device can verify, and what to call it. Asked once, before
+  // anything is drawn, so no control is offered that cannot work.
+  let biometry = { available: false, kind: "", label: "" };
+
+  /** The active workspace, and whether anything could prove you are you. */
+  const activeRow = () => (state?.catalog?.workspace_rows || []).find((row) => row.active);
+  const canProveIdentity = (row) => Boolean(row && (row.has_password || row.has_passkey));
+
+  function lockWindow() {
+    // A workspace with no password and no passkey has nothing to check on the
+    // way back in, so locking it would put up a screen with no way past it.
+    if (!canProveIdentity(activeRow())) {
+      notice = "This workspace has no password yet, so the window cannot be locked. "
+             + "Give it one in Settings › Security.";
+      paint();
+      return;
+    }
+    appLocked = true;
+    rememberLock(true);
+    if (!lockIsRemembered) {
+      notice = "Locked. This window could not claim its usual port, so quitting the app "
+             + "will clear the lock until it can.";
+    }
+    revealed = {}; values = {}; history = {}; picked = {}; expanded = {};
+    gateView = { mode: "pick", chosen: null, error: "", busy: false, hint: "" };
+    paintGate();
+  }
+
+  /** Only ever called where a factor has just been checked. */
+  function unlockWindow() {
+    appLocked = false;
+    rememberLock(false);
+  }
+  let gateView = { mode: "pick", chosen: null, error: "", busy: false, hint: "" };
+
+  /** A colour per workspace: stable for a given name, distinct within a screen.
+   *
+   *  A plain hash gave two of three workspaces the same violet, which does not
+   *  read as coincidence — it reads as a colour that was never assigned. So the
+   *  hash picks where to start and the first free colour from there is taken,
+   *  which keeps a workspace's colour steady as others come and go while no two
+   *  on screen collide until there are more workspaces than colours.
+   */
+  function gateColours(names) {
+    const taken = new Set();
+    const out = {};
+    for (const name of names) {
+      let sum = 0;
+      for (const character of String(name || "")) sum = (sum * 31 + character.charCodeAt(0)) >>> 0;
+      const start = sum % GATE_COLOURS.length;
+      let chosen = GATE_COLOURS[start];
+      for (let step = 0; step < GATE_COLOURS.length; step++) {
+        const candidate = GATE_COLOURS[(start + step) % GATE_COLOURS.length];
+        if (!taken.has(candidate)) { chosen = candidate; break; }
+      }
+      taken.add(chosen);
+      out[name] = chosen;
+    }
+    return out;
+  }
+  const gateInitial = (name) => (String(name || "?").trim()[0] || "?").toUpperCase();
+
+  function workspaceRows() {
+    const rows = state?.catalog?.workspace_rows || [];
+    const palette = gateColours(rows.map((row) => row.id));
+    return rows.map((row) => ({
+      ...row, colour: palette[row.id],
+      open: (vault?.unlocked_workspaces || []).includes(row.id),
+    }));
+  }
+
+  /** Whether the window should be showing the gate rather than the store.
+   *
+   *  Two ways in: somebody pressed Lock, or the active workspace has a key and
+   *  nothing has opened it. A workspace with no key of its own has nothing to
+   *  ask for, so asking would be theatre.
+   */
+  function gateShouldShow() {
+    // The passkey offer comes AFTER a successful sign-in, which is the one
+    // moment it can succeed — and the same moment the gate would otherwise
+    // decide it is no longer needed and take the offer down with it.
+    if (gateView.mode === "enrol") return true;
+    if (appLocked) return true;
+    const here = (state?.catalog?.workspace_rows || []).find((row) => row.active);
+    return Boolean(here?.has_vault) && !vault?.unlocked;
+  }
+
+  function gateTiles() {
+    const rows = workspaceRows();
+    return `
+      <div class="ghead">
+        <div class="gmark">${icon("key")}</div>
+        <p class="geyebrow">PassBook</p>
+        <h1>Who's working?</h1>
+        <p class="glede">${rows.length
+          ? "Each workspace is its own set of credentials, with its own key."
+          : "No workspaces on this device yet."}</p>
+      </div>
+      <ul class="gtiles">
+        ${rows.map((row) => `
+          <li><button class="gtile" data-gpick="${esc(row.id)}" aria-label="Open ${esc(row.label)}">
+            <span class="gav c-${row.colour}">${esc(gateInitial(row.label))}</span>
+            <span class="gname">${esc(row.label)}</span>
+            ${row.open ? `<span class="gbadge on">Open</span>`
+              : row.has_passkey ? `<span class="gbadge">Passkey</span>`
+              : row.has_vault ? "" : `<span class="gbadge">No key yet</span>`}
+          </button></li>`).join("")}
+        <li><button class="gtile" data-gnew="1" aria-label="Create a new workspace">
+          <span class="gav add">+</span>
+          <span class="gname">New workspace</span>
+        </button></li>
+      </ul>
+      ${gateAgentPanel()}`;
+  }
+
+  /** The other lock. Deliberately on this screen and nowhere else. */
+  function gateAgentPanel() {
+    const open = (vault?.unlocked_workspaces || []).length;
+    return `
+      <div class="gagents">
+        ${icon(open ? "unlock" : "lock")}
+        <span class="grow">${open
+          ? `Agents and scripts can read credentials in <strong>${open}</strong>
+             workspace${open === 1 ? "" : "s"}. Locking this window does not stop them.`
+          : "Agents and scripts have no credentials right now."}</span>
+        ${open ? `<button data-gagents="off" ${gateView.busy ? "disabled" : ""}>Close it</button>` : ""}
+      </div>`;
+  }
+
+  function gateSignIn() {
+    const row = gateView.chosen;
+    if (!row) return gateTiles();
+    return `
+      <section class="gcard">
+        <div class="gwho">
+          <span class="gav c-${row.colour}">${esc(gateInitial(row.label))}</span>
+          <div>
+            <h2>Sign in</h2>
+            <p class="glede" style="text-align:left;margin:2px 0 0">${esc(row.label)}</p>
+          </div>
+        </div>
+        ${gateView.hint ? `<p class="glede" style="text-align:left;margin:0">${esc(gateView.hint)}</p>` : ""}
+        ${row.has_device && biometry.available ? `
+          <button class="gprimary" data-gdevice="1" ${gateView.busy ? "disabled" : ""}>
+            ${icon("person")} Unlock with ${esc(biometry.label)}</button>
+          ${row.has_password ? `<div class="gdiv"><span>or</span></div>` : ""}` : ""}
+        ${row.has_passkey && passkeysPossible() ? `
+          <button class="gprimary" data-gpasskey="1" ${gateView.busy ? "disabled" : ""}>
+            ${icon("person")} Unlock with passkey</button>
+          ${row.has_password ? `<div class="gdiv"><span>or</span></div>` : ""}` : ""}
+        ${row.has_passkey && !row.has_password && !passkeysPossible()
+          ? `<p class="gerror">${esc(PASSKEY_ELSEWHERE)}</p>` : ""}
+        ${row.has_password ? `
+          <form data-gform="password">
+            <label>Password
+              <input id="g-pw" type="password" autocomplete="current-password" required />
+            </label>
+            ${(!row.has_device && biometry.available) || (!row.has_passkey && passkeysPossible()) ? `
+              <div class="gopt">
+                <span class="gopt-text">${biometry.available && !row.has_device
+                  ? `Enable ${esc(biometry.label)}` : "Enable passkey"}</span>
+                <button type="button" class="gswitch" data-gwant="1"
+                  role="switch" aria-checked="${gateView.wantPasskey ? "true" : "false"}"
+                  aria-label="Enable passkey"></button>
+              </div>` : ""}
+            <button class="gsecondary" type="submit" ${gateView.busy ? "disabled" : ""}>
+              ${gateView.busy ? "Unlocking…" : "Unlock with password"}</button>
+          </form>` : `
+          <p class="glede" style="text-align:left;margin:0">This workspace has no key of its
+          own yet, so there is nothing to unlock. Give it one from the Vault page.</p>`}
+        <p class="gerror">${esc(gateView.error)}</p>
+        <div style="display:grid;justify-items:center">
+          <button class="gback" data-gback="1">Choose a different workspace</button>
+        </div>
+      </section>
+      ${gateAgentPanel()}`;
+  }
+
+  /** Whether a passkey ceremony can even run here.
+   *
+   *  It needs an authenticator and an origin WebAuthn will accept. A window
+   *  served from a custom scheme has neither, and a button that could only
+   *  ever fail is worse than no button — so this decides whether the offer is
+   *  made at all, and the enrol card says why when the answer is no.
+   */
+  /** Whether a passkey ceremony can happen here at all.
+   *
+   *  Not in this window, and not because of anything this code does. Measured
+   *  from inside it: `isUserVerifyingPlatformAuthenticatorAvailable()` — the
+   *  one question WebAuthn answers honestly, with no prompt and no ceremony —
+   *  returns false. It stays false with the window served over
+   *  `http://localhost`, and it stays false with the bundle signed by a
+   *  Developer ID with a real team identifier. A WKWebView is not a browser
+   *  and does not get a platform authenticator.
+   *
+   *  HivemindOS's desktop app reaches the same conclusion in the same place:
+   *  it checks for the native runtime first and returns before it would ever
+   *  call WebAuthn, using a Rust command against LocalAuthentication instead.
+   *  Its button says "passkey"; what runs is Touch ID.
+   *
+   *  So the offer is not made here, and the browser is where it is made. That
+   *  is a statement about this window, not about the vault: a passkey enrolled
+   *  in a browser opens this vault perfectly well.
+   */
+  function passkeysPossible(where = location) {
+    if (typeof window.PublicKeyCredential !== "function") return false;
+    if (!navigator.credentials?.create) return false;
+    // The desktop shell. Same test HivemindOS uses for the same decision.
+    if (window.__TAURI_INTERNALS__ || window.__TAURI__) return false;
+    if (where.protocol !== "https:" && where.protocol !== "http:") return false;
+    const host = where.hostname || "";
+    const isAddress = /^\[?(?:\d{1,3}(?:\.\d{1,3}){3}|[0-9A-Fa-f:]*:[0-9A-Fa-f:]*)\]?$/;
+    return Boolean(host) && !isAddress.test(host);
+  }
+
+  /** Said only where it changes what somebody can do: a workspace whose only
+   *  way in is a passkey, opened from a window that cannot run one. */
+  const PASSKEY_ELSEWHERE = "Passkeys are set up and used in a browser — this desktop "
+    + "window cannot run the ceremony. A passkey made in HivemindOS or Hivemind Content "
+    + "Studio opens this vault too.";
+
+  /** The offer made once a password has just been proved.
+   *
+   *  Touch ID where the device can do it, a passkey where a browser can. The
+   *  passkey branch is unreachable in the desktop window on purpose — see
+   *  `passkeysPossible` — so in practice this screen is Touch ID.
+   */
+  function gateEnrol() {
+    const row = gateView.chosen;
+    const device = biometry.available && !row?.has_device;
+    return `
+      <section class="gcard">
+        <div class="gwho">
+          <span class="gav c-${row?.colour || "amber"}">${esc(gateInitial(row?.label))}</span>
+          <div>
+            <h2>${device ? `Use ${esc(biometry.label)}` : "Add a passkey"}</h2>
+            <p class="glede" style="text-align:left;margin:2px 0 0">${esc(row?.label || "")}</p>
+          </div>
+        </div>
+        ${device ? `
+          <p class="glede" style="text-align:left;margin:0">Signed in. Let this device open
+          the vault, so next time it is ${esc(biometry.label)} instead of a password. Your
+          password still works and is still the thing that can be moved to another
+          machine.</p>
+          <button class="gprimary" data-gtrust="1" ${gateView.busy ? "disabled" : ""}>
+            ${icon("person")} ${gateView.busy ? "Waiting for you…" : `Use ${esc(biometry.label)}`}</button>
+          ${aside(`<p>This is a lock on the window, not on the key. Anything already running
+            as you can open the vault without being asked \u2014 it stops somebody at your
+            keyboard, which is what it is for.</p>`, "What this protects")}
+          <button class="gsecondary" data-gskip="1">Not now</button>`
+        : passkeysPossible() ? `
+          <p class="glede" style="text-align:left;margin:0">Signed in. Add a passkey so next
+          time this workspace opens with your fingerprint instead of a password.</p>
+          <button class="gprimary" data-genrol="1" ${gateView.busy ? "disabled" : ""}>
+            ${icon("person")} ${gateView.busy ? "Waiting for the authenticator…" : "Add a passkey"}</button>
+          <button class="gsecondary" data-gskip="1">Not now</button>`
+        : `<p class="glede" style="text-align:left;margin:0">${esc(PASSKEY_ELSEWHERE)}</p>
+           <button class="gsecondary" data-gskip="1">Continue</button>`}
+        <p class="gerror">${esc(gateView.error)}</p>
+      </section>`;
+  }
+
+  function gateCreate() {
+    return `
+      <section class="gcard">
+        <div class="gwho">
+          <span class="gav add">+</span>
+          <div>
+            <h2>New workspace</h2>
+            <p class="glede" style="text-align:left;margin:2px 0 0">Its own library, its own key.</p>
+          </div>
+        </div>
+        <form data-gform="create">
+          <label>Workspace name
+            <input id="g-name" type="text" autocomplete="off" maxlength="40" required />
+          </label>
+          <label>Its password
+            <input id="g-newpw" type="password" autocomplete="new-password" required />
+          </label>
+          <button class="gprimary" type="submit" ${gateView.busy ? "disabled" : ""}>
+            ${gateView.busy ? "Creating…" : "Create workspace"}</button>
+        </form>
+        <p class="gerror">${esc(gateView.error)}</p>
+        <div style="display:grid;justify-items:center">
+          <button class="gback" data-gback="1">Choose a different workspace</button>
+        </div>
+      </section>`;
+  }
+
+
+
+  /** One passkey, registered against this workspace, read once for its PRF.
+   *
+   *  There is no server here to issue a challenge or check an assertion, and
+   *  none is needed: what the vault wants is the PRF output, which the same
+   *  credential and salt reproduce on every device the passkey syncs to. The
+   *  signature proves nothing to a local vault — the secret is the point.
+   */
+  const PRF_LABEL = "passbook/v2/vault-prf/v1";
+  const b64url = (buffer) => btoa(String.fromCharCode(...new Uint8Array(buffer)))
+    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+
+  async function prfSalt(workspace) {
+    const material = new TextEncoder().encode(`${PRF_LABEL}:${workspace}`);
+    return new Uint8Array(await crypto.subtle.digest("SHA-256", material));
+  }
+
+  async function enrolPasskey(workspace, label, password) {
+    const salt = await prfSalt(workspace);
+    const challenge = crypto.getRandomValues(new Uint8Array(32));
+    const created = await navigator.credentials.create({
+      publicKey: {
+        challenge,
+        // The relying party has to be named explicitly. Left out, it is
+        // inferred from the origin, and a webview does not infer it the way a
+        // browser does — the request is rejected before the authenticator is
+        // ever asked. `platform` for the same reason: without it the request
+        // may be answered by a security key this window has no way to talk to.
+        rp: { name: "PassBook", id: location.hostname },
+        user: {
+          id: new TextEncoder().encode(workspace),
+          name: `${workspace} · PassBook`,
+          displayName: label || workspace,
+        },
+        pubKeyCredParams: [{ type: "public-key", alg: -7 }, { type: "public-key", alg: -257 }],
+        authenticatorSelection: {
+          authenticatorAttachment: "platform",
+          residentKey: "preferred",
+          userVerification: "required",
+        },
+        timeout: 60000,
+        attestation: "none",
+        extensions: { prf: { eval: { first: salt } } },
+      },
+    });
+    if (!created) throw new Error("No passkey was created.");
+    const made = created.getClientExtensionResults?.() || {};
+    if (!(made.prf && (made.prf.enabled || made.prf.results))) {
+      throw new Error("This authenticator has no PRF support, so it cannot hold a vault key.");
+    }
+    // One assertion, purely to read the secret out: registration reports only
+    // that PRF is available, not what it evaluates to.
+    const assertion = await navigator.credentials.get({
+      publicKey: {
+        challenge: crypto.getRandomValues(new Uint8Array(32)),
+        rpId: location.hostname,
+        allowCredentials: [{ type: "public-key", id: created.rawId }],
+        userVerification: "required",
+        timeout: 60000,
+        extensions: { prf: { eval: { first: salt } } },
+      },
+    });
+    const secret = assertion?.getClientExtensionResults?.()?.prf?.results?.first;
+    if (!secret) throw new Error("That passkey would not return a secret to wrap the key with.");
+    return invoke("vault_add_passkey", {
+      workspace, credentialId: created.id, prfSecret: b64url(secret),
+      label: label || "This device", rpId: location.hostname || "", password,
+    });
+  }
+
+  /** Open the vault with a passkey already enrolled for this workspace.
+   *
+   *  The mirror of `enrolPasskey`: same salt, same PRF, but no registration —
+   *  the credential exists, and all this does is make it evaluate the secret
+   *  the vault key was wrapped under.
+   */
+  async function unlockWithPasskey(workspace) {
+    const salt = await prfSalt(workspace);
+    const assertion = await navigator.credentials.get({
+      publicKey: {
+        challenge: crypto.getRandomValues(new Uint8Array(32)),
+        rpId: location.hostname,
+        userVerification: "required",
+        timeout: 60000,
+        extensions: { prf: { eval: { first: salt } } },
+      },
+    });
+    if (!assertion) throw new Error("No passkey was offered.");
+    const secret = assertion.getClientExtensionResults?.()?.prf?.results?.first;
+    if (!secret) throw new Error("That passkey would not return the secret this vault is wrapped under.");
+    return invoke("vault_signin_passkey", {
+      workspace, credentialId: assertion.id, prfSecret: b64url(secret), duration: "always",
+    });
+  }
+
+  /** What a failed passkey ceremony actually means.
+   *
+   *  WebAuthn reports almost every failure as `NotAllowedError`, on purpose:
+   *  a page must not be able to tell a cancelled prompt from a refused origin
+   *  from a missing credential, or it could probe for them. This window read
+   *  that one error as "cancelled", which is the reading that blames the
+   *  person for something the platform did without asking them.
+   *
+   *  The one signal the spec does not hide is the clock. A prompt a human saw
+   *  and dismissed takes a second at least. A rejection that arrives in a few
+   *  hundred milliseconds never reached anybody.
+   */
+  const HUMAN_MS = 700;
+  function passkeyReason(error, startedAt, doing) {
+    const name = error?.name || "";
+    const why = String(error?.message ?? error ?? "");
+    const elapsed = Date.now() - startedAt;
+    if (/invalid domain|relying party|rp id/i.test(why) || name === "SecurityError") {
+      return `This window's address has no domain for a passkey to belong to. ${PASSKEY_ELSEWHERE}`;
+    }
+    if (name === "InvalidStateError") {
+      return "There is already a passkey for this workspace on this device.";
+    }
+    if (name === "NotAllowedError" || name === "AbortError") {
+      // Nothing a person did takes a millisecond. A rejection that fast was
+      // the platform refusing without ever putting a prompt on screen, and
+      // calling that "cancelled" blames somebody for something they never saw.
+      return elapsed < HUMAN_MS
+        ? `${doing} was refused before anything appeared on screen, so there was `
+          + `nothing to cancel. This window is not allowed to run the ceremony. `
+          + PASSKEY_ELSEWHERE
+        : `${doing} was cancelled.`;
+    }
+    return why || String(error);
+  }
+
+  function wireGate() {
+    // `String(error)` on a rejected invoke reads "Error: Wrong password." The
+    // word "Error" in front of a sentence that is already an error is noise.
+    const said = (error) => String(error?.message ?? error ?? "").replace(/^Error:\s*/, "");
+    const fail = (error) => { gateView.error = said(error); gateView.busy = false; paintGate(); };
+
+    gate.querySelectorAll("[data-gpick]").forEach((b) => b.onclick = () => {
+      const row = workspaceRows().find((w) => w.id === b.dataset.gpick);
+      // Picking a workspace asks for a factor. It used to skip straight past
+      // this screen when the workspace was already open, on the reasoning that
+      // the vault was unlocked anyway — which made Lock a screen you dismissed
+      // by clicking your own name. The vault being open is what lets agents
+      // read; it is not evidence about who is at the keyboard, and that is the
+      // only thing this screen is asking about.
+      gateView = { mode: "signin", chosen: row, error: "", busy: false,
+                   hint: row?.open && !row.active
+                     ? "Already open for agents. Signing in switches this window to it." : "" };
+      paintGate();
+      document.getElementById("g-pw")?.focus();
+    });
+
+    gate.querySelectorAll("[data-gtrust]").forEach((b) => b.onclick = async () => {
+      gateView.busy = true; gateView.error = ""; paintGate();
+      try {
+        vault = await invoke("vault_trust_device", { password: gateView.password || "" });
+        state = await invoke("state");
+        gateView = { mode: "pick", chosen: null, error: "", busy: false, hint: "" };
+        paintGate(); paint();
+      } catch (e) { fail(e); }
+    });
+
+    gate.querySelectorAll("[data-gdevice]").forEach((b) => b.onclick = async () => {
+      const row = gateView.chosen;
+      gateView.busy = true; gateView.error = ""; paintGate();
+      try {
+        vault = await invoke("vault_signin_device", { workspace: row?.id ?? "" });
+        state = row && !row.active
+          ? await invoke("set_workspace", { name: row.id })
+          : await invoke("state");
+        unlockWindow();
+        resetRows();
+        gateView = { mode: "pick", chosen: null, error: "", busy: false, hint: "" };
+        paintGate(); paint();
+      } catch (e) { fail(e); }
+    });
+
+    gate.querySelectorAll("[data-gpasskey]").forEach((b) => b.onclick = async () => {
+      const row = gateView.chosen;
+      gateView.busy = true; gateView.error = ""; paintGate();
+      const started = Date.now();
+      try {
+        vault = await unlockWithPasskey(row?.id ?? "");
+        state = row && !row.active
+          ? await invoke("set_workspace", { name: row.id })
+          : await invoke("state");
+        unlockWindow();
+        resetRows();
+        gateView = { mode: "pick", chosen: null, error: "", busy: false, hint: "" };
+        paintGate(); paint();
+      } catch (e) {
+        fail(passkeyReason(e, started, "Unlocking with a passkey"));
+      }
+    });
+
+    gate.querySelectorAll("[data-gnew]").forEach((b) => b.onclick = () => {
+      gateView = { mode: "create", chosen: null, error: "", busy: false, hint: "" };
+      paintGate();
+      document.getElementById("g-name")?.focus();
+    });
+
+    gate.querySelectorAll("[data-gback]").forEach((b) => b.onclick = () => {
+      gateView = { mode: "pick", chosen: null, error: "", busy: false, hint: "" };
+      paintGate();
+    });
+
+    gate.querySelectorAll("[data-gagents]").forEach((b) => b.onclick = async () => {
+      gateView.busy = true; paintGate();
+      try { vault = await invoke("vault_signout", { workspace: "", everything: true }); }
+      catch (e) { gateView.error = said(e); }
+      finally { gateView.busy = false; paintGate(); }
+    });
+
+    gate.querySelectorAll("[data-gskip]").forEach((b) => b.onclick = () => {
+      gateView = { mode: "pick", chosen: null, error: "", busy: false, hint: "" };
+      paintGate();
+    });
+    gate.querySelectorAll("[data-genrol]").forEach((b) => b.onclick = async () => {
+      const row = gateView.chosen;
+      const password = gateView.password || "";
+      gateView.busy = true; gateView.error = ""; paintGate();
+      const started = Date.now();
+      try {
+        vault = await invoke("vault_state");
+        await enrolPasskey(row?.id ?? "", "This device", password);
+        state = await invoke("state");
+        gateView = { mode: "pick", chosen: null, error: "", busy: false, hint: "" };
+        paintGate(); paint();
+      } catch (e) {
+        fail(passkeyReason(e, started, "Adding a passkey"));
+      }
+    });
+
+    const form = gate.querySelector("[data-gform]");
+    if (!form) return;
+    form.onsubmit = async (event) => {
+      event.preventDefault();
+      if (gateView.busy) return;
+      // Read the fields BEFORE anything repaints. Setting busy rebuilds this
+      // form, which replaces the input with an empty one — so reading after it
+      // sent a blank password and the vault refused a password nobody mistyped.
+      const typed = {
+        password: document.getElementById("g-pw")?.value ?? "",
+        name: document.getElementById("g-name")?.value?.trim() ?? "",
+        fresh: document.getElementById("g-newpw")?.value ?? "",
+      };
+      const wanted = gateView.wantPasskey === true;
+      gateView.busy = true; gateView.error = ""; paintGate();
+      try {
+        if (form.dataset.gform === "create") {
+          const { name, fresh: password } = typed;
+          vault = await invoke("vault_create_workspace", { name, password });
+          state = await invoke("state");
+          gateView = { mode: "pick", chosen: null, error: "", busy: false, hint: "" };
+        } else {
+          const password = typed.password;
+          vault = await invoke("vault_signin", {
+            profile: "", password, duration: "always",
+            workspace: gateView.chosen?.id ?? "",
+          });
+          if (gateView.chosen && !gateView.chosen.active) {
+            state = await invoke("set_workspace", { name: gateView.chosen.id });
+          } else {
+            state = await invoke("state");
+          }
+          unlockWindow();
+          resetRows();
+          // The one moment enrolment can succeed: a proven password, in hand,
+          // for a vault that is open. Offering it earlier could only refuse.
+          if (wanted && (passkeysPossible() || biometry.available)) {
+            gateView = { mode: "enrol", chosen: gateView.chosen, error: "",
+                         busy: false, hint: "", password: typed.password };
+          } else {
+            gateView = { mode: "pick", chosen: null, error: "", busy: false, hint: "" };
+          }
+        }
+        paintGate();
+        paint();
+      } catch (e) {
+        fail(e);
+      }
+    };
+    // A form that reappears on every keystroke-free repaint has to be refocused.
+    // The switch flips in place. Repainting the card here would take the
+    // password field down with it, and a control that clears what you typed is
+    // a control nobody touches twice.
+    gate.querySelectorAll("[data-gwant]").forEach((b) => b.onclick = () => {
+      gateView.wantPasskey = !gateView.wantPasskey;
+      b.setAttribute("aria-checked", gateView.wantPasskey ? "true" : "false");
+    });
+    const field = document.getElementById("g-pw") || document.getElementById("g-name");
+    if (field && !gateView.busy) field.focus();
+  }
+
+  function paintGate() {
+    const show = gateShouldShow();
+    gate.hidden = !show;
+    if (!show) return;
+    const body = gateView.mode === "signin" ? gateSignIn()
+      : gateView.mode === "create" ? gateCreate()
+      : gateView.mode === "enrol" ? gateEnrol() : gateTiles();
+    gate.innerHTML = `<div class="gwrap">${body}</div>`;
+    wireGate();
+  }
+
   function paint() {
     if (!state) return;
     paintNav();
     const body = { keys: keysPage, vault: vaultPage, signins: signinsPage,
-                   access: accessPage, agents: agentsPage,
+                   access: accessPage, apps: appsPage, settings: settingsPage,
                    machines: machinesPage, switch: switchPage,
                    broker: brokerPage, record: recordPage }[page]();
     main.innerHTML = lockBanner() + body + noticeBar();
+    paintGate();
     dressPage();
 
     main.querySelectorAll("[data-goto]").forEach((b) => b.onclick = () => {
       page = b.dataset.goto; notice = ""; paint();
     });
-    main.querySelectorAll("[data-signout]").forEach((b) => b.onclick = () => callVault("vault_signout"));
+    // Lock = put this window away. Agent access is a separate decision, made
+    // on the screen this drops you on.
+    main.querySelectorAll("[data-signout]").forEach((b) => b.onclick = () => lockWindow());
+    main.querySelectorAll("[data-verify]").forEach((b) => b.onclick = () => checkChain());
+    main.querySelectorAll("[data-noticeclear]").forEach((b) => b.onclick = () => {
+      notice = ""; paint();
+    });
     main.querySelectorAll("[data-confirm]").forEach((b) => b.onclick = async () => {
       busy = true; paint();
       try { state = await invoke("set_confirmation", {
@@ -1914,6 +3199,13 @@ passbook oauth connect google:work</pre>
             notice = ""; }
       catch (e) { notice = String(e); }
       finally { busy = false; paint(); }
+    });
+    main.querySelectorAll("[data-btab]").forEach((b) => b.onclick = () => {
+      backup.tab = b.dataset.btab; backup.said = ""; paint();
+    });
+    main.querySelectorAll("[data-addprofile]").forEach((b) => b.onclick = () => {
+      addingProfile = !addingProfile; paint();
+      if (addingProfile) document.getElementById("np-label")?.focus();
     });
     main.querySelectorAll("[data-bshape]").forEach((b) => b.onclick = () => {
       backup.shape = b.dataset.bshape;
@@ -1934,7 +3226,7 @@ passbook oauth connect google:work</pre>
     main.querySelectorAll("[data-workspace]").forEach((b) => b.onclick = async () => {
       busy = true; paint();
       try { state = await invoke("set_workspace", { name: b.dataset.workspace });
-            notice = ""; grid = null; picked = {}; revealed = {}; values = {}; }
+            notice = ""; grid = null; picked = {}; revealed = {}; values = {}; resetRows(); }
       catch (e) { notice = String(e); }
       finally { busy = false; await refreshVault(); paint(); }
     });
@@ -1969,6 +3261,29 @@ passbook oauth connect google:work</pre>
       };
       b.onclick = toggle;
       b.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } };
+    });
+
+    // Opening a key's settings repaints only to add the block — the search box
+    // and any typed-in value are rebuilt from state, so nothing is lost.
+    main.querySelectorAll("[data-open]").forEach((b) => b.onclick = () => {
+      const k = b.dataset.open;
+      if (expanded[k]) delete expanded[k]; else expanded[k] = true;
+      // Leaving a row closes whatever editor it had open, so reopening it
+      // starts from the summary rather than half-way through a change.
+      if (!expanded[k]) {
+        if (audienceFor === k) { audienceFor = null; audienceDraft = null; }
+        if (projectsFor === k) { projectsFor = null; projectsDraft = null; }
+      }
+      paint();
+    });
+    main.querySelectorAll("[data-selectmode]").forEach((b) => b.onclick = () => {
+      selectMode = !selectMode;
+      if (!selectMode) { picked = {}; bulkConfirm = false; }
+      paint();
+    });
+    main.querySelectorAll("[data-addopen]").forEach((b) => b.onclick = () => {
+      adding = !adding; paint();
+      if (adding) document.getElementById("k")?.focus();
     });
 
     main.querySelectorAll("[data-pick]").forEach((b) => b.onchange = () => {
@@ -2018,92 +3333,104 @@ passbook oauth connect google:work</pre>
       finally { busy = false; paint(); }
     });
 
-    main.querySelectorAll("[data-aud]").forEach((b) => b.onclick = () => {
-      audienceFor = b.dataset.aud; audienceDraft = null;
-      projectsFor = null; projectsDraft = null; paint();
-    });
-    main.querySelectorAll("[data-proj]").forEach((b) => b.onclick = () => {
-      projectsFor = b.dataset.proj; projectsDraft = null; projectTyped = "";
-      audienceFor = null; audienceDraft = null; paint();
-    });
-    main.querySelectorAll("[data-projcancel]").forEach((b) => b.onclick = () => {
-      projectsFor = null; projectsDraft = null; projectTyped = ""; paint();
-    });
-    main.querySelectorAll("[data-projmode]").forEach((b) => b.onclick = () => {
-      const rule = state.catalog?.projects?.[projectsFor];
-      projectsDraft = projectsDraft
-        || { mode: rule?.mode || "all", projects: [...(rule?.projects || [])] };
-      const next = b.dataset.projmode;
-      // `include` and `exclude` mean opposite things about the same names, so a
-      // flip starts empty rather than carrying a selection across a change of
-      // meaning nobody asked for.
-      if (next !== projectsDraft.mode) projectsDraft.projects = [];
-      projectsDraft.mode = next;
-      paint();
-    });
-    main.querySelectorAll("[data-projname]").forEach((c) => c.onchange = () => {
-      projectsDraft = projectsDraft || { mode: "include", projects: [] };
-      const name = c.dataset.projname;
-      projectsDraft.projects = c.checked
-        ? [...new Set([...projectsDraft.projects, name])]
-        : projectsDraft.projects.filter((p) => p !== name);
-      paint();
-    });
-    main.querySelectorAll("[data-projadd]").forEach((b) => b.onclick = () => {
-      const box = document.getElementById("proj-new");
-      const name = (box?.value ?? "").trim();
-      if (!name) return;
-      projectsDraft = projectsDraft || { mode: "include", projects: [] };
-      if (projectsDraft.mode === "all") projectsDraft.mode = "include";
-      projectsDraft.projects = [...new Set([...projectsDraft.projects, name])];
-      projectTyped = "";
-      paint();
-    });
-    main.querySelectorAll("[data-projsave]").forEach((b) => b.onclick = async () => {
-      const draft = projectsDraft || { mode: "all", projects: [] };
+    /** Apps and Projects: chosen in place, applied on the press.
+     *
+     *  Both used to be a button that swapped the panel for an editor with its
+     *  own Save and Cancel — four interactions and a change of scene to set a
+     *  value that the two rows above it set with one click. The only reason a
+     *  draft still exists at all is the moment between picking "Only chosen"
+     *  and naming the first app, when there is no rule that could be written.
+     */
+    const saveAudience = async (key, mode, agents) => {
       busy = true; paint();
       try {
-        state = await invoke("set_key_projects", {
-          name: b.dataset.projsave, mode: draft.mode,
-          projects: draft.mode === "all" ? [] : draft.projects });
-        notice = ""; projectsFor = null; projectsDraft = null; projectTyped = ""; grid = null;
-      } catch (e) { notice = String(e); }
-      finally { busy = false; paint(); }
-    });
-    main.querySelectorAll("[data-audcancel]").forEach((b) => b.onclick = () => {
-      audienceFor = null; audienceDraft = null; paint();
-    });
-    main.querySelectorAll("[data-audmode]").forEach((b) => b.onclick = () => {
-      const rule = state.catalog?.audiences?.[audienceFor];
-      audienceDraft = audienceDraft
-        || { mode: rule?.mode || "all", agents: [...(rule?.agents || [])] };
-      const next = b.dataset.audmode;
-      // Between `include` and `exclude` the same names mean opposite things —
-      // the agent that was the only one allowed becomes one of the blocked. So
-      // a flip starts empty rather than carrying a selection across a change of
-      // meaning that nobody asked for.
-      if (next !== audienceDraft.mode) audienceDraft.agents = [];
-      audienceDraft.mode = next;
-      paint();
-    });
-    main.querySelectorAll("[data-audagent]").forEach((c) => c.onchange = () => {
-      audienceDraft = audienceDraft || { mode: "include", agents: [] };
-      const who = c.dataset.audagent;
-      audienceDraft.agents = c.checked
-        ? [...new Set([...audienceDraft.agents, who])]
-        : audienceDraft.agents.filter((a) => a !== who);
-      paint();
-    });
-    main.querySelectorAll("[data-audsave]").forEach((b) => b.onclick = async () => {
-      const draft = audienceDraft || { mode: "all", agents: [] };
-      busy = true; paint();
-      try {
-        state = await invoke("set_key_audience", {
-          name: b.dataset.audsave, mode: draft.mode,
-          agents: draft.mode === "all" ? [] : draft.agents });
+        state = await invoke("set_key_audience", { name: key, mode,
+          agents: mode === "all" ? [] : agents });
         notice = ""; audienceFor = null; audienceDraft = null; grid = null;
       } catch (e) { notice = String(e); }
       finally { busy = false; paint(); }
+    };
+    const saveProjects = async (key, mode, projects) => {
+      busy = true; paint();
+      try {
+        state = await invoke("set_key_projects", { name: key, mode,
+          projects: mode === "all" ? [] : projects });
+        notice = ""; projectsFor = null; projectsDraft = null; projectTyped = ""; grid = null;
+      } catch (e) { notice = String(e); }
+      finally { busy = false; paint(); }
+    };
+
+    main.querySelectorAll("[data-audmode]").forEach((b) => b.onclick = () => {
+      const key = b.dataset.key;
+      const next = b.dataset.audmode;
+      if (next === "all") { saveAudience(key, "all", []); return; }
+      const rule = state.catalog?.audiences?.[key];
+      const held = audienceFor === key && audienceDraft
+        ? audienceDraft.agents : [...(rule?.agents || [])];
+      // Between `include` and `exclude` the same names mean opposite things —
+      // the app that was the only one allowed becomes one of the blocked. So a
+      // flip starts empty rather than carrying a selection across a change of
+      // meaning that nobody asked for.
+      const carried = (rule?.mode || "all") === next ? held : [];
+      if (carried.length) { saveAudience(key, next, carried); return; }
+      audienceFor = key; audienceDraft = { mode: next, agents: [] };
+      projectsFor = null; projectsDraft = null;
+      paint();
+    });
+    main.querySelectorAll("[data-audagent]").forEach((b) => b.onclick = () => {
+      const key = b.dataset.key;
+      const who = b.dataset.audagent;
+      const rule = state.catalog?.audiences?.[key];
+      const draft = (audienceFor === key && audienceDraft)
+        || { mode: rule?.mode || "include", agents: [...(rule?.agents || [])] };
+      const agents = draft.agents.includes(who)
+        ? draft.agents.filter((a) => a !== who)
+        : [...draft.agents, who];
+      // An empty rule is not a rule, so it is never written. The choice stays
+      // on screen unsaved rather than quietly becoming "every app".
+      if (!agents.length) {
+        audienceFor = key; audienceDraft = { mode: draft.mode, agents }; paint(); return;
+      }
+      saveAudience(key, draft.mode, agents);
+    });
+
+    main.querySelectorAll("[data-projmode]").forEach((b) => b.onclick = () => {
+      const key = b.dataset.key;
+      const next = b.dataset.projmode;
+      if (next === "all") { saveProjects(key, "all", []); return; }
+      const rule = state.catalog?.projects?.[key];
+      const held = projectsFor === key && projectsDraft
+        ? projectsDraft.projects : [...(rule?.projects || [])];
+      const carried = (rule?.mode || "all") === next ? held : [];
+      if (carried.length) { saveProjects(key, next, carried); return; }
+      projectsFor = key; projectsDraft = { mode: next, projects: [] }; projectTyped = "";
+      audienceFor = null; audienceDraft = null;
+      paint();
+    });
+    main.querySelectorAll("[data-projname]").forEach((b) => b.onclick = () => {
+      const key = b.dataset.key;
+      const name = b.dataset.projname;
+      const rule = state.catalog?.projects?.[key];
+      const draft = (projectsFor === key && projectsDraft)
+        || { mode: rule?.mode || "include", projects: [...(rule?.projects || [])] };
+      const projects = draft.projects.includes(name)
+        ? draft.projects.filter((p) => p !== name)
+        : [...draft.projects, name];
+      if (!projects.length) {
+        projectsFor = key; projectsDraft = { mode: draft.mode, projects }; paint(); return;
+      }
+      saveProjects(key, draft.mode, projects);
+    });
+    main.querySelectorAll("[data-projadd]").forEach((b) => b.onclick = () => {
+      const key = b.dataset.key;
+      const name = (document.getElementById("proj-new")?.value ?? "").trim();
+      if (!name) return;
+      const rule = state.catalog?.projects?.[key];
+      const draft = (projectsFor === key && projectsDraft)
+        || { mode: rule?.mode || "include", projects: [...(rule?.projects || [])] };
+      projectTyped = "";
+      saveProjects(key, draft.mode === "all" ? "include" : draft.mode,
+                   [...new Set([...draft.projects, name])]);
     });
 
     main.querySelectorAll("[data-grid]").forEach((b) => b.onclick = async () => {
@@ -2120,7 +3447,9 @@ passbook oauth connect google:work</pre>
 
     const signIn = (field, select) => {
       const profile = select ? (document.getElementById(select)?.value ?? "") : "";
-      callVault("vault_signin", { profile, password: pwd(field) });
+      const duration = document.getElementById("si-for")?.value ?? "";
+      if (duration) vaultForm.duration = duration;
+      callVault("vault_signin", { profile, password: pwd(field), duration });
     };
     const wire = (id, run) => {
       const button = document.getElementById(id);
@@ -2174,7 +3503,6 @@ passbook oauth connect google:work</pre>
     wire("sw-go", () => signIn("sw-pw", "sw-profile"));
     wire("si-go2", () => signIn("si-pw2", null));
     wire("seal-go", () => callVault("vault_seal", { password: pwd("seal-pw") }));
-    wire("seal-go2", () => callVault("vault_seal", { password: pwd("sl-pw") }));
     wire("unseal-go", () => callVault("vault_unseal", { password: pwd("sl-pw") }));
     wire("sec-go", () => callVault("vault_secure",
       { label: document.getElementById("sec-label")?.value ?? "", password: pwd("sec-pw") }));
@@ -2269,18 +3597,39 @@ passbook oauth connect google:work</pre>
         if (e.key === "Enter") { e.preventDefault(); document.querySelector("[data-projadd]")?.click(); }
       };
     }
+    // Grow the list when its tail is scrolled to. The observer is rebuilt each
+    // paint because the node it watched was replaced by the paint that made it.
+    rowGrower?.disconnect();
+    rowGrower = null;
+    const more = main.querySelector("[data-more]");
+    if (more) {
+      const grow = () => { rowLimit += ROW_PAGE; paint(); };
+      more.onclick = grow;
+      if (window.IntersectionObserver) {
+        // A margin, so the rows are built before the tail is reached rather
+        // than after. It stops on its own: a full list has no tail to watch.
+        rowGrower = new IntersectionObserver(
+          (seen) => { if (seen.some((e) => e.isIntersecting)) grow(); },
+          { rootMargin: "600px" });
+        rowGrower.observe(more);
+      }
+    }
+
     ["q-keys", "q-access"].forEach((id) => {
       const box = document.getElementById(id);
       if (!box) return;
       box.oninput = () => {
         query = box.value;
+        resetRows();
         const at = box.selectionStart;
         paint();
         const again = document.getElementById(id);
         if (again) { again.focus(); again.setSelectionRange(at, at); }
       };
       box.onkeydown = (e) => {
-        if (e.key === "Escape" && query) { query = ""; paint(); document.getElementById(id)?.focus(); }
+        if (e.key === "Escape" && query) {
+          query = ""; resetRows(); paint(); document.getElementById(id)?.focus();
+        }
       };
     });
     const go = document.getElementById("addgo");
@@ -2299,10 +3648,30 @@ passbook oauth connect google:work</pre>
         <code>withGlobalTauri</code> must be enabled in tauri.conf.json.</p>`;
       return;
     }
-    try { state = await invoke("state"); await refreshVault(); await refreshSignins(); paint(); }
+    try {
+      state = await invoke("state");
+      await refreshVault();
+      await refreshSignins();
+      // A remembered lock is only honoured if the factor that would lift it is
+      // still there. A workspace that lost its key between sessions would
+      // otherwise come back to a screen nothing can answer.
+      if (appLocked && !canProveIdentity(activeRow())) unlockWindow();
+      paint();
+      paintGate();
+      await readyNotifications();
+      try { biometry = await invoke("biometric_status") || biometry; } catch { /* older build */ }
+      if (biometry.available) { paintGate(); paint(); }
+      announce(state?.broker?.pending);
+    }
     catch (e) { main.innerHTML = `<h2>PassBook</h2><p class="lede err">${esc(String(e))}</p>`; }
   }
   boot();
+  // A poll that repaints unconditionally repaints for nothing nearly every
+  // time. Most five-second windows change nothing at all, and a repaint of a
+  // store this size is the most expensive thing the window does — so compare
+  // first, and only rebuild when the answer is actually different.
+  let lastSeen = "";
+  let quietPolls = 0;
   setInterval(async () => {
     // A background refresh must not wipe a value someone is mid-edit on.
     const focused = document.activeElement;
@@ -2312,7 +3681,28 @@ passbook oauth connect google:work</pre>
     // A half-typed password must survive the refresh for the same reason a
     // half-typed value does.
     if (focused?.type === "password") return;
-    try { state = await invoke("state"); await refreshVault(); await refreshSignins(); paint(); } catch {}
+    try {
+      const next = await invoke("state");
+      await refreshVault();
+      await refreshSignins();
+      // Before the unchanged-state shortcut below: a request that arrived and
+      // was answered between two polls still deserves to have been announced.
+      announce(next?.broker?.pending);
+      // A chain checked ten rows ago has not been checked. The label goes back
+      // to "Not checked" rather than keeping a tick that is no longer about
+      // the record on screen.
+      const tail = (rows) => (rows || []).slice(-1)[0]?.proofHash || "";
+      if (chain.answer && tail(next.record?.rows) !== tail(state?.record?.rows)) {
+        chain.answer = null;
+      }
+      const now = JSON.stringify([next, vault, signins]);
+      // Relative times ("4m ago") go stale while nothing changes, so a quiet
+      // window still gets one repaint a minute to move them along.
+      if (now === lastSeen && ++quietPolls < 12) { state = next; return; }
+      lastSeen = now; quietPolls = 0;
+      state = next;
+      paint();
+    } catch {}
   }, 5000);
 })();
 </script>

@@ -216,6 +216,31 @@ def _queue(app: str, keys: list[str], reason: str,
     return request_id, event
 
 
+APP_BUNDLE_ID = "app.hivemindos.passbook"
+
+
+def _wake_the_window() -> bool:
+    """Start PassBook without bringing it forward. True if it is now running.
+
+    Nothing else can answer a held request. `passbook approve` exists, but the
+    notification says "waiting for you", and the place that waiting ends is the
+    window — so if it is not open, the useful thing to do about a request that
+    needs a person is to open it, not to describe it into an empty room.
+
+    `-g` leaves the focus where it is and `-j` starts it hidden, so a request
+    that arrives mid-sentence does not take the keyboard away from whatever you
+    were typing into. The notification is what brings it forward, when you ask.
+    """
+    if os.environ.get("PASSBOOK_NO_LAUNCH"):
+        return False
+    try:
+        done = subprocess.run(["open", "-g", "-j", "-b", APP_BUNDLE_ID],
+                              capture_output=True, timeout=8)
+        return done.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def notify(kind: str, app: str, keys: list[str]) -> None:
     """Put the request in front of the person, outside the app window.
 
@@ -223,6 +248,13 @@ def notify(kind: str, app: str, keys: list[str]) -> None:
     request that waits three minutes in a window nobody has open is a request
     that times out. Never raises and never blocks for long: a machine with no
     notifier is a machine that still has to work.
+
+    On macOS the window posts the banner and this only makes sure there is a
+    window to post it. `osascript -e 'display notification'` used to do it from
+    here, and it cannot be made to look right: `osascript` is a Script Editor
+    helper, so the banner carried an AppleScript icon and clicking it opened
+    Script Editor's open-a-file panel. A notification about credentials has to
+    come from the app that holds them, and it has to open that app.
 
     Key NAMES only. A notification banner is drawn by the OS, may be logged by
     it, and is visible to anyone glancing at the screen.
@@ -235,6 +267,10 @@ def notify(kind: str, app: str, keys: list[str]) -> None:
     body = f"{app} {verb} {named or 'a credential'}"
     try:
         if sys.platform == "darwin":
+            if _wake_the_window():
+                return
+            # No PassBook on this machine — a CLI-only install, where the
+            # answer comes from `passbook approve`. Say it however we can.
             script = ('display notification {} with title "PassBook" subtitle {}'
                       .format(json.dumps(body), json.dumps("Waiting for you")))
             subprocess.run(["osascript", "-e", script], capture_output=True, timeout=5)
@@ -326,31 +362,93 @@ def _caller(connection: "socket.socket") -> dict[str, Any]:
 # disk: it crosses one 0600 socket, becomes a key, and is dropped.
 
 _VAULT_LOCK = threading.Lock()
-_VAULT_STATE: dict[str, Any] = {}
-
-# Long enough to work through, short enough that a walked-away-from laptop
-# closes itself. The owner can say otherwise per sign-in.
-DEFAULT_SESSION_SECONDS = 8 * 3600
-
-
-def _forget_dek() -> None:
-    """Drop the data key, overwriting the bytes we are allowed to overwrite."""
-    holder = _VAULT_STATE.get("dek")
-    if isinstance(holder, bytearray):
-        for index in range(len(holder)):
-            holder[index] = 0
-    _VAULT_STATE.clear()
+# One open session per WORKSPACE, keyed by its id.
+#
+# There used to be exactly one, because there used to be one vault for the
+# machine — so "which workspace am I in" and "whose key opens it" were
+# unrelated questions and only the second could be asked. A workspace is
+# already a separate store; giving it its own vault makes them one question,
+# and this is the half that has to hold more than one answer at a time. Agents
+# pinned to different workspaces run at the same time, and signing in to one
+# must not close another.
+_VAULT_STATE: dict[str, dict[str, Any]] = {}
 
 
-def _held_dek() -> tuple[bytes | None, str]:
-    """The data key and its profile, or (None, "") when locked or expired."""
+def _here(root: Path | None = None) -> str:
+    """The workspace this call is about. Never blank: `main` is the default."""
+    import passbook
+
+    try:
+        return passbook.workspace() or passbook.ROOT_WORKSPACE_ID
+    except Exception:  # noqa: BLE001 — an unreadable manifest is not locked
+        return passbook.ROOT_WORKSPACE_ID
+
+
+def _vault_root(workspace: str = "") -> Path | None:
+    """Where one workspace's vault and store live, together."""
+    try:
+        import passbook_vault
+
+        return passbook_vault.workspace_root(workspace or _here())
+    except Exception:  # noqa: BLE001
+        return None
+
+# A sign-in that does not end until somebody ends it.
+#
+# The old default closed the vault after eight hours, on the reasoning that a
+# walked-away-from laptop should close itself. That reasoning is about a person
+# at a desk, and it is wrong for what this machine actually does: agents read
+# credentials overnight and at weekends, and a vault that locks itself at 2am
+# does not protect anything — it stops the work and teaches whoever owns it to
+# stop sealing the store.
+#
+# Nothing is weakened by it that was not already true. The data key lives in
+# this process and nowhere else, so it goes when the broker does, and it never
+# survives a reboot however long the session was for. What ends now is the
+# timer, not the boundary.
+SESSION_FOREVER = 0
+DEFAULT_SESSION_SECONDS = SESSION_FOREVER
+
+# What somebody types to ask for it, on the command line or in the window.
+FOREVER_WORDS = frozenset({"always", "forever", "never", "none", "0", "no-expiry"})
+
+
+def _forget_dek(workspace: str = "") -> bool:
+    """Drop one workspace's key, or every one. True if anything was held.
+
+    Overwrites the bytes we are allowed to overwrite before dropping them.
+    """
+    names = [workspace] if workspace else list(_VAULT_STATE)
+    dropped = False
+    for name in names:
+        session = _VAULT_STATE.pop(name, None)
+        if session is None:
+            continue
+        dropped = True
+        holder = session.get("dek")
+        if isinstance(holder, bytearray):
+            for index in range(len(holder)):
+                holder[index] = 0
+    return dropped
+
+
+def _held_dek(workspace: str = "") -> tuple[bytes | None, str]:
+    """The data key for one workspace, or (None, "") when locked or expired.
+
+    An `expires` of zero is a session with no end, not one that ended in 1970.
+    There is no state where the key is held and the field is missing: it is
+    written by the same update that puts the key there.
+    """
+    name = workspace or _here()
     with _VAULT_LOCK:
-        if not _VAULT_STATE:
+        session = _VAULT_STATE.get(name)
+        if not session:
             return None, ""
-        if time.time() >= float(_VAULT_STATE.get("expires", 0)):
-            _forget_dek()
+        expires = float(session.get("expires", 0))
+        if expires and time.time() >= expires:
+            _forget_dek(name)
             return None, ""
-        return bytes(_VAULT_STATE["dek"]), str(_VAULT_STATE.get("profile", ""))
+        return bytes(session["dek"]), str(session.get("profile", ""))
 
 
 def _unsealer(values: dict[str, str]) -> dict[str, str]:
@@ -359,7 +457,7 @@ def _unsealer(values: dict[str, str]) -> dict[str, str]:
         import passbook_vault
     except ImportError:
         return values
-    dek, profile = _held_dek()
+    dek, profile = _held_dek(_here())
     return passbook_vault.unseal_mapping(values, dek, profile_id=profile)
 
 
@@ -390,7 +488,7 @@ def _seal_values(payload: Mapping[str, Any], root: Path | None,
     if not isinstance(incoming, dict) or not incoming:
         return {"ok": False, "error": "no values to seal"}
 
-    dek, profile = _held_dek()
+    dek, profile = _held_dek(_here())
     if dek is None:
         return {"ok": False, "error": "the vault is shut, so nothing can be sealed"}
 
@@ -460,31 +558,56 @@ def _signin(payload: Mapping[str, Any], root: Path | None,
     except ImportError:
         return {"ok": False, "error": "this build has no vault support"}
 
-    profile = str(payload.get("profile") or "").strip() or passbook_vault.active_profile_id(root=root)
-    if not profile:
-        return {"ok": False, "error": "there is no profile to sign in to"}
+    # The workspace decides which vault this is about. `root` is the machine's
+    # store directory and stays what it always was; a workspace's own vault
+    # sits beside its own `.env`, which for `main` is the same place.
+    workspace = str(payload.get("workspace") or "").strip() or _here()
     try:
-        seconds = access.parse_duration(str(payload.get("duration") or "")) if payload.get("duration") \
-            else DEFAULT_SESSION_SECONDS
+        vault_root = passbook_vault.workspace_root(workspace)
+    except Exception as error:  # noqa: BLE001
+        return {"ok": False, "error": f"no such workspace: {workspace} ({error})"}
+    if root is not None and workspace == _here():
+        vault_root = root
+    profile = str(payload.get("profile") or "").strip() \
+        or passbook_vault.active_profile_id(root=vault_root)
+    if not profile:
+        return {"ok": False,
+                "error": f"{workspace} has no key of its own yet — create one first"}
+    asked = str(payload.get("duration") or "").strip().lower()
+    try:
+        if not asked:
+            # No duration named means "same as this workspace is already on".
+            # Without that, signing in again — to switch profile, or after
+            # adding a passkey — silently turned a session somebody had
+            # deliberately time-boxed to an hour into one that never ends.
+            with _VAULT_LOCK:
+                held = _VAULT_STATE.get(workspace) or {}
+                seconds = held.get("asked", DEFAULT_SESSION_SECONDS)
+        elif asked in FOREVER_WORDS:
+            seconds = SESSION_FOREVER
+        else:
+            seconds = access.parse_duration(asked)
     except ValueError as error:
         return {"ok": False, "error": str(error)}
 
     try:
         if payload.get("password"):
-            dek = passbook_vault.unlock_with_password(profile, str(payload["password"]), root=root)
+            dek = passbook_vault.unlock_with_password(profile, str(payload["password"]),
+                                                      root=vault_root)
             factor = "password"
         elif payload.get("prf_secret"):
             dek = passbook_vault.unlock_with_passkey(
                 profile, credential_id=str(payload.get("credential_id") or ""),
                 prf_secret=base64.urlsafe_b64decode(
                     str(payload["prf_secret"]) + "=" * (-len(str(payload["prf_secret"])) % 4)),
-                root=root)
+                root=vault_root)
             factor = "passkey"
         elif payload.get("device"):
-            dek = passbook_vault.unlock_with_device(profile, root=root)
+            dek = passbook_vault.unlock_with_device(profile, root=vault_root)
             factor = "device"
         elif payload.get("recovery"):
-            dek = passbook_vault.unlock_with_recovery(profile, str(payload["recovery"]), root=root)
+            dek = passbook_vault.unlock_with_recovery(profile, str(payload["recovery"]),
+                                                      root=vault_root)
             factor = "recovery"
         else:
             return {"ok": False, "error": "no factor offered"}
@@ -496,16 +619,56 @@ def _signin(payload: Mapping[str, Any], root: Path | None,
         return {"ok": False, "error": str(error)}
 
     with _VAULT_LOCK:
-        _forget_dek()
-        _VAULT_STATE.update({
+        # Only this workspace's previous session is replaced. Signing in to one
+        # used to close every other, which on a machine where agents are pinned
+        # to different workspaces meant opening yours broke theirs.
+        _forget_dek(workspace)
+        _VAULT_STATE[workspace] = {
             "dek": bytearray(dek), "profile": profile, "factor": factor,
-            "opened_at": time.time(), "expires": time.time() + seconds,
-        })
+            "workspace": workspace, "opened_at": time.time(),
+            "expires": (time.time() + seconds) if seconds else SESSION_FOREVER,
+            # What was asked for, not what is left of it: a sign-in that
+            # inherits the remaining time would shrink the session every time
+            # somebody signed in again.
+            "asked": seconds,
+        }
+    span = access.describe_duration(seconds) if seconds else "until it is locked"
     _record("signin", ["*"], app=str(payload.get("app") or "passbook"), granted=True,
-            reason=f"{factor} sign-in for {access.describe_duration(seconds)} "
+            reason=f"{factor} sign-in to {workspace} for {span} "
                    f"[{(caller or {}).get('status', 'unknown')} caller]")
-    return {"ok": True, "profile": profile, "factor": factor,
-            "expires_in": seconds, "detail": f"Signed in for {access.describe_duration(seconds)}."}
+    return {"ok": True, "profile": profile, "factor": factor, "workspace": workspace,
+            "expires_in": seconds,
+            "detail": f"Signed in for {span}." if seconds
+                      else "Signed in. It stays open until you lock it or the broker stops."}
+
+
+def _opens_how_many(dek: bytes | None, profile: str, root: Path | None) -> int:
+    """How many of the sealed values this session's key can actually open.
+
+    "Unlocked" only ever meant "a data key is held here", and that is not the
+    same claim as "the store is readable". Every profile has its own key and
+    the profile id is bound into each value, so signing in to the wrong profile
+    holds a perfectly good key that opens nothing — and the window said Open
+    over a store where every single value stayed unreadable.
+
+    This is the same failure the vault screen already had once, from the other
+    direction, and the answer is the same: count it, do not assume it.
+    """
+    if dek is None:
+        return 0
+    try:
+        import passbook
+        import passbook_vault
+
+        target = passbook.env_path() if root is None else Path(root) / ".env"
+        raw = passbook.parse_env_text(target.read_text(encoding="utf-8"))
+        sealed = {name: value for name, value in raw.items()
+                  if passbook_vault.is_sealed(value)}
+        if not sealed:
+            return 0
+        return len(passbook_vault.unseal_mapping(sealed, dek, profile_id=profile))
+    except Exception:  # noqa: BLE001 — a status call must not fail the window
+        return 0
 
 
 def _vault_status(root: Path | None) -> dict[str, Any]:
@@ -513,13 +676,23 @@ def _vault_status(root: Path | None) -> dict[str, Any]:
         import passbook_vault
     except ImportError:
         return {"ok": True, "supported": False, "unlocked": False}
-    dek, profile = _held_dek()
+    here = _here()
+    dek, profile = _held_dek(here)
     with _VAULT_LOCK:
-        expires = float(_VAULT_STATE.get("expires", 0)) if _VAULT_STATE else 0.0
-        factor = str(_VAULT_STATE.get("factor", "")) if _VAULT_STATE else ""
+        session = _VAULT_STATE.get(here) or {}
+        expires = float(session.get("expires", 0))
+        factor = str(session.get("factor", ""))
+        # Which workspaces are open right now, so the picker can say so on the
+        # tiles rather than making somebody click one to find out.
+        open_now = sorted(name for name, held in _VAULT_STATE.items()
+                          if not (held.get("expires") and time.time() >= held["expires"]))
     state = passbook_vault.status(root=root)
     return {"ok": True, "supported": True, "unlocked": dek is not None, "profile": profile,
+            "workspace": here, "unlocked_workspaces": open_now,
             "factor": factor, "expires_in": max(0, int(expires - time.time())) if expires else 0,
+            # Not "is a key held" but "does the key held here open anything".
+            "opens": _opens_how_many(dek, profile, root),
+            "sealed_count": len(state["sealed"]),
             "store": {k: state[k] for k in ("sealed", "legacy_v1", "plaintext", "fully_sealed", "detail")},
             "profiles": state["profiles"], "active": state["active"]}
 
@@ -650,12 +823,19 @@ def _handle(payload: Mapping[str, Any], root: Path | None = None,
     if operation == "signin":
         return _signin(payload, root, caller)
     if operation == "signout":
+        # Named workspace, or every one. "Everything" is what the lock screen's
+        # agent-access switch means, and it has to be sayable in one call — a
+        # loop over workspaces would leave a window where some are still open.
+        wanted = str(payload.get("workspace") or "").strip()
+        every = bool(payload.get("all")) or (not wanted and bool(payload.get("everything")))
+        target = "" if every else (wanted or _here())
         with _VAULT_LOCK:
-            was = bool(_VAULT_STATE)
-            _forget_dek()
+            was = _forget_dek("" if every else target)
         if was:
-            _record("signout", ["*"], app="passbook", granted=True, reason="vault locked")
-        return {"ok": True, "locked": True, "was_unlocked": was}
+            _record("signout", ["*"], app="passbook", granted=True,
+                    reason=f"locked {'every workspace' if every else target}")
+        return {"ok": True, "locked": True, "was_unlocked": was,
+                "workspace": "" if every else target}
     if operation == "vault":
         return _vault_status(root)
     if operation != "request":
@@ -911,6 +1091,7 @@ def signin(
     prf_secret: bytes = b"",
     device: bool = False,
     duration: str = "",
+    workspace: str = "",
     app: str = "passbook",
     root: Path | None = None,
 ) -> dict[str, Any]:
@@ -921,6 +1102,8 @@ def signin(
     it, or pass it on, because it never had it.
     """
     payload: dict[str, Any] = {"op": "signin", "profile": profile, "app": app}
+    if workspace:
+        payload["workspace"] = workspace
     if duration:
         payload["duration"] = duration
     if password:
@@ -938,9 +1121,15 @@ def signin(
     return answer
 
 
-def signout(*, root: Path | None = None) -> dict[str, Any]:
-    """Lock the vault. The key is dropped and its bytes overwritten."""
-    answer = _ask({"op": "signout"}, root=root)
+def signout(*, workspace: str = "", everything: bool = False,
+            root: Path | None = None) -> dict[str, Any]:
+    """Lock a workspace, or every one. The keys are dropped and overwritten."""
+    payload: dict[str, Any] = {"op": "signout"}
+    if everything:
+        payload["all"] = True
+    elif workspace:
+        payload["workspace"] = workspace
+    answer = _ask(payload, root=root)
     if answer is None:
         return {"ok": False, "error": "no broker is running"}
     return answer

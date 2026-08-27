@@ -79,6 +79,8 @@ __all__ = [
     "Locked",
     "VaultError",
     "add_device_factor",
+    "workspace_root",
+    "workspace_vault_path",
     "add_passkey_factor",
     "add_password_factor",
     "available",
@@ -165,6 +167,28 @@ def vault_path(root: Path | None = None) -> Path:
     import passbook
 
     return passbook.root() / VAULT_FILENAME
+
+
+def workspace_root(name: str = "", environ=None) -> Path:
+    """The directory a workspace's store and vault share.
+
+    A workspace is already a separate store — `main` is the hive root itself
+    and the rest live under `workspaces/<id>/` — but every one of them was
+    opened by a single vault at the root, so "which workspace" and "whose key"
+    were unrelated questions and the app could only ever ask the second one.
+
+    Putting a workspace's vault beside its own `.env` makes them one question:
+    its own library, its own key. It needs no migration, because the vault that
+    exists today already sits in `main`'s directory.
+    """
+    import passbook
+
+    name = str(name or "").strip() or passbook.workspace() or passbook.ROOT_WORKSPACE_ID
+    return passbook.workspace_env_path(name, environ).parent
+
+
+def workspace_vault_path(name: str = "", environ=None) -> Path:
+    return workspace_root(name, environ) / VAULT_FILENAME
 
 
 def _write_private(path: Path, payload: Mapping[str, Any]) -> Path:
@@ -297,13 +321,23 @@ def create_profile(
     *,
     password: str,
     root: Path | None = None,
-    make_active: bool = True,
+    make_active: bool = False,
 ) -> dict[str, Any]:
     """Create a profile with a fresh data key, opened by a password.
 
     A password is required rather than optional: a profile whose only factor was
     the machine's keystore would be a vault that unlocks itself, which is the
     thing this module exists to stop.
+
+    It does NOT become the one you sign in to. Making it active used to be the
+    default, and a new profile's data key opens nothing that already exists —
+    so adding one quietly pointed the sign-in form at a profile that could not
+    read a single sealed value, and the next sign-in reported an open vault
+    over a store none of whose values it could open. Creating and choosing are
+    two decisions; `passbook profile use` is the second one.
+
+    The first profile on a machine is the exception, because a vault with a
+    profile and no active profile is not a state worth having.
     """
     _require_crypto()
     if not str(label).strip():

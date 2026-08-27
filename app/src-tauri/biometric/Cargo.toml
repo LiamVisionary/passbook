@@ -1,0 +1,17 @@
+[package]
+name = "passbook-biometric"
+version = "1.0.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Device-owner verification behind a small safe API."
+
+[lib]
+name = "passbook_biometric"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSError", "NSString"] }
+objc2-local-authentication = { version = "0.3.2", default-features = false, features = [
+  "std", "block2", "LAContext", "LABiometryType", "LAPublicDefines",
+] }

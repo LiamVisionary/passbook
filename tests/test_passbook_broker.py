@@ -445,3 +445,81 @@ def test_a_handler_failure_is_reported_rather_than_dropped(monkeypatch):
     answer = json.loads(reply)
     assert answer["ok"] is False
     assert "RuntimeError" in answer["error"], "the reply should name what went wrong"
+
+
+# ── how a request reaches a person ─────────────────────────────────────────
+
+
+def test_nothing_is_notified_when_notifying_is_switched_off(monkeypatch):
+    ran = []
+    monkeypatch.setattr(passbook_broker.subprocess, "run",
+                        lambda *a, **k: ran.append(a) or None)
+    monkeypatch.setenv("PASSBOOK_NO_NOTIFY", "1")
+
+    passbook_broker.notify("read", "some-agent", ["ALPHA"])
+
+    assert ran == []
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="the AppleScript path is macOS only")
+def test_a_request_opens_the_window_rather_than_script_editor(monkeypatch):
+    """`osascript -e 'display notification'` posts as Script Editor.
+
+    It is one of Script Editor's helpers, so the banner wore an AppleScript
+    icon and clicking it opened Script Editor's open-a-file panel. The window
+    posts its own banner now; the broker's job is to make sure there is one.
+    """
+    calls = []
+
+    class Done:
+        returncode = 0
+
+    monkeypatch.delenv("PASSBOOK_NO_NOTIFY", raising=False)
+    monkeypatch.delenv("PASSBOOK_NO_LAUNCH", raising=False)
+    monkeypatch.setattr(passbook_broker.subprocess, "run",
+                        lambda args, **k: calls.append(list(args)) or Done())
+
+    passbook_broker.notify("read", "some-agent", ["ALPHA"])
+
+    assert calls, "a held request told nobody"
+    assert not any("osascript" in part for call in calls for part in call), \
+        f"still notifying through Script Editor: {calls}"
+    assert calls[0][0] == "open" and passbook_broker.APP_BUNDLE_ID in calls[0]
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="the AppleScript path is macOS only")
+def test_a_machine_with_no_window_still_gets_told(monkeypatch):
+    """A CLI-only install answers with `passbook approve`, and still needs telling."""
+    calls = []
+
+    class Missing:
+        returncode = 1
+
+    monkeypatch.delenv("PASSBOOK_NO_NOTIFY", raising=False)
+    monkeypatch.delenv("PASSBOOK_NO_LAUNCH", raising=False)
+    monkeypatch.setattr(passbook_broker.subprocess, "run",
+                        lambda args, **k: calls.append(list(args)) or Missing())
+
+    passbook_broker.notify("read", "some-agent", ["ALPHA"])
+
+    assert any("osascript" in part for call in calls for part in call), \
+        "no window and no banner — the request was silent"
+
+
+def test_a_notification_never_carries_a_value(monkeypatch):
+    """The banner is drawn by the OS, may be logged by it, and is on a screen."""
+    said = []
+
+    class Done:
+        returncode = 1
+
+    monkeypatch.delenv("PASSBOOK_NO_NOTIFY", raising=False)
+    monkeypatch.delenv("PASSBOOK_NO_LAUNCH", raising=False)
+    monkeypatch.setattr(passbook_broker.subprocess, "run",
+                        lambda args, **k: said.append(" ".join(map(str, args))) or Done())
+
+    passbook_broker.notify("modify", "some-agent", ["ALPHA", "BETA"])
+
+    blob = " ".join(said)
+    assert "ALPHA" in blob, "the key name is the point of the banner"
+    assert "some-agent" in blob

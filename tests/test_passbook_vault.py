@@ -573,3 +573,47 @@ def test_a_record_that_cannot_be_written_does_not_stop_the_seal(root, monkeypatc
 
     assert result["ok"] is True
     assert set(result["sealed"]) == {"OPENAI_API_KEY", "OTHER"}
+
+
+# ── adding a profile is not choosing one ───────────────────────────────────
+
+
+def test_a_new_profile_does_not_take_over_the_sign_in(root):
+    """Its key opens nothing that already exists, so switching is a decision.
+
+    Making it active was the default. Adding a profile therefore pointed the
+    sign-in form at one that could not read a single sealed value, and the next
+    sign-in reported an open vault over a store it could not open any of.
+    """
+    first = vault.create_profile("Owner", password=PASSWORD, root=root)
+    assert first["active"], "the first profile has to be active — nothing else is"
+
+    second = vault.create_profile("Test", password="a different password", root=root)
+
+    assert not second["active"], "adding a profile switched to it"
+    assert vault.active_profile_id(root=root) == first["id"]
+
+
+def test_switching_is_available_when_it_is_meant(root):
+    first = vault.create_profile("Owner", password=PASSWORD, root=root)
+    second = vault.create_profile("Test", password="a different password",
+                                  root=root, make_active=True)
+
+    assert second["active"]
+    assert vault.active_profile_id(root=root) != first["id"]
+
+
+def test_one_profile_cannot_read_what_another_sealed(root):
+    """The thing that makes the switch dangerous, stated as a test."""
+    owner = vault.create_profile("Owner", password=PASSWORD, root=root)
+    dek = vault.unlock_with_password(owner["id"], PASSWORD, root=root)
+    passbook.set_values({"ALPHA": "a-value"})
+    vault.seal_store(dek, profile_id=owner["id"], root=root)
+
+    other = vault.create_profile("Test", password="a different password", root=root)
+    their_dek = vault.unlock_with_password(other["id"], "a different password", root=root)
+
+    raw = passbook.parse_env_text((root / ".env").read_text(encoding="utf-8"))
+    assert vault.unseal_mapping(raw, their_dek, profile_id=other["id"]) == {}, \
+        "the new profile opened something it did not seal"
+    assert vault.unseal_mapping(raw, dek, profile_id=owner["id"])["ALPHA"] == "a-value"

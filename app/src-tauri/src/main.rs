@@ -335,7 +335,11 @@ fn set_key_scope(name: String, scope: String) -> Result<Value, String> {
     state()
 }
 
-/// Say who a key is for: everyone, only these agents, or everyone except these.
+/// Say who a key is for: everyone, only these apps, or everyone except these.
+///
+/// The verb stays `agents` even though the CLI now calls it `apps`: `agents` is
+/// an alias on the new CLI and the only name on an older one, and the app is
+/// routinely newer than the `passbook` it shells out to.
 #[tauri::command]
 fn set_key_audience(name: String, mode: String, agents: Vec<String>) -> Result<Value, String> {
     if name.trim().is_empty() {
@@ -350,7 +354,7 @@ fn set_key_audience(name: String, mode: String, agents: Vec<String>) -> Result<V
     }
     if mode != "all" {
         if agents.is_empty() {
-            return Err("Name at least one agent.".into());
+            return Err("Name at least one app.".into());
         }
         for agent in &agents {
             args.push(agent.trim());
@@ -360,8 +364,11 @@ fn set_key_audience(name: String, mode: String, agents: Vec<String>) -> Result<V
     state()
 }
 
-/// Which agents can read which keys. Fetched on demand: a full grid over a
+/// Which apps can read which keys. Fetched on demand: a full grid over a
 /// large store is not something to ship with every background refresh.
+///
+/// `--agent` for the same reason as above: `--app` is the new spelling, this
+/// one works on every CLI that has ever shipped.
 #[tauri::command]
 fn access_matrix(agents: Vec<String>) -> Result<Value, String> {
     let mut args: Vec<&str> = vec!["matrix", "--json"];
@@ -417,8 +424,17 @@ fn vault_state() -> Result<Value, String> {
     run_json(&["vault", "--json"])
 }
 
+/// Open the vault. An empty `duration` takes the CLI's default, which is a
+/// session that lasts until somebody locks it — agents read credentials at
+/// four in the morning, and a vault that closes itself overnight does not
+/// protect anything, it just stops the work.
 #[tauri::command]
-fn vault_signin(profile: String, password: String) -> Result<Value, String> {
+fn vault_signin(
+    profile: String,
+    password: String,
+    duration: String,
+    workspace: String,
+) -> Result<Value, String> {
     if password.is_empty() {
         return Err("Enter your vault password.".into());
     }
@@ -429,13 +445,195 @@ fn vault_signin(profile: String, password: String) -> Result<Value, String> {
         args.push("--profile");
         args.push(profile.trim());
     }
+    if !workspace.trim().is_empty() {
+        args.push("--workspace");
+        args.push(workspace.trim());
+    }
+    if !duration.trim().is_empty() {
+        args.push("--for");
+        args.push(duration.trim());
+    }
     run_with_password(&args, &password)?;
     vault_state()
 }
 
+/// Wrap a workspace's data key with a passkey's PRF output.
+///
+/// The WebAuthn ceremony happens in the window, because that is the only place
+/// with an authenticator; the secret it returns crosses one pipe and is used
+/// once. It is never stored — storing it would make the ceremony decorative.
 #[tauri::command]
-fn vault_signout() -> Result<Value, String> {
-    run(&["signout"])?;
+fn vault_add_passkey(
+    workspace: String,
+    credential_id: String,
+    prf_secret: String,
+    label: String,
+    rp_id: String,
+    password: String,
+) -> Result<Value, String> {
+    if credential_id.trim().is_empty() || prf_secret.trim().is_empty() {
+        return Err("That passkey returned nothing to wrap the key with.".into());
+    }
+    if password.is_empty() {
+        return Err("The vault password is needed once, to wrap the key.".into());
+    }
+    let mut args = vec![
+        "passkey", "enrol",
+        "--credential-id", credential_id.trim(),
+        "--label", if label.trim().is_empty() { "This device" } else { label.trim() },
+        "--password-stdin",
+    ];
+    if !rp_id.trim().is_empty() {
+        args.push("--rp-id");
+        args.push(rp_id.trim());
+    }
+    if !workspace.trim().is_empty() {
+        args.push("--workspace");
+        args.push(workspace.trim());
+    }
+    // The PRF secret first, then the password — the order `passkey enrol` reads
+    // them in. Both leave this process on stdin and neither is ever an argv.
+    let feed = format!("{}\n{}", prf_secret.trim(), password);
+    run_with_password(&args, &feed)?;
+    vault_state()
+}
+
+/// Open the vault with a passkey the window has just exercised.
+///
+/// The lock screen has offered "Unlock with passkey" since the gate was built
+/// and nothing was listening: the button had no handler, and there was no
+/// command for one to call. It did not look broken, which is the worst way for
+/// a control on a lock screen to be broken.
+///
+/// The PRF secret goes over stdin exactly as enrolment sends it. It is a key,
+/// not a name, and an argv is readable by anything on this machine.
+#[tauri::command]
+fn vault_signin_passkey(
+    workspace: String,
+    credential_id: String,
+    prf_secret: String,
+    duration: String,
+) -> Result<Value, String> {
+    if credential_id.trim().is_empty() || prf_secret.trim().is_empty() {
+        return Err("That passkey returned nothing to open the vault with.".into());
+    }
+    let wanted = if duration.trim().is_empty() { "always" } else { duration.trim() };
+    let mut args = vec!["signin", "--passkey", credential_id.trim(), "--for", wanted];
+    if !workspace.trim().is_empty() {
+        args.push("--workspace");
+        args.push(workspace.trim());
+    }
+    run_with_password(&args, prf_secret.trim())?;
+    vault_state()
+}
+
+/// Whether this device can verify its owner, and what to call it.
+///
+/// Asked before anything is drawn, so the window never offers a button that
+/// cannot work — which is exactly what "Add a passkey" was doing.
+#[tauri::command]
+fn biometric_status() -> Value {
+    let status = passbook_biometric::status();
+    serde_json::json!({
+        "available": status.available,
+        "kind": status.kind.map(|kind| kind.as_str()),
+        "label": status.kind.map(|kind| kind.label()),
+    })
+}
+
+/// Open the vault with Touch ID.
+///
+/// Two steps, and the order matters. The device factor already exists in this
+/// store — `passbook profile trust-device` puts a wrapped key in the OS
+/// keystore, and `passbook signin --device` opens the vault with it. What was
+/// missing is a person in that sequence: the keystore item carries no
+/// biometric guard, because it is written by a plain interpreter and only a
+/// signed bundle can create a guarded one. This app is a signed bundle, so it
+/// asks first and signs in only on a yes.
+///
+/// Be exact about what that buys. It is a lock on the window, not on the key:
+/// anything already running as you can call `passbook signin --device` itself
+/// and never see a prompt. It stops somebody at your keyboard, which is what
+/// it is for.
+#[tauri::command]
+async fn vault_signin_device(workspace: String) -> Result<Value, String> {
+    let asking = if workspace.trim().is_empty() {
+        "unlock PassBook".to_string()
+    } else {
+        format!("unlock the {} workspace in PassBook", workspace.trim())
+    };
+    tauri::async_runtime::spawn_blocking(move || passbook_biometric::authenticate(&asking))
+        .await
+        .map_err(|error| format!("Could not wait for {error}"))??;
+
+    let mut args = vec!["signin", "--device"];
+    if !workspace.trim().is_empty() {
+        args.push("--workspace");
+        args.push(workspace.trim());
+    }
+    run(&args)?;
+    vault_state()
+}
+
+/// Let this device open the vault, after proving somebody is here.
+///
+/// The password is needed once, to wrap the key for the keystore. It goes over
+/// stdin like every other password in this file, never an argv.
+#[tauri::command]
+async fn vault_trust_device(password: String) -> Result<Value, String> {
+    if password.is_empty() {
+        return Err("The vault password is needed once, to wrap the key.".into());
+    }
+    tauri::async_runtime::spawn_blocking(|| {
+        passbook_biometric::authenticate("let this device open PassBook")
+    })
+    .await
+    .map_err(|error| format!("Could not wait for {error}"))??;
+    run_with_password(&["profile", "trust-device", "--yes", "--password-stdin"], &password)?;
+    vault_state()
+}
+
+/// Give a workspace a key of its own, and open it.
+///
+/// A workspace was always a separate store; until now one vault at the machine
+/// root opened all of them, so "which workspace" and "whose key" were separate
+/// questions. Creating one here is what makes them the same question: its own
+/// library, its own key.
+#[tauri::command]
+fn vault_create_workspace(name: String, password: String) -> Result<Value, String> {
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err("Give the workspace a name.".into());
+    }
+    if password.chars().count() < 8 {
+        return Err("A vault password must be at least 8 characters.".into());
+    }
+    let _ = run(&["broker", "start"]);
+    run_with_password(
+        &["profile", "create", "Owner", "--use", "--workspace", name.as_str(),
+          "--password-stdin"],
+        &password,
+    )?;
+    vault_state()
+}
+
+/// Close agent access. Not the same button as locking the window.
+///
+/// Locking the window is a decision about who is at the keyboard; this is a
+/// decision about what runs while nobody is. They were one button, so putting
+/// the app away at the end of the day also stopped every agent reading
+/// credentials overnight — and the way people work around that is to never
+/// lock anything.
+#[tauri::command]
+fn vault_signout(workspace: String, everything: bool) -> Result<Value, String> {
+    let mut args = vec!["signout"];
+    if everything {
+        args.push("--all");
+    } else if !workspace.trim().is_empty() {
+        args.push("--workspace");
+        args.push(workspace.trim());
+    }
+    run(&args)?;
     vault_state()
 }
 
@@ -650,6 +848,19 @@ fn vault_unseal(password: String) -> Result<Value, String> {
 
 /// What the record holds about one key, proofs included.
 ///
+/// Re-hash the whole access record and say whether the chain holds.
+///
+/// On demand, for the same reason `key_history` is. This walks every row and
+/// recomputes its hash, which on a six-megabyte ledger is the most expensive
+/// thing the CLI does — and `state` runs every five seconds behind an open
+/// window. Verifying twelve times a minute is not what makes a ledger
+/// trustworthy; it is just the bill for a page nobody had open.
+#[tauri::command]
+fn verify_record() -> Result<Value, String> {
+    let full = run_json(&["state", "--verify"])?;
+    Ok(full.get("record").cloned().unwrap_or(Value::Null))
+}
+
 /// Fetched on demand rather than shipped with every state refresh: a store of
 /// several hundred keys would otherwise carry a history nobody asked to see.
 #[tauri::command]
@@ -660,15 +871,155 @@ fn key_history(name: String) -> Result<Value, String> {
     run_json(&["history", name.trim(), "--json", "--limit", "60"])
 }
 
+/// The window's own web server, and why a credential app runs one.
+///
+/// Tauri serves a window from its own scheme, `tauri://localhost`. That is
+/// fine for everything except one thing: a passkey is bound to a domain, and a
+/// custom scheme has none, so WebAuthn refuses the ceremony before anything is
+/// drawn. Measured here: an origin with no domain in it comes back in about a
+/// millisecond with SecurityError "This is an invalid domain", while
+/// `http://localhost` starts the ceremony and waits on the authenticator.
+///
+/// So the window is served over `http://localhost` on a loopback port instead.
+/// This is the same shape HivemindOS's desktop app ends up with — its embedded
+/// Next server means its webview is already on an http origin — and it needs
+/// no entitlement of any kind. What it does need is the matching grant in
+/// `capabilities/default.json`, because Tauri will not expose IPC to a page it
+/// did not serve itself.
+///
+/// Only the two files that make up the window are served, only to loopback,
+/// and only to a request that asked for this host. They contain no credential:
+/// the store is read over IPC by the process that needs it, never over this.
+mod ui {
+    use std::io::{Read, Write};
+    use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
+
+    const INDEX: &[u8] = include_bytes!("../../ui/index.html");
+    const MARK: &[u8] = include_bytes!("../../ui/mark.png");
+
+    /// The port this window prefers, and why it is not simply left to the OS.
+    ///
+    /// An origin includes its port, and the window remembers whether it is
+    /// locked in storage scoped to that origin. A port the OS picks fresh each
+    /// launch would therefore forget the lock every time the app restarted —
+    /// quietly, which is the worst way for a lock to fail. So a fixed port is
+    /// asked for first, and the neighbours after it, before giving up and
+    /// letting the OS choose.
+    pub const PREFERRED_PORT: u16 = 17817;
+    pub const NEIGHBOURS: u16 = 8;
+
+    /// Bind loopback and answer on it until the app quits.
+    pub fn serve() -> std::io::Result<u16> {
+        let mut listener = None;
+        for candidate in PREFERRED_PORT..PREFERRED_PORT.saturating_add(NEIGHBOURS) {
+            if let Ok(bound) = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, candidate))) {
+                listener = Some(bound);
+                break;
+            }
+        }
+        let listener = match listener {
+            Some(bound) => bound,
+            // Every one of them taken is not a reason not to start. The window
+            // works; it just will not remember a lock across a restart, and it
+            // is told so rather than left to find out.
+            None => TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))?,
+        };
+        let port = listener.local_addr()?.port();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                std::thread::spawn(move || {
+                    let _ = answer(stream);
+                });
+            }
+        });
+        Ok(port)
+    }
+
+    fn answer(mut stream: TcpStream) -> std::io::Result<()> {
+        let mut buffer = [0u8; 2048];
+        let read = stream.read(&mut buffer)?;
+        let request = String::from_utf8_lossy(&buffer[..read]);
+        let mut lines = request.split("\r\n");
+        let start = lines.next().unwrap_or("");
+        let mut parts = start.split(' ');
+        let method = parts.next().unwrap_or("");
+        let path = parts.next().unwrap_or("/");
+
+        // A page fetched under some other name is not this window's page, and
+        // the Host is what decides the origin a passkey would be bound to.
+        let host_ok = lines
+            .filter_map(|line| line.strip_prefix("Host:").or_else(|| line.strip_prefix("host:")))
+            .any(|value| {
+                let value = value.trim();
+                let name = value.split(':').next().unwrap_or("");
+                name == "localhost" || name == "127.0.0.1"
+            });
+        if !host_ok || (method != "GET" && method != "HEAD") {
+            return send(&mut stream, "400 Bad Request", "text/plain", b"no", method == "HEAD");
+        }
+
+        let path = path.split('?').next().unwrap_or("/");
+        let (status, kind, body): (&str, &str, &[u8]) = match path {
+            "/" | "/index.html" => ("200 OK", "text/html; charset=utf-8", INDEX),
+            "/mark.png" => ("200 OK", "image/png", MARK),
+            _ => ("404 Not Found", "text/plain", b"not here"),
+        };
+        send(&mut stream, status, kind, body, method == "HEAD")
+    }
+
+    fn send(stream: &mut TcpStream, status: &str, kind: &str, body: &[u8], head_only: bool)
+        -> std::io::Result<()> {
+        let headers = format!(
+            "HTTP/1.1 {status}\r\n\
+             Content-Type: {kind}\r\n\
+             Content-Length: {len}\r\n\
+             Cache-Control: no-store\r\n\
+             X-Content-Type-Options: nosniff\r\n\
+             Connection: close\r\n\r\n",
+            status = status, kind = kind, len = body.len());
+        stream.write_all(headers.as_bytes())?;
+        if !head_only {
+            stream.write_all(body)?;
+        }
+        stream.flush()
+    }
+}
+
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
+        .setup(|app| {
+            let port = ui::serve()?;
+            // `localhost`, not `127.0.0.1`: the name is what a passkey binds to,
+            // and an address is refused as "an invalid domain".
+            let steady = (ui::PREFERRED_PORT..ui::PREFERRED_PORT + ui::NEIGHBOURS).contains(&port);
+            let url = format!("http://localhost:{port}/?steady={}", u8::from(steady));
+            let window = tauri::WebviewWindowBuilder::new(
+                app,
+                "main",
+                tauri::WebviewUrl::External(url.parse()?),
+            )
+            .title("PassBook")
+            .inner_size(1040.0, 760.0)
+            .min_inner_size(860.0, 600.0)
+            .resizable(true);
+            // The overlay title bar is what lets the sidebar run to the top of
+            // the window, and it exists only on macOS.
+            #[cfg(target_os = "macos")]
+            let window = window
+                .title_bar_style(tauri::TitleBarStyle::Overlay)
+                .hidden_title(true);
+            window.build()?;
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             state, set_mode, unlock, lock, resolve, broker, revoke, add_key, remove_key, reveal_key,
             key_history, vault_state, vault_signin, vault_signout, vault_create_profile,
             vault_use_profile, vault_seal, vault_unseal, vault_secure, set_key_group, set_key_audience, set_key_scope, set_keys_scope, remove_keys,
             access_matrix, oauth_state, oauth_refresh, oauth_disconnect, oauth_connect,
             set_workspace, export_store, inspect_export, import_store, make_recovery_code,
-            forget_machine,
+            forget_machine, verify_record, vault_create_workspace, vault_add_passkey,
+            vault_signin_passkey, biometric_status, vault_signin_device, vault_trust_device,
             set_key_projects, set_confirmation
         ])
         .run(tauri::generate_context!())

@@ -1,0 +1,61 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "What the PassBook window may reach.",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "core:default",
+    "notification:default",
+    "allow-state",
+    "allow-set-mode",
+    "allow-unlock",
+    "allow-lock",
+    "allow-resolve",
+    "allow-broker",
+    "allow-revoke",
+    "allow-add-key",
+    "allow-remove-key",
+    "allow-reveal-key",
+    "allow-key-history",
+    "allow-vault-state",
+    "allow-vault-signin",
+    "allow-vault-signout",
+    "allow-vault-create-profile",
+    "allow-vault-use-profile",
+    "allow-vault-seal",
+    "allow-vault-unseal",
+    "allow-vault-secure",
+    "allow-set-key-group",
+    "allow-set-key-audience",
+    "allow-set-key-scope",
+    "allow-set-keys-scope",
+    "allow-remove-keys",
+    "allow-access-matrix",
+    "allow-oauth-state",
+    "allow-oauth-refresh",
+    "allow-oauth-disconnect",
+    "allow-oauth-connect",
+    "allow-set-workspace",
+    "allow-export-store",
+    "allow-inspect-export",
+    "allow-import-store",
+    "allow-make-recovery-code",
+    "allow-forget-machine",
+    "allow-verify-record",
+    "allow-vault-create-workspace",
+    "allow-vault-add-passkey",
+    "allow-vault-signin-passkey",
+    "allow-biometric-status",
+    "allow-vault-signin-device",
+    "allow-vault-trust-device",
+    "allow-set-key-projects",
+    "allow-set-confirmation"
+  ],
+  "remote": {
+    "urls": [
+      "http://localhost:*"
+    ]
+  }
+}

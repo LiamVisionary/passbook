@@ -7,8 +7,8 @@ reads the same policy and answers the questions a person asks when they are
 looking at a store rather than configuring one app:
 
   * what is in here, arranged so I can read it
-  * which agents can see this key
-  * which keys can this agent see
+  * which apps can see this key
+  * which keys can this app see
 
 ## Why groups are inferred rather than demanded
 
@@ -24,12 +24,26 @@ already follow is the organisation, and this just reads it.
 An explicit group always wins, because the inference is a convenience and not a
 claim to be right.
 
+## Apps, not agents
+
+The thing that asks for a credential is whatever declared a name: a background
+daemon, a command line, a project's build, or an agent connected over MCP. The
+ledger field is `app`, the policy section is `apps`, and this module's job is to
+report them honestly.
+
+The surfaces used to call the whole set "agents", which read as a claim about
+what they were, and on a real machine four of the eight names were LaunchAgents
+and CLIs. The internal identifiers below still say `agent` because the policy
+rule that narrows a key is `audience`/`agents` in the on-disk schema and
+renaming that would rewrite everyone's policy file; every string a person reads
+says *app*. Keep it that way.
+
 ## The matrix
 
 `matrix()` is the view that makes an audience decision reviewable: every key
-against every agent that has ever asked for one, with the outcome and the reason
+against every app that has ever asked for one, with the outcome and the reason
 in each cell. It is the difference between "I set some policies" and "I can see
-that the trading key is visible to four agents, two of which I forgot about".
+that the trading key is visible to four apps, two of which I forgot about".
 """
 
 from __future__ import annotations
@@ -69,6 +83,27 @@ _NOISE_PREFIXES = ("NEXT_PUBLIC_", "VITE_", "REACT_APP_", "PUBLIC_",
                    "EXPO_PUBLIC_", "GATSBY_", "NUXT_PUBLIC_", "HIVE_", "HIVEMINDOS_")
 
 
+# How a vendor writes its own name.
+#
+# `title()` gets most of them right and a handful conspicuously wrong, and it
+# is the wrong ones that end up on screen: "Openai", "Github", "Aws". A group
+# heading is the largest text on a page of a few hundred keys, so it is worth
+# the table. Anything absent still falls through to `title()`, which is right
+# for the long tail.
+_VENDOR_CASING = {
+    "AWS": "AWS", "GCP": "GCP", "S3": "S3", "SQS": "SQS", "SNS": "SNS",
+    "GITHUB": "GitHub", "GITLAB": "GitLab", "BITBUCKET": "Bitbucket",
+    "OPENAI": "OpenAI", "XAI": "xAI", "HUGGINGFACE": "HuggingFace",
+    "ELEVENLABS": "ElevenLabs", "RUNPOD": "RunPod", "POSTHOG": "PostHog",
+    "SENDGRID": "SendGrid", "MAILGUN": "Mailgun", "PAGERDUTY": "PagerDuty",
+    "DIGITALOCEAN": "DigitalOcean", "MONGODB": "MongoDB", "POSTGRESQL": "PostgreSQL",
+    "MYSQL": "MySQL", "SQLITE": "SQLite", "DYNAMODB": "DynamoDB",
+    "OAUTH": "OAuth", "SMTP": "SMTP", "IMAP": "IMAP", "JWT": "JWT",
+    "NPM": "NPM", "PYPI": "PyPI", "MCP": "MCP", "LLM": "LLM", "AI": "AI",
+    "IOS": "iOS", "MACOS": "macOS", "TLS": "TLS", "SSH": "SSH", "GPG": "GPG",
+}
+
+
 def infer_group(name: str) -> str:
     """The family a key name is already announcing it belongs to.
 
@@ -90,7 +125,7 @@ def infer_group(name: str) -> str:
     # A name that is nothing but a role — API_KEY, TOKEN — names no family.
     if not head or head in _ROLE_WORDS:
         return UNGROUPED
-    return head.title()
+    return _VENDOR_CASING.get(head, head.title())
 
 
 def group_of(name: str, policy: Mapping[str, Any]) -> str:
@@ -170,8 +205,8 @@ def suggest_groups(names: Iterable[str], *, minimum: int = 2) -> dict[str, list[
 
 # PassBook's own commands, and the hive-env wrappers that are the same store
 # under older names. They appear in the RECORD, because the record must show
-# every read — but they are not agents, and the Agents page is for deciding
-# which agents may read which keys.
+# every read — but the Apps page is for deciding which apps may read which
+# keys, and PassBook reading its own store is not a decision to make.
 #
 # `passbook-run` asking for a credential is you running PassBook. Offering to
 # restrict it is offering to restrict yourself, and a picker full of your own
@@ -187,9 +222,9 @@ def is_first_party(app: str) -> bool:
 
 def agents_seen(*, root: Path | None = None, policy: Mapping[str, Any] | None = None,
                 include_tooling: bool = False) -> list[str]:
-    """Every agent this machine knows about — configured, or seen asking.
+    """Every app this machine knows about — configured, or seen asking.
 
-    Reading the ledger matters as much as reading the policy: the agents worth
+    Reading the ledger matters as much as reading the policy: the apps worth
     reviewing are usually the ones nobody configured, which is exactly why they
     are absent from the policy and present in the record.
     """
@@ -215,7 +250,7 @@ def agents_seen(*, root: Path | None = None, policy: Mapping[str, Any] | None = 
     except Exception:  # noqa: BLE001 — no ledger yet is not an error
         pass
     if not include_tooling:
-        # An agent explicitly named in a policy stays visible whatever it is
+        # An app explicitly named in a policy stays visible whatever it is
         # called: somebody wrote that rule deliberately and hiding the subject
         # of it would make the rule unexplainable.
         configured = {str(a) for a in (policy.get("apps") or {})}
@@ -233,7 +268,7 @@ def agent_activity(*, root: Path | None = None, limit: int = 4000) -> dict[str, 
     """How many times each caller has asked, from the record.
 
     A name alone cannot be judged. `fleet-health-watchdog` at 468 asks and
-    `probe` at 1 are both "an agent that asked this machine for a credential",
+    `probe` at 1 are both "something that asked this machine for a credential",
     and only one of them is a thing to make a decision about. Showing the count
     is better than guessing which names are noise and hiding them: the store's
     own history says which is which, and a one-off from a test still deserves
@@ -259,7 +294,7 @@ def matrix(
     *,
     root: Path | None = None,
 ) -> dict[str, Any]:
-    """Every key against every agent, with the outcome and why.
+    """Every key against every app, with the outcome and why.
 
     Values never appear here, and the reason travels with the outcome, because
     a grid of green and red with no explanation is a grid people stop reading.

@@ -21,6 +21,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import passbook  # noqa: E402
 
+PACKAGE = Path(__file__).resolve().parents[1]
+
 
 @pytest.fixture
 def hive(tmp_path, monkeypatch):
@@ -1135,3 +1137,104 @@ def test_history_of_an_untouched_key_is_empty_not_an_error(hive):
     stamp = pytest.importorskip("passbook_stamp")
     passbook.ensure(app="app")
     assert stamp.history_for_key("NEVER_TOUCHED") == []
+
+
+# ── who is asking ──────────────────────────────────────────────────────────
+
+
+def _resolved(argv, env=None, monkeypatch=None):
+    """The name a command would record itself under, without running it."""
+    import passbook_cli
+
+    args = passbook_cli.build_parser().parse_args(argv)
+    for name, value in (env or {}).items():
+        monkeypatch.setenv(name, value)
+    if not (env or {}).get("PASSBOOK_APP"):
+        monkeypatch.delenv("PASSBOOK_APP", raising=False)
+    return passbook_cli.caller("a-default", args)
+
+
+def test_a_command_run_by_hand_is_recorded_as_passbook(monkeypatch):
+    """No claim made, so the honest answer is that you ran it."""
+    assert _resolved(["get", "ALPHA"], monkeypatch=monkeypatch) == "a-default"
+
+
+def test_an_app_name_can_be_said_on_the_command_line(monkeypatch):
+    assert _resolved(["get", "ALPHA", "--app", "some-agent"],
+                     monkeypatch=monkeypatch) == "some-agent"
+
+
+def test_the_environment_names_the_caller_when_nothing_else_does(monkeypatch):
+    """An agent harness sets it once rather than threading a flag everywhere.
+
+    `passbook run` is how an agent actually gets an environment, and it had no
+    way at all to say who it was for — so every agent on a machine was one
+    indistinguishable row in the record and no policy could name any of them.
+    """
+    assert _resolved(["get", "ALPHA"], env={"PASSBOOK_APP": "from-the-env"},
+                     monkeypatch=monkeypatch) == "from-the-env"
+
+
+def test_saying_it_on_the_command_line_beats_the_environment(monkeypatch):
+    """The flag is this call; the variable is the process tree around it."""
+    assert _resolved(["get", "ALPHA", "--app", "said-here"],
+                     env={"PASSBOOK_APP": "ambient"}, monkeypatch=monkeypatch) == "said-here"
+
+
+def test_a_blank_claim_is_no_claim(monkeypatch):
+    assert _resolved(["get", "ALPHA", "--app", "   "], env={"PASSBOOK_APP": "  "},
+                     monkeypatch=monkeypatch) == "a-default"
+
+
+@pytest.mark.parametrize("argv", [
+    ["get", "ALPHA"], ["check", "ALPHA"], ["reveal", "ALPHA"],
+    ["run", "--", "true"], ["add", "ALPHA=v"], ["remove", "ALPHA"],
+])
+def test_every_command_that_names_a_caller_can_be_told_one(argv, monkeypatch):
+    """Only `get` could. The rest hardcoded a name no policy could ever match,
+    so an audience rule about an agent could not reach the command that agent
+    actually uses."""
+    assert _resolved(argv, monkeypatch=monkeypatch) == "a-default"
+    assert _resolved([*argv, "--app", "a-named-agent"] if argv[0] != "run"
+                     else ["run", "--app", "a-named-agent", "--", "true"],
+                     monkeypatch=monkeypatch) == "a-named-agent"
+
+
+def test_run_hands_the_name_to_what_it_runs(tmp_path, monkeypatch):
+    """Whatever it runs may ask PassBook itself, and those reads are the same
+    caller's — not `passbook-run`'s."""
+    home = tmp_path / "hive"
+    monkeypatch.setenv("HIVE_HOME", str(home))
+    monkeypatch.delenv("APP_SANDBOX_CONTAINER_ID", raising=False)
+    passbook.ensure(app="test")
+
+    done = subprocess.run(
+        [sys.executable, "-m", "passbook_cli", "run", "--app", "an-agent",
+         "--", sys.executable, "-c", "import os; print(os.environ.get('PASSBOOK_APP'))"],
+        capture_output=True, text=True, cwd=str(PACKAGE),
+        env={**os.environ, "HIVE_HOME": str(home), "PYTHONPATH": str(PACKAGE)},
+    )
+
+    assert done.stdout.strip() == "an-agent", done.stderr
+
+
+def test_a_vendor_group_is_spelled_the_way_the_vendor_spells_it():
+    """A group heading is the largest text on a page of several hundred keys.
+
+    `str.title()` is right for most vendors and conspicuously wrong for the
+    ones everybody has: Openai, Github, Aws. Anything not in the table still
+    falls through to `title()`, which is what the long tail wants.
+    """
+    import passbook_catalog
+
+    for name, group in [
+        ("OPENAI_API_KEY", "OpenAI"), ("GITHUB_TOKEN", "GitHub"),
+        ("AWS_SECRET_ACCESS_KEY", "AWS"), ("POSTHOG_API_KEY", "PostHog"),
+        ("XAI_API_KEY", "xAI"), ("SENDGRID_API_KEY", "SendGrid"),
+        # The fallback still has to work, or the table becomes the whole world.
+        ("STRIPE_SECRET_KEY", "Stripe"), ("TWILIO_AUTH_TOKEN", "Twilio"),
+    ]:
+        assert passbook_catalog.infer_group(name) == group, name
+
+    # And the table must not invent a family for a name that has none.
+    assert passbook_catalog.infer_group("API_KEY") == passbook_catalog.UNGROUPED

@@ -116,7 +116,7 @@ def test_an_unknown_policy_section_survives_a_rewrite(machine):
 def test_a_family_is_inferred_from_the_names(machine):
     policy = access.read_policy()
     arranged = catalog.groups(passbook.key_names(), policy)
-    assert arranged["Openai"] == ["OPENAI_API_KEY", "OPENAI_BASE_URL"]
+    assert arranged["OpenAI"] == ["OPENAI_API_KEY", "OPENAI_BASE_URL"]
     assert arranged["Cloudflare"] == ["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ZONE_ID"]
 
 
@@ -141,12 +141,12 @@ def test_clearing_a_group_returns_it_to_inference(machine):
     catalog.set_group("OPENAI_API_KEY", "Custom", policy)
     assert catalog.group_of("OPENAI_API_KEY", policy) == "Custom"
     catalog.set_group("OPENAI_API_KEY", "", policy)
-    assert catalog.group_of("OPENAI_API_KEY", policy) == "Openai"
+    assert catalog.group_of("OPENAI_API_KEY", policy) == "OpenAI"
 
 
 def test_delivery_prefixes_do_not_split_a_family(machine):
-    assert catalog.infer_group("NEXT_PUBLIC_POSTHOG_KEY") == "Posthog"
-    assert catalog.infer_group("POSTHOG_API_KEY") == "Posthog"
+    assert catalog.infer_group("NEXT_PUBLIC_POSTHOG_KEY") == "PostHog"
+    assert catalog.infer_group("POSTHOG_API_KEY") == "PostHog"
 
 
 def test_grouping_never_reads_a_value(machine):

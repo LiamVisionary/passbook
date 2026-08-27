@@ -80,12 +80,22 @@ if ($code -ne 0) {
     exit $code
 }
 
-# Asked of Windows rather than inferred from an exit code.
-$signature = Get-AuthenticodeSignature -LiteralPath $Path
-Say "Windows reports: $($signature.Status)"
-if ($signature.Status -ne 'Valid') {
-    Say "signed and still not Valid"
-    exit 5
+# Reported, not enforced. The tool signs a working copy and puts it back, and
+# asking Windows about the file the instant it exits answered with an empty
+# status -- which failed a build whose signing had actually succeeded.
+#
+# The check that decides whether a release ships is the one in the job, which
+# unpacks the finished installer and asks about the copy a person will run.
+# That is the only file whose signature is the truth; this one is still going
+# to be patched and repackaged.
+try {
+    $signature = Get-AuthenticodeSignature -LiteralPath $Path -ErrorAction Stop
+    $status = $signature.Status
+    if (-not $status) { $status = "(no status)" }
+    Say "Windows reports: $status"
+    if ($signature.SignerCertificate) { Say "  signer: $($signature.SignerCertificate.Subject)" }
+} catch {
+    Say "could not read the signature back: $($_.Exception.Message)"
 }
 Say "signed $([System.IO.Path]::GetFileName($Path))"
 exit 0

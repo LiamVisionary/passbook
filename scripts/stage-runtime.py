@@ -68,6 +68,12 @@ REM setlocal keeps PASSBOOK_INVOKED_AS out of the prompt that ran this, and
 REM exit /b hands back the command's own status rather than the shim's.
 setlocal
 set "PASSBOOK_INVOKED_AS=%(name)s"
+REM Bytecode goes somewhere writable and disposable. Left to itself Python
+REM writes __pycache__ beside the modules, which is inside the installed app:
+REM the uninstaller only removes what it installed, so those .pyc files kept
+REM the install directory alive after an uninstall, and under a per-machine
+REM install the directory is not writable at all.
+set "PYTHONPYCACHEPREFIX=%%TEMP%%\\passbook-pycache"
 "%%~dp0..\\runtime\\python.exe" "%%~dp0..\\cli\\passbook_cli.py" %%*
 exit /b %%ERRORLEVEL%%
 """

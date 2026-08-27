@@ -108,6 +108,10 @@ else:
 _DETACHED_PROCESS = 0x00000008
 _CREATE_NEW_PROCESS_GROUP = 0x00000200
 
+# What OpenProcess answers for a pid that is not running, which is how Windows
+# says what POSIX says with ProcessLookupError.
+_ERROR_INVALID_PARAMETER = 87
+
 _BIND_LOCK = threading.Lock()
 
 # AF_UNIX paths are capped by the kernel — 104 bytes on macOS, 108 on Linux —
@@ -1271,6 +1275,13 @@ def _forget_socket(root: Path | None) -> None:
         socket_path(root).unlink(missing_ok=True)
 
 
+def _already_gone(root: Path | None) -> dict[str, Any]:
+    """Tidy up after a broker that is not there any more."""
+    _forget_socket(root)
+    pid_path(root).unlink(missing_ok=True)
+    return {"ok": True, "detail": "The broker was already gone; cleaned up after it."}
+
+
 def stop(*, root: Path | None = None) -> dict[str, Any]:
     try:
         pid = int(pid_path(root).read_text(encoding="utf-8").strip())
@@ -1280,10 +1291,16 @@ def stop(*, root: Path | None = None) -> dict[str, Any]:
     try:
         os.kill(pid, 15)
     except ProcessLookupError:
-        _forget_socket(root)
-        pid_path(root).unlink(missing_ok=True)
-        return {"ok": True, "detail": "The broker was already gone; cleaned up after it."}
+        return _already_gone(root)
     except OSError as error:
+        # Windows does not raise ProcessLookupError here. `os.kill` opens the
+        # process first, and OpenProcess on a pid that is not running fails
+        # with ERROR_INVALID_PARAMETER, so a broker that had already exited
+        # came back as "Could not stop the broker: [WinError 87] The parameter
+        # is incorrect" — which reads like a bug in the caller rather than the
+        # ordinary case of a stale pid file.
+        if getattr(error, "winerror", None) == _ERROR_INVALID_PARAMETER:
+            return _already_gone(root)
         return {"ok": False, "detail": f"Could not stop the broker: {error}"}
     for _ in range(40):
         if not running(root=root):

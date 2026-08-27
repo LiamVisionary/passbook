@@ -227,3 +227,44 @@ def test_the_app_falls_back_to_the_copy_it_carries():
     assert "resource_dir" in source
     # And it must not write bytecode into its own installed, signed bundle.
     assert "PYTHONPYCACHEPREFIX" in source
+
+
+def test_stopping_a_broker_that_already_exited_is_not_an_error(tmp_path, monkeypatch):
+    """POSIX raises ProcessLookupError; Windows raises WinError 87.
+
+    `passbook broker stop` on a stale pid file answered "Could not stop the
+    broker: [WinError 87] The parameter is incorrect", which reads like a bug
+    rather than the ordinary case of a broker that is no longer there.
+    """
+    (tmp_path / passbook_broker.PID_FILENAME).write_text("999999", encoding="utf-8")
+
+    def refuse(pid, sig):
+        error = OSError(22, "The parameter is incorrect")
+        error.winerror = 87
+        raise error
+
+    monkeypatch.setattr(passbook_broker.os, "kill", refuse)
+    answer = passbook_broker.stop(root=tmp_path)
+
+    assert answer["ok"], answer
+    assert "already gone" in answer["detail"]
+    assert not (tmp_path / passbook_broker.PID_FILENAME).exists(), "the stale pid file must go"
+
+
+def test_the_shims_do_not_write_bytecode_into_the_install():
+    """Python writes __pycache__ beside whatever it imports, and beside these
+    modules is inside the installed app.
+
+    Those .pyc files are not something the installer put there, so the
+    uninstaller does not take them away: an uninstall left thirteen of them
+    behind and the install directory with them. A per-machine install would not
+    be writable there at all.
+    """
+    staged = REPO / "app/src-tauri/bin/passbook.cmd"
+    if not staged.is_file():
+        subprocess.run([sys.executable, str(REPO / "scripts/stage-runtime.py")],
+                       capture_output=True, check=True)
+    body = staged.read_text(encoding="ascii")
+    assert "PYTHONPYCACHEPREFIX" in body
+    assert "%~dp0..\\cli" not in body.split("PYTHONPYCACHEPREFIX")[1].split("\n")[0], \
+        "the cache must not point back inside the install"

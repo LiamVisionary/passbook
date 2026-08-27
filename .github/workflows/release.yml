@@ -4,10 +4,14 @@ name: Release
 #
 #     git tag v1.0.0 && git push origin v1.0.0
 #
-# Every build is native. Tauri cannot cross compile a webview app, so Windows is
-# built on Windows, Linux on Linux, and the two Mac architectures on the two Mac
-# runners. Building Apple Silicon on a macos-13 box would produce something that
-# has never been run.
+# One runner per operating system, because a webview app cannot be cross
+# compiled between them: Windows is built on Windows and Linux on Linux.
+#
+# The two Mac architectures are the exception and both are built on Apple
+# Silicon. Same OS, same SDK, so an x86_64 target is an ordinary build rather
+# than a cross compile, and it is how a universal binary is made. The Intel
+# runner label was tried first and sat queued for an hour while the other three
+# platforms finished, which is not a thing to depend on for a release.
 
 on:
   push:
@@ -61,7 +65,7 @@ jobs:
             os: macos-14
             target: aarch64-apple-darwin
           - name: macOS · Intel
-            os: macos-13
+            os: macos-14
             target: x86_64-apple-darwin
           - name: Windows · x64
             os: windows-latest

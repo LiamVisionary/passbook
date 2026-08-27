@@ -71,13 +71,17 @@ jobs:
 
       # webkit2gtk is the webview, and the rest are what it links against. A
       # Linux runner has none of them.
+      #
+      # Only the ayatana indicator, never both. They are two implementations of
+      # the same thing and the packages declare a conflict, so asking for the
+      # pair fails the whole install with "held broken packages".
       - name: Linux build dependencies
         if: matrix.os == 'ubuntu-22.04'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
             librsvg2-dev patchelf build-essential curl wget file libssl-dev \
-            libgtk-3-dev libayatana-appindicator3-dev
+            libgtk-3-dev
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -95,6 +99,14 @@ jobs:
         shell: bash
         run: python3 scripts/sync-permissions.py --check
 
+      # There is no npm project here and there is not going to be one. The
+      # window is a single HTML file, so the frontend has no build step and
+      # nothing to install. tauri-action shells out to `npm run tauri` unless
+      # told otherwise, which fails with `Missing script: "tauri"` on a repo
+      # that has no package.json at all.
+      - name: Install the Tauri CLI
+        run: cargo install tauri-cli --version "^2" --locked
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -109,6 +121,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           projectPath: app
+          tauriScript: cargo tauri
           args: --target ${{ matrix.target }}
           tagName: ${{ github.event.inputs.tag || github.ref_name }}
           releaseName: PassBook ${{ github.event.inputs.tag || github.ref_name }}

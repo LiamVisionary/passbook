@@ -26,7 +26,7 @@ needs_a_posix_shell = pytest.mark.skipif(
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import passbook  # noqa: E402
-from _platform import command_file
+from _platform import WINDOWS, command_file
 
 import passbook_cli  # noqa: E402
 
@@ -67,32 +67,37 @@ def test_setup_installs_every_command_and_provisions_the_store(machine):
     assert (home / ".env").is_file(), "setup must leave a usable store behind"
 
 
-@needs_a_posix_shell
 def test_an_installed_command_runs_and_reads_the_store(machine):
+    """The shim is not just written, it runs. On Windows too, now that what
+    gets written there is something Windows can execute."""
     prefix = machine / "bin"
     home = machine / "hive"
     _install(prefix, "--no-runtime", home=home)
 
-    subprocess.run([str(prefix / "passbook-add"), "SETUP_KEY=value"],
+    subprocess.run([str(command_file(prefix, "passbook-add")), "SETUP_KEY=value"],
                    env={**os.environ, "HIVE_HOME": str(home)}, check=True, capture_output=True)
-    done = subprocess.run([str(prefix / "passbook-check"), "SETUP_KEY"],
+    done = subprocess.run([str(command_file(prefix, "passbook-check")), "SETUP_KEY"],
                           env={**os.environ, "HIVE_HOME": str(home)}, capture_output=True, text=True)
 
     assert done.returncode == 0
     assert "SETUP_KEY: set" in done.stdout
 
 
-@needs_a_posix_shell
 def test_a_shim_dispatches_on_its_own_name_not_the_script_path(machine):
     """argv[0] is the script, so the shim has to name itself explicitly."""
     prefix = machine / "bin"
     home = machine / "hive"
     _install(prefix, "--no-runtime", home=home)
 
-    body = (prefix / "passbook-list").read_text(encoding="utf-8")
-    assert 'PASSBOOK_INVOKED_AS="${0##*/}"' in body
+    shim = command_file(prefix, "passbook-list")
+    body = shim.read_text(encoding="utf-8")
+    if WINDOWS:
+        # A .cmd has no `$0` to read its own name back out of, so it carries it.
+        assert "PASSBOOK_INVOKED_AS=passbook-list" in body
+    else:
+        assert 'PASSBOOK_INVOKED_AS="${0##*/}"' in body
 
-    done = subprocess.run([str(prefix / "passbook-list")],
+    done = subprocess.run([str(shim)],
                           env={**os.environ, "HIVE_HOME": str(home)}, capture_output=True, text=True)
     assert done.returncode == 0, done.stderr
 

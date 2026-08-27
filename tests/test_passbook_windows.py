@@ -145,9 +145,9 @@ def test_the_windows_shim_never_builds_an_empty_pythonpath_entry():
 
 def test_every_command_gets_a_shim_windows_can_run():
     """A bare `passbook` resolves through PATHEXT, and no extension is on it."""
+    subprocess.run([sys.executable, str(REPO / "scripts/stage-runtime.py")],
+                   capture_output=True, text=True, check=True)
     staged = REPO / "app/src-tauri/bin"
-    if not staged.is_dir():
-        pytest.skip("the app's commands are staged by scripts/stage-runtime.py")
     names = {path.stem for path in staged.glob("*.cmd")}
     expected = {"passbook", *passbook_cli.aliases()}
     assert expected <= names, f"missing shims: {sorted(expected - names)}"

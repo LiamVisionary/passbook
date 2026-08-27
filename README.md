@@ -48,11 +48,22 @@ you see here, you can do from a terminal.
 
 ## Install
 
-Grab the app from [releases](https://github.com/LiamVisionary/passbook/releases/latest),
-or install the command line:
+Grab the app from [releases](https://github.com/LiamVisionary/passbook/releases/latest).
+
+On Windows that is the whole thing. The installer brings its own Python and its
+own copy of every `passbook` command, puts them on your PATH, and takes them
+back off when you uninstall. Nothing needs to be on the machine first.
+
+For the command line on its own:
 
 ```bash
 ./install.sh
+```
+
+On Windows:
+
+```powershell
+.\install.ps1
 ```
 
 That is the whole setup. It finds a Python, installs the commands, provisions

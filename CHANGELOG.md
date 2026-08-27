@@ -4,6 +4,39 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+### Windows
+
+Windows was a build target rather than a platform. A signed installer was
+produced for it and nothing that came out of that installer worked.
+
+- **The app carries the CLI it depends on.** The window holds no logic of its
+  own and asks the command line everything, and the command line was never
+  shipped with it. On Windows, which has no system Python, a fresh install
+  opened onto "Could not run PassBook: program not found" and the only
+  documented setup was `install.sh`, a shell script Windows cannot run. The
+  installer now brings a private Python, the modules, and every `passbook`
+  command, and puts them on PATH.
+- **The broker exists on Windows.** It was a Unix socket or nothing, so
+  `passbook signin` raised `AttributeError` on `socket.AF_UNIX` before it began.
+  With no broker there is nowhere to hold a data key, which meant a sealed
+  store could not be opened on Windows by any route. There is a named pipe
+  there now, restricted by a DACL to the account that created it, and it names
+  the calling process the way the socket did.
+- **The broker outlives the command that started it.** `start_new_session` is
+  POSIX, and Windows accepts it and does nothing, so a sign-in lasted exactly
+  as long as the terminal that asked for one.
+- **`passbook install` installs something Windows can run.** It wrote
+  `#!/bin/sh` files with no extension into `~/.local/bin`, which is on nobody's
+  PATH there. Now it writes `.cmd` shims into `%LOCALAPPDATA%\PassBook\bin`.
+- **The application binary is signed, not only the installer.** Signing ran on
+  the bundler's output, by which point the binary was already sealed inside the
+  installer. It is signed before it is wrapped, and the release now checks both.
+- The publisher reads `Rizzma, Inc.` rather than `hivemindos`, which Windows had
+  been deriving from the bundle identifier while the signature said otherwise.
+- The app looks for `USERPROFILE` as well as `HOME`, which Windows does not set.
+- Broker tests no longer skip themselves on Windows. That skip is why all of
+  the above shipped green.
+
 ### Sign-ins
 - **OAuth grants are a thing PassBook understands** (`passbook oauth`). A grant
   knows which keys hold it, when it expires and how to renew — so a store stops

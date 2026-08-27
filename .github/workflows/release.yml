@@ -332,9 +332,11 @@ jobs:
           $paths = @(Get-ChildItem -LiteralPath $nsis -Filter *.exe -File | ForEach-Object { $_.FullName })
           if (-not $paths) { throw "the bundler produced no installer in $nsis" }
           $paths | ForEach-Object { "built $_" }
-          # -AsArray, because ConvertTo-Json unwraps a one-element array into a
-          # bare string and the attach step reads this with `jq -r '.[]'`.
-          $json = ConvertTo-Json -InputObject $paths -Compress -AsArray
+          # Built element by element rather than with `ConvertTo-Json -AsArray`
+          # on the whole list. Passed through -InputObject an array counts as a
+          # single object, so -AsArray wrapped it again and the attach step read
+          # `[`, the path, and `]` as three separate file names.
+          $json = '[' + (($paths | ForEach-Object { ConvertTo-Json -InputObject $_ -Compress }) -join ',') + ']'
           "artifactPaths=$json" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Sign the Windows installer

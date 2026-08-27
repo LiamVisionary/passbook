@@ -1,0 +1,157 @@
+name: Release
+
+# Tag a version and this builds the app for every platform and publishes it.
+#
+#     git tag v1.0.0 && git push origin v1.0.0
+#
+# Every build is native. Tauri cannot cross compile a webview app, so Windows is
+# built on Windows, Linux on Linux, and the two Mac architectures on the two Mac
+# runners. Building Apple Silicon on a macos-13 box would produce something that
+# has never been run.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish (must already exist)"
+        required: true
+
+permissions:
+  contents: write
+
+# Signing the Mac builds needs these in the repository's secrets. Without them
+# everything still builds and only the macOS artifacts are unsigned.
+#
+#     APPLE_CERTIFICATE            base64 of a Developer ID .p12
+#     APPLE_CERTIFICATE_PASSWORD   its password
+#     APPLE_SIGNING_IDENTITY       Developer ID Application: NAME (TEAMID)
+#     APPLE_ID                     the Apple account, for notarisation
+#     APPLE_PASSWORD               an app-specific password for it
+#     APPLE_TEAM_ID                the team
+
+jobs:
+  # The tests already run per push, but a release is the one build nobody gets
+  # to re-run later, so it does not start until they pass on this exact commit.
+  test:
+    name: tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip pytest cryptography
+      - run: python -m pytest tests -q
+
+  app:
+    name: ${{ matrix.name }}
+    needs: test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS · Apple Silicon
+            os: macos-14
+            target: aarch64-apple-darwin
+          - name: macOS · Intel
+            os: macos-13
+            target: x86_64-apple-darwin
+          - name: Windows · x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - name: Linux · x64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # webkit2gtk is the webview, and the rest are what it links against. A
+      # Linux runner has none of them.
+      - name: Linux build dependencies
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
+            librsvg2-dev patchelf build-essential curl wget file libssl-dev \
+            libgtk-3-dev libayatana-appindicator3-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri -> target
+          key: ${{ matrix.target }}
+
+      # The window's ACL is generated from the command list. If the two have
+      # drifted, the app builds and then refuses every command at runtime, which
+      # is not something to find out from a release.
+      - name: The window may call every command it has
+        shell: bash
+        run: python3 scripts/sync-permissions.py --check
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Signing and notarisation, when the secrets are set. Without them the
+          # Mac builds still ship, and macOS asks the person who downloads one
+          # whether they meant it.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          projectPath: app
+          args: --target ${{ matrix.target }}
+          tagName: ${{ github.event.inputs.tag || github.ref_name }}
+          releaseName: PassBook ${{ github.event.inputs.tag || github.ref_name }}
+          releaseBody: |
+            One credential store per machine, shared by every app that opts in.
+
+            **macOS** takes the `.dmg` for your chip. Apple Silicon is
+            `aarch64`, Intel is `x64`.
+            **Windows** takes the `.msi`.
+            **Linux** takes the `.AppImage` or the `.deb`.
+
+            The command line installs separately, and the app needs it:
+
+            ```bash
+            uv tool install passbook
+            ```
+
+            See the [README](https://github.com/LiamVisionary/passbook#readme).
+          # A draft. Four platforms land in it and then a person looks before
+          # any of it is public, which matters most on the Mac builds: without
+          # the Apple secrets below they are unsigned, and an unsigned first
+          # release teaches everyone who downloads it to click through a
+          # Gatekeeper warning.
+          releaseDraft: true
+          prerelease: false
+
+  # The app shells out to the CLI for everything, so the CLI is half the
+  # release. Attached to the same tag rather than left to PyPI alone.
+  cli:
+    name: command line
+    # Not just `test`: the release has to exist before anything can be attached
+    # to it, and it is the app job that creates it.
+    needs: [test, app]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip build
+      - run: python -m build
+      - name: Attach the wheel and the sdist
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: gh release upload "$TAG" dist/* --clobber

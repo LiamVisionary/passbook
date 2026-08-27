@@ -203,6 +203,41 @@ jobs:
           tauriScript: cargo tauri
           args: --target ${{ matrix.target }}
 
+      # Tauri notarises and staples the .app, then builds the dmg around it and
+      # signs that. The dmg itself never goes to Apple, so `spctl` rejects it
+      # with "source=Unnotarized Developer ID" and the person who downloaded it
+      # is questioned about the disk image before they ever reach the app.
+      #
+      # Notarise the container too, staple the ticket into it so it verifies
+      # without a network round trip, and refuse to ship one that does not then
+      # pass Gatekeeper. Checking is the point: a release that is signed but
+      # rejected looks exactly like one that is fine, right up until somebody
+      # downloads it.
+      - name: Notarise and staple the disk image
+        if: runner.os == 'macOS' && env.HAS_SIGNING == 'true'
+        shell: bash
+        env:
+          BUILT: ${{ steps.build.outputs.artifactPaths }}
+        run: |
+          set -euo pipefail
+          found=0
+          while IFS= read -r line; do
+            dmg="${line%$'\r'}"
+            case "$dmg" in *.dmg) ;; *) continue ;; esac
+            found=$((found + 1))
+            echo "notarising ${dmg##*/}"
+            xcrun notarytool submit "$dmg" \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" \
+              --wait
+            xcrun stapler staple "$dmg"
+            xcrun stapler validate "$dmg"
+            spctl --assess --type open --context context:primary-signature -vv "$dmg"
+            echo "  stapled, and Gatekeeper accepts it"
+          done < <(printf '%s' "$BUILT" | jq -r '.[]')
+          [ "$found" -gt 0 ] || { echo "no disk image was built to notarise" >&2; exit 1; }
+
       # Named formats rather than everything the bundler produced, so an
       # updater tarball for an app with no updater cannot slip into a release
       # again. `artifactPaths` is a JSON array of absolute paths.

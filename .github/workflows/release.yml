@@ -95,6 +95,16 @@ jobs:
     name: ${{ matrix.name }}
     needs: draft
     runs-on: ${{ matrix.os }}
+    # Not a deployment gate, an identity. A job that names an environment gets
+    # an OIDC subject of `...:environment:release` whatever tag triggered it,
+    # so Azure trusts one federated credential for every future release.
+    #
+    # The alternative was a credential per tag. Entra's wildcard form refuses
+    # GitHub's issuer outright: `claims['sub'] matches ...` comes back as
+    # "lacks all required claims or contains unallowed claims". So v1.0.0 had
+    # its own credential and v1.0.1 would have failed with AADSTS700213 for no
+    # reason anybody would remember by then.
+    environment: release
     # Overrides the workflow-level block, so `contents` has to be repeated.
     # `id-token` is what lets Azure federate this run instead of holding a
     # client secret.

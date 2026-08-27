@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -29,6 +30,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import passbook  # noqa: E402
 
 PACKAGE = Path(__file__).resolve().parents[1]
+
+# The broker speaks over a Unix socket, which Windows does not have. These
+# check CLI exit codes the app depends on, and there is no broker there to
+# check them against.
+needs_a_broker = pytest.mark.skipif(
+    not hasattr(socket, "AF_UNIX"), reason="the broker needs AF_UNIX")
 
 
 @pytest.fixture
@@ -68,6 +75,7 @@ def test_the_app_calls_exit_zero(machine, args):
     assert done.returncode == 0, f"{' '.join(args)} exited {done.returncode}: {done.stderr[-400:]}"
 
 
+@needs_a_broker
 def test_starting_and_stopping_the_broker_both_exit_zero(machine):
     """The bug this file exists for: it started, then died printing the result."""
     started = _cli("broker", "start", home=machine)
@@ -204,6 +212,7 @@ def test_a_wrong_password_fails_cleanly(machine):
     assert done.stderr.strip() == "Wrong password"
 
 
+@needs_a_broker
 def test_signin_and_signout_exit_zero(machine):
     _profile(machine)
     _cli("seal", "--password-stdin", home=machine, stdin=VAULT_PASSWORD + "\n")
@@ -224,6 +233,7 @@ def test_signin_and_signout_exit_zero(machine):
         _cli("broker", "stop", home=machine)
 
 
+@needs_a_broker
 def test_signin_starts_the_broker_rather_than_sending_you_away(machine):
     """`passbook signin` on a machine with no broker used to just refuse.
 

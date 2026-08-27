@@ -17,6 +17,12 @@ from pathlib import Path
 
 import pytest
 
+# `install.sh` and the command shims are POSIX shell scripts. Windows cannot
+# execute them at all: it answers "%1 is not a valid Win32 application". What
+# they check is real and is checked on the platforms that can run them.
+needs_a_posix_shell = pytest.mark.skipif(
+    os.name == "nt", reason="install.sh and the shims are POSIX shell")
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import passbook  # noqa: E402
@@ -57,6 +63,7 @@ def test_setup_installs_every_command_and_provisions_the_store(machine):
     assert (home / ".env").is_file(), "setup must leave a usable store behind"
 
 
+@needs_a_posix_shell
 def test_an_installed_command_runs_and_reads_the_store(machine):
     prefix = machine / "bin"
     home = machine / "hive"
@@ -71,6 +78,7 @@ def test_an_installed_command_runs_and_reads_the_store(machine):
     assert "SETUP_KEY: set" in done.stdout
 
 
+@needs_a_posix_shell
 def test_a_shim_dispatches_on_its_own_name_not_the_script_path(machine):
     """argv[0] is the script, so the shim has to name itself explicitly."""
     prefix = machine / "bin"
@@ -201,6 +209,7 @@ def test_the_runtime_lives_beside_the_store_not_inside_the_project(machine):
 
 
 @pytest.mark.skipif(not INSTALLER.is_file(), reason="installer is not present")
+@needs_a_posix_shell
 def test_the_installer_stops_cleanly_when_no_python_is_usable(machine):
     """Half-installing and letting someone discover it later is the failure mode."""
     done = subprocess.run(
@@ -216,6 +225,7 @@ def test_the_installer_stops_cleanly_when_no_python_is_usable(machine):
 
 
 @pytest.mark.skipif(not INSTALLER.is_file(), reason="installer is not present")
+@needs_a_posix_shell
 def test_the_installer_honours_an_explicit_interpreter(machine):
     done = subprocess.run(
         ["/bin/sh", str(INSTALLER), "--prefix", str(machine / "bin"), "--no-runtime"],

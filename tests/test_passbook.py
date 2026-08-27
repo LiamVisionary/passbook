@@ -256,6 +256,8 @@ def test_no_status_surface_returns_a_value(hive):
 # ── 8. containers ──────────────────────────────────────────────────────────
 
 
+@pytest.mark.skipif(sys.platform != "darwin",
+                    reason="the App Sandbox container is a macOS thing")
 def test_a_sandbox_container_is_reported_rather_than_written_into(tmp_path, monkeypatch):
     monkeypatch.delenv("HIVE_HOME", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path / "Library" / "Containers" / "app.id" / "Data"))

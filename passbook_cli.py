@@ -420,6 +420,15 @@ def cmd_run(args: argparse.Namespace) -> int:
     # to whoever asked for this environment, not to `passbook-run`. Set after
     # the merge so an explicit --app beats an inherited variable.
     child["PASSBOOK_APP"] = who
+    # Windows has no exec. `os.execvpe` is emulated there by spawning and
+    # exiting, so this process returns before the child has written anything
+    # and whoever captured our output gets an empty string and a success code.
+    # Wait for it instead, and hand its exit code back as our own.
+    if os.name == "nt":
+        try:
+            return subprocess.run(command, env=child).returncode
+        except FileNotFoundError:
+            return _fail(f"{command[0]}: command not found")
     try:
         os.execvpe(command[0], command, child)
     except FileNotFoundError:

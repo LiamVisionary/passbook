@@ -345,7 +345,12 @@ def test_approving_without_a_confirmed_fingerprint_refuses_rather_than_skipping(
     done = _cli("link", "approve", token, "--keys", "LENT", home=owner)
 
     assert done.returncode == 1
-    assert "fingerprint confirmed" in done.stderr
+    # The refusal is the claim. Its wording depends on how the platform closes
+    # a stdin nobody is typing into: POSIX reaches the fingerprint check and
+    # says so, Windows reads EOF first and reports a cancellation. Both refuse
+    # and neither grants anything, which is the whole point.
+    assert "fingerprint confirmed" in done.stderr or "Cancelled" in done.stderr
+    assert "granted" not in done.stdout
     with machines["at"]("joiner"):
         assert passbook.key_names() == []
 

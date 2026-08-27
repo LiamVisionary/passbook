@@ -69,10 +69,11 @@ If that step cannot run, because there is no network or no build tools, setup
 still finishes. Everything except encryption and linking works, it says so
 plainly, and `passbook install` picks up where it left off later.
 
-Already have `uv` or `pipx`? Same job:
+Already have `uv`? Same job. The name `passbook` on PyPI belongs to an
+unrelated project, so install from here:
 
 ```bash
-uv tool install passbook
+uv tool install git+https://github.com/LiamVisionary/passbook
 ```
 
 Or copy `passbook.py` straight into a project. One file, no dependencies, no
@@ -95,7 +96,8 @@ https://github.com/LiamVisionary/passbook
 Do all of this, and tell me what you find at each step:
 
 1. Install it. Prefer a tool installer so it gets its own environment:
-   uv tool install passbook   (or pipx install passbook, or ./install.sh)
+   uv tool install git+https://github.com/LiamVisionary/passbook
+   (or ./install.sh)
 2. Run `passbook status` and tell me where the store is and how many keys it holds.
 3. Encrypt it with `passbook secure` if it is not encrypted already. Tell me
    which keys it leaves readable and why.

@@ -17,7 +17,13 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": [
+      "app",
+      "dmg",
+      "nsis",
+      "deb",
+      "appimage"
+    ],
     "category": "Utility",
     "shortDescription": "The credentials this machine shares",
     "longDescription": "PassBook manages one credential store per machine: which keys are stored, how each one is answered, who has borrowed them, and a tamper-evident record of every read.",

@@ -172,7 +172,7 @@ jobs:
             The command line installs separately, and the app needs it:
 
             ```bash
-            uv tool install passbook
+            uv tool install git+https://github.com/LiamVisionary/passbook
             ```
 
             See the [README](https://github.com/LiamVisionary/passbook#readme).

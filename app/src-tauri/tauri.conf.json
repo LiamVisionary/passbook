@@ -5,6 +5,7 @@
   "version": "1.0.0",
   "identifier": "app.hivemindos.passbook",
   "build": {
+    "beforeBuildCommand": "python3 ../scripts/stage-runtime.py",
     "frontendDist": "../ui"
   },
   "app": {
@@ -17,12 +18,17 @@
   },
   "bundle": {
     "active": true,
+    "publisher": "Rizzma, Inc.",
+    "copyright": "Copyright 2026 Rizzma, Inc.",
     "targets": [
       "app",
       "dmg",
       "nsis",
       "deb",
       "appimage"
+    ],
+    "resources": [
+      "cli/**/*"
     ],
     "category": "Utility",
     "shortDescription": "The credentials this machine shares",

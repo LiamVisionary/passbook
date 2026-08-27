@@ -26,23 +26,147 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
+
+use tauri::Manager;
 
 use serde_json::Value;
 
-/// Where the CLI lives. An installed `passbook` on PATH wins; otherwise fall
-/// back to the checkout this binary was built from, so a development build
-/// works without an install step.
+/// Where the app's own copy of the CLI lives, learned from Tauri at startup.
+///
+/// Read through a `OnceLock` rather than threaded through every caller: the
+/// resource directory is fixed for the life of the process, and `run` is
+/// reached from places that have no `AppHandle` to pass one.
+static RESOURCES: OnceLock<PathBuf> = OnceLock::new();
+
+/// The user's home, by whichever name this platform gives it.
+///
+/// Windows does not set `HOME`. Reading only that name meant the branch below
+/// silently became `.local/bin/passbook` — a relative path, matched nothing,
+/// and the fallback that was supposed to exist did not.
+fn home() -> Option<PathBuf> {
+    for name in ["HOME", "USERPROFILE"] {
+        if let Ok(value) = std::env::var(name) {
+            if !value.is_empty() {
+                return Some(PathBuf::from(value));
+            }
+        }
+    }
+    None
+}
+
+/// The first entry on PATH that names an executable file.
+///
+/// `Command::new("passbook")` defers this to spawn time, which is fine when
+/// there is nothing to fall back to. There is now, so the question has to be
+/// answered before choosing.
+fn on_path(program: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    // On Windows a bare name is resolved through PATHEXT, and the extension
+    // that matters here is `.cmd`: that is what the shipped shims are, and
+    // Rust will not spawn one without an explicit extension.
+    #[cfg(windows)]
+    let suffixes: Vec<String> = std::env::var("PATHEXT")
+        .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into())
+        .split(';')
+        .filter(|part| !part.is_empty())
+        .map(|part| part.to_ascii_lowercase())
+        .collect();
+    #[cfg(not(windows))]
+    let suffixes: Vec<String> = vec![String::new()];
+
+    for directory in std::env::split_paths(&path) {
+        for suffix in &suffixes {
+            let candidate = directory.join(format!("{program}{suffix}"));
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+/// The Python that runs the bundled modules.
+///
+/// Windows ships one inside the app, because it is the one platform where
+/// assuming a system Python is wrong — and assuming it is exactly how a
+/// released build came to open on "program not found".
+fn bundled_python(resources: &Path) -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        let private = resources.join("runtime/python.exe");
+        if private.is_file() {
+            return Some(private);
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        // macOS and Linux always have one. Named in falling order of how
+        // likely it is to be a real interpreter rather than a stub.
+        for name in ["python3", "python"] {
+            if let Some(found) = on_path(name) {
+                return Some(found);
+            }
+        }
+        let _ = resources;
+    }
+    None
+}
+
+/// The copy of the CLI carried inside this app, if it is there and runnable.
+fn bundled_command() -> Option<Command> {
+    let resources = RESOURCES.get()?;
+    let entry = resources.join("cli/passbook_cli.py");
+    if !entry.is_file() {
+        return None;
+    }
+    let python = bundled_python(resources)?;
+    let mut command = Command::new(python);
+    command.arg(entry);
+    // Python writes `__pycache__` next to whatever it imports. Next to these
+    // modules is inside the installed app — a directory that is read-only under
+    // Program Files, and on macOS is sealed by the notarised signature, which
+    // Gatekeeper then rejects on a later launch. Somewhere else, then: still
+    // cached, so the window is not recompiling three thousand lines per click.
+    command.env("PYTHONPYCACHEPREFIX", std::env::temp_dir().join("passbook-pycache"));
+    Some(command)
+}
+
+/// Where the CLI lives, best first.
+///
+/// An explicit `PASSBOOK_CLI` beats everything; then a real install, because
+/// somebody who ran setup has a runtime and a store already wired up and the
+/// app should use theirs rather than a second one; then the copy inside the
+/// app, which is what makes a fresh install work with nothing else present.
 fn passbook_command() -> Command {
     if let Ok(explicit) = std::env::var("PASSBOOK_CLI") {
         return Command::new(explicit);
     }
-    let installed = PathBuf::from(std::env::var("HOME").unwrap_or_default())
-        .join(".local/bin/passbook");
-    if installed.exists() {
-        return Command::new(installed);
+    if let Some(installed) = home().map(|home| home.join(".local/bin/passbook")) {
+        if installed.is_file() {
+            return Command::new(installed);
+        }
     }
+    if let Some(found) = on_path("passbook") {
+        // A `.cmd` cannot be executed directly; it is a script for the command
+        // interpreter, and Rust stopped pretending otherwise in 1.77.
+        #[cfg(windows)]
+        if found.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("cmd")
+            || ext.eq_ignore_ascii_case("bat"))
+        {
+            let mut command = Command::new("cmd");
+            command.arg("/C").arg(found);
+            return command;
+        }
+        return Command::new(found);
+    }
+    if let Some(bundled) = bundled_command() {
+        return bundled;
+    }
+    // Nothing found. Returning the bare name keeps the failure honest: the
+    // error the window shows names the thing that is missing.
     Command::new("passbook")
 }
 
@@ -989,6 +1113,12 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
+            // Asked of Tauri rather than derived from the executable's path:
+            // the answer differs per platform and per bundle format, and
+            // guessing it wrong means falling back to "not installed".
+            if let Ok(directory) = app.path().resource_dir() {
+                let _ = RESOURCES.set(directory);
+            }
             let port = ui::serve()?;
             // `localhost`, not `127.0.0.1`: the name is what a passkey binds to,
             // and an address is refused as "an invalid domain".

@@ -1,0 +1,19 @@
+{
+  "build": {
+    "beforeBuildCommand": "python ../scripts/stage-runtime.py --runtime"
+  },
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "resources": [
+      "cli/**/*",
+      "runtime/**/*",
+      "bin/**/*",
+      "nsis/path.ps1"
+    ],
+    "windows": {
+      "nsis": {
+        "installerHooks": "nsis/hooks.nsh"
+      }
+    }
+  }
+}

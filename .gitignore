@@ -15,3 +15,10 @@ dist/
 
 # macOS
 .DS_Store
+
+# Staged into the app by scripts/stage-runtime.py: the CLI's modules, a private
+# Windows Python, and the .cmd shims. All reproducible, none of it committed.
+app/src-tauri/cli/
+app/src-tauri/bin/
+app/src-tauri/runtime/
+app/src-tauri/.runtime-cache/

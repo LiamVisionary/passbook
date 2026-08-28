@@ -4,10 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PassBook — one credential store per machine</title>
-<meta name="description" content="One credential store per machine, shared by every app that opts in. Sealed at rest, opened by a password or a passkey, with a record of every read.">
+<meta name="description" content="Stop pasting API keys into .env files. One store per machine, shared by every app that opts in, sealed at rest, and lendable to your other machines.">
 <link rel="icon" href="icon.png">
 <meta property="og:title" content="PassBook">
-<meta property="og:description" content="One credential store per machine, shared by every app that opts in.">
+<meta property="og:description" content="Stop pasting API keys into .env files.">
 <meta property="og:image" content="logo.png">
 <style>
   /* The app is one HTML file with no build step and no dependencies. These
@@ -145,7 +145,7 @@
   <!-- The wordmark is set in text rather than shipped as the logo PNG: that
        image bakes in a dark "Pass", which vanishes on a dark background. -->
   <h1 class="logo"><img src="icon.png" alt=""><span>Pass<b>Book</b></span></h1>
-  <p class="tag">One credential store per machine, shared by every app that opts in.</p>
+  <p class="tag">Stop pasting API keys into .env files.</p>
   <div class="cta">
     <a class="go" href="https://github.com/LiamVisionary/passbook/releases/latest">Download</a>
     <a class="alt" href="https://github.com/LiamVisionary/passbook">Source on GitHub</a>
@@ -155,8 +155,10 @@
 <hr>
 
 <h2 id="idea">The idea</h2>
-<p>Ship three apps and you get three credential stores. The same OpenAI key gets
-pasted three times, revoked in one place, and still works in the other two.</p>
+<p>Ship three apps and you get three credential stores. The same OpenAI key sits
+in three <code>.env</code> files, so rotating it means finding all three, and the
+one you miss is the one that breaks in production. Delete it from one project and
+two copies are still sitting on your disk.</p>
 <p>PassBook fixes that by agreeing on a path instead of building a sync protocol.
 Every app resolves the same file by the same rule, so provisioning and linking
 are the same operation. The first app that needs credentials creates the store,

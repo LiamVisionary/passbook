@@ -8,16 +8,22 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License: Apache-2.0"></a>
 </p>
 
-**One credential store per machine, shared by every app that opts in.**
+**Stop pasting API keys into .env files.**
 
-Ship three apps and you get three credential stores. The same OpenAI key gets
-pasted three times, revoked in one place, and still works in the other two.
+Ship three apps and you get three credential stores. The same OpenAI key sits
+in three `.env` files, so rotating it means finding all three, and the one you
+miss is the one that breaks in production. Delete it from one project and two
+copies are still sitting on your disk.
+
 PassBook fixes that by agreeing on a path instead of building a sync protocol.
 
 Every app resolves the same file by the same rule. So provisioning and linking
 are the same operation. The first app that needs credentials creates the store,
 and every app installed after it finds that file and adopts it. Nothing forks,
 so nothing has to be merged.
+
+Your other machines can borrow from it. Named keys, for a period you set, after
+you confirm a code out of band. Not the whole store.
 
 ![Keys grouped by vendor, each value hidden until you reveal it](docs/app-keys.png)
 

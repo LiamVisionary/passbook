@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -77,6 +78,12 @@ def test_the_rust_tests_for_the_parser_actually_run():
     """
     if not (REPO / "app/src-tauri/Cargo.toml").is_file():
         pytest.skip("no Rust project here")
+    # The Python CI matrix installs no Rust, and `subprocess.run` raises rather
+    # than returning a code when the program is not there. Asking first is the
+    # difference between "skipped on a machine that cannot run it" and a red
+    # job on every platform.
+    if shutil.which("cargo") is None:
+        pytest.skip("no Rust toolchain on this machine")
     done = subprocess.run(
         ["cargo", "test", "--quiet", "ask::"],
         cwd=str(REPO / "app/src-tauri"), capture_output=True, text=True,

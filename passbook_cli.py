@@ -1578,6 +1578,27 @@ def cmd_export(args: argparse.Namespace) -> int:
     return 0
 
 
+
+def free_name(name: str, taken: set[str]) -> str:
+    """A name like `name` that nothing is using yet.
+
+    `OPENAI_API_KEY` becomes `OPENAI_API_KEY_2`, then `_3`. Numbering rather
+    than a word like `_NEW`, because the second import of the same file would
+    then collide with the first and there would be nowhere left to go.
+    """
+    if name not in taken:
+        return name
+    stem, suffix = name, 2
+    # An earlier `_2` should become `_3`, not `_2_2`.
+    if "_" in name:
+        head, _, tail = name.rpartition("_")
+        if tail.isdigit() and head:
+            stem, suffix = head, int(tail) + 1
+    while f"{stem}_{suffix}" in taken:
+        suffix += 1
+    return f"{stem}_{suffix}"
+
+
 def cmd_import(args: argparse.Namespace) -> int:
     """Read an export of any shape into this store."""
     try:
@@ -1612,6 +1633,55 @@ def cmd_import(args: argparse.Namespace) -> int:
         return _fail("That export has no keys in it.")
 
     held = set(passbook.key_names())
+
+    # `--json` describes the file and changes nothing. The window uses this to
+    # draw the list, so it carries names, not values: a file the person is
+    # about to import is still a file full of credentials.
+    if args.dry_run and getattr(args, "json", False):
+        taken = set(held)
+        rows = []
+        for name in sorted(incoming):
+            clashes_here = name in held
+            suggested = free_name(name, taken) if clashes_here else name
+            if clashes_here:
+                # Reserve it, so two clashing keys cannot be offered the same
+                # replacement name.
+                taken.add(suggested)
+            rows.append({"key": name, "clashes": clashes_here, "suggested": suggested})
+        print(json.dumps({
+            "shape": shape,
+            "file": str(source),
+            "name": source.name,
+            "keys": rows,
+            "held": len(held),
+        }, indent=2))
+        return 0
+
+    wanted = getattr(args, "only", None)
+    if wanted:
+        asked = {name.strip() for name in wanted if name.strip()}
+        unknown = sorted(asked - set(incoming))
+        if unknown:
+            return _fail(f"Not in that file: {', '.join(unknown)}")
+        incoming = {name: value for name, value in incoming.items() if name in asked}
+        if not incoming:
+            return _fail("Nothing was selected to import.")
+
+    # `--as OLD=NEW` is how a key gets kept alongside the one already here,
+    # rather than overwriting it.
+    for pair in (getattr(args, "rename", None) or []):
+        old_name, _, new_name = pair.partition("=")
+        old_name, new_name = old_name.strip(), new_name.strip()
+        if not old_name or not new_name:
+            return _fail(f"--as wants OLD=NEW, not {pair!r}")
+        if old_name not in incoming:
+            return _fail(f"Not in that file: {old_name}")
+        if not passbook._KEY.match(new_name):
+            return _fail(f"{new_name} is not a usable key name.")
+        if new_name in incoming:
+            return _fail(f"{new_name} is already coming in from that file.")
+        incoming[new_name] = incoming.pop(old_name)
+
     clashes = sorted(name for name in incoming if name in held)
     fresh = sorted(name for name in incoming if name not in held)
 
@@ -3347,6 +3417,12 @@ def build_parser() -> argparse.ArgumentParser:
     import_cmd.add_argument("--recipient-key", dest="recipient_key", action="store_true",
                             help="a GPG export encrypted to your key, so gpg-agent has the passphrase")
     import_cmd.add_argument("--password-stdin", dest="password_stdin", action="store_true")
+    import_cmd.add_argument("--json", action="store_true",
+                            help="with --dry-run, describe the file as JSON")
+    import_cmd.add_argument("--only", nargs="+", metavar="KEY", default=None,
+                            help="import just these keys, not everything in the file")
+    import_cmd.add_argument("--as", dest="rename", nargs="+", metavar="OLD=NEW", default=None,
+                            help="import OLD under the name NEW, to keep both")
     import_cmd.set_defaults(func=cmd_import)
 
     recovery_cmd = subs.add_parser("recovery", help="mint a code that opens the vault without the password")

@@ -842,12 +842,70 @@
   }
   .adone h1 { margin: 0; font-size: 20px; font-weight: 650; letter-spacing: -.015em; }
 
+  /* ── Importing a .env ─────────────────────────────────────────────────────
+     Same sheet as a credential request, because it is the same kind of moment:
+     something is about to enter the store and a person is deciding what. */
+  .ifile {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    font-size: 12.5px; color: var(--ink3); border-bottom: 1px solid var(--line);
+    padding-bottom: 12px;
+  }
+  .ifile b { color: var(--ink); font-weight: 600; word-break: break-all; }
+  .ilist {
+    display: grid; gap: 2px; max-height: min(46vh, 380px); overflow-y: auto;
+    margin: 0 -4px; padding: 0 4px;
+  }
+  .irow {
+    display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; align-items: center;
+    gap: 10px; padding: 7px 8px; border-radius: 8px;
+  }
+  .irow:hover { background: var(--soft); }
+  .irow input[type="checkbox"] { width: 15px; height: 15px; accent-color: var(--accent); margin: 0; cursor: pointer; }
+  .irow label {
+    font: 500 12.5px ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--ink); cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .irow.off label { color: var(--ink3); }
+  .iclash { display: flex; align-items: center; gap: 7px; }
+  .iclash select {
+    font: 500 11.5px inherit; color: var(--ink2); background: var(--paper);
+    border: 1px solid var(--line2); border-radius: 7px; padding: 3px 6px; cursor: pointer;
+  }
+  .iclash select:focus { outline: 0; border-color: var(--accent); }
+  .ias {
+    font: 400 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--ink3); white-space: nowrap;
+  }
+  .itag {
+    font-size: 10px; font-weight: 650; text-transform: uppercase; letter-spacing: .06em;
+    color: var(--warn); background: var(--warn-soft); padding: 2px 6px; border-radius: 5px;
+  }
+  .ibar { display: flex; align-items: center; gap: 14px; font-size: 12.5px; color: var(--ink3); }
+  .ibar .alink { font-size: 12.5px; }
+  .ibar .count { margin-left: auto; }
+
+  /* The drop target. Covers the window while something is being dragged over
+     it, so there is no small rectangle to aim at. */
+  #drop {
+    position: fixed; inset: 0; z-index: 140; display: grid; place-items: center;
+    background: color-mix(in srgb, var(--bg) 86%, transparent);
+    backdrop-filter: blur(2px);
+  }
+  #drop[hidden] { display: none; }
+  .dropcard {
+    border: 2px dashed var(--accent); border-radius: 16px; padding: 34px 46px;
+    background: var(--card); text-align: center; display: grid; gap: 10px; justify-items: center;
+  }
+  .dropcard b { font-size: 17px; font-weight: 640; letter-spacing: -.01em; }
+  .dropcard span { font-size: 13px; color: var(--ink3); }
+
 </style>
 
 <nav id="nav"></nav>
 <main id="main"><p class="empty">Reading this device…</p></main>
 <div id="gate" hidden></div>
 <div id="ask" hidden></div>
+<div id="drop" hidden></div>
 
 <script>
 (() => {
@@ -856,6 +914,7 @@
   const main = document.getElementById("main");
   const gate = document.getElementById("gate");
   const ask = document.getElementById("ask");
+  const drop = document.getElementById("drop");
   const esc = (v) => String(v ?? "").replace(/[&<>"]/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
 
   /** The icon set.
@@ -2758,7 +2817,7 @@ passbook oauth connect google:work</pre>
   function gateShouldShow() {
     // A request on screen carries its own unlock step, and the sign-in
     // sheet underneath it would mean approving something unread.
-    if (askShouldShow()) return false;
+    if (askShouldShow() || impShouldShow() || impView.done) return false;
     // The passkey offer comes AFTER a successful sign-in, which is the one
     // moment it can succeed — and the same moment the gate would otherwise
     // decide it is no longer needed and take the offer down with it.
@@ -3406,6 +3465,15 @@ passbook oauth connect google:work</pre>
       </div>`;
   }
 
+  /** The sheet has two tenants: a credential request and a .env import. Both
+   *  used to set `ask.hidden` from their own idea of whether they were needed,
+   *  so the five second repaint took the import sheet down mid-decision and
+   *  dropped the sign-in gate on top of it. One function decides now. */
+  function paintSheet() {
+    if (impShouldShow() || impView.done) { paintImport(); return; }
+    paintAsk();
+  }
+
   function paintAsk() {
     const show = askShouldShow();
     ask.hidden = !show;
@@ -3566,6 +3634,221 @@ passbook oauth connect google:work</pre>
     } catch { /* an older build without the command */ }
   }
 
+
+  // ── Importing a .env ───────────────────────────────────────────────────────
+  //
+  //  Drop a project's `.env` on the window and pick what goes in. The list is
+  //  names: the file is full of credentials and this window is a thing people
+  //  screen-share, so the values stay in the CLI, which reads the file again
+  //  when the import actually happens.
+  //
+  //  A key already in the store is the interesting case. Replacing is the
+  //  default because that is usually why somebody is importing a newer file,
+  //  and keeping both is one dropdown away, under a name the CLI picks so the
+  //  window and the terminal cannot disagree about what it should be.
+
+  let imp = null;   // { file, name, rows: [{key, clashes, suggested}] }
+  let impView = { picked: {}, mode: {}, busy: false, error: "", done: "" };
+
+  const impShouldShow = () => Boolean(imp);
+  const impChosen = () => (imp?.rows || []).filter((r) => impView.picked[r.key]);
+
+  function impBody() {
+    const rows = imp.rows;
+    const chosen = impChosen();
+    const clashing = chosen.filter((r) => r.clashes);
+    return `
+      <div class="acard">
+        <div class="ahead">
+          <div class="amark">${icon("into")}</div>
+          <h1>Import ${rows.length} key${rows.length === 1 ? "" : "s"}?</h1>
+        </div>
+        <div class="ifile">
+          <span>From <b>${esc(imp.name)}</b></span>
+          <button class="alink" data-ipick="1">Choose a different file</button>
+        </div>
+        <div class="ibar">
+          <button class="alink" data-iall="1">Select all</button>
+          <button class="alink" data-inone="1">Deselect all</button>
+          <span class="count">${chosen.length} of ${rows.length} selected</span>
+        </div>
+        <div class="ilist">
+          ${rows.map((r, i) => {
+            const on = Boolean(impView.picked[r.key]);
+            const mode = impView.mode[r.key] || "replace";
+            return `
+            <div class="irow${on ? "" : " off"}">
+              <input type="checkbox" id="i-${i}" data-ikey="${esc(r.key)}" ${on ? "checked" : ""}>
+              <label for="i-${i}">${esc(r.key)}</label>
+              ${r.clashes ? `
+                <span class="iclash">
+                  <span class="itag">in store</span>
+                  <select data-imode="${esc(r.key)}" ${on ? "" : "disabled"}>
+                    <option value="replace"${mode === "replace" ? " selected" : ""}>Replace</option>
+                    <option value="new"${mode === "new" ? " selected" : ""}>Add as new</option>
+                  </select>
+                  ${mode === "new" && on ? `<span class="ias">${esc(r.suggested)}</span>` : ""}
+                </span>` : ""}
+            </div>`;
+          }).join("")}
+        </div>
+        ${clashing.length ? `<p class="arefused">${clashing.length}
+          selected key${clashing.length === 1 ? " is" : "s are"} already in this store.
+          Replacing overwrites what is there. Adding as new keeps both.</p>` : ""}
+        ${impView.error ? `<p class="aerr">${esc(impView.error)}</p>` : ""}
+        <div class="arow">
+          <button class="aghost" data-icancel="1">Cancel</button>
+          <button class="aprimary" data-igo="1" ${impView.busy || !chosen.length ? "disabled" : ""}>
+            ${impView.busy ? "Importing…"
+              : !chosen.length ? "Nothing selected"
+              : chosen.length === rows.length ? `Import all ${rows.length}`
+              : `Import ${chosen.length} key${chosen.length === 1 ? "" : "s"}`}</button>
+        </div>
+      </div>`;
+  }
+
+  function impDone() {
+    const n = impView.done;
+    return `
+      <div class="acard">
+        <div class="adone">
+          <svg class="atick" viewBox="0 0 68 68" aria-hidden="true">
+            <circle cx="34" cy="34" r="28"/>
+            <path d="M21 35.5 30 44 47 25"/>
+          </svg>
+          <h1>${n} key${n === 1 ? "" : "s"} imported</h1>
+          <p class="aorigin">Delete the file when you are done with it. A copy in
+            the store does not make the copy on your disk any safer.</p>
+        </div>
+        <div class="arow" style="grid-template-columns: 1fr;">
+          <button class="aprimary" data-idone="1">Done</button>
+        </div>
+      </div>`;
+  }
+
+  function paintImport() {
+    if (!impShouldShow() && !impView.done) { ask.hidden = true; return; }
+    ask.hidden = false;
+    ask.innerHTML = `<div class="awrap">${impView.done ? impDone() : impBody()}</div>`;
+    wireImport();
+  }
+
+  function impClose() {
+    imp = null;
+    impView = { picked: {}, mode: {}, busy: false, error: "", done: "" };
+    ask.hidden = true;
+    paint();
+  }
+
+  /** Read a file the person chose, and show what is in it. */
+  async function openEnv(path) {
+    impView = { picked: {}, mode: {}, busy: false, error: "", done: "" };
+    try {
+      const found = await invoke("inspect_env", { path });
+      const rows = found?.keys || [];
+      if (!rows.length) {
+        notice = `${found?.name || "That file"} has no keys in it.`;
+        imp = null; paint(); return;
+      }
+      imp = { file: found.file, name: found.name, rows };
+      // Everything on by default: the common case is wanting the lot, and
+      // unticking three is less work than ticking twenty.
+      rows.forEach((r) => { impView.picked[r.key] = true; impView.mode[r.key] = "replace"; });
+      paintImport();
+    } catch (e) {
+      imp = null;
+      notice = String(e);
+      paint();
+    }
+  }
+
+  async function impRun() {
+    const chosen = impChosen();
+    if (!chosen.length) return;
+    impView.busy = true; impView.error = ""; paintImport();
+    try {
+      // Two lists, because they are two different questions: what to bring in,
+      // and which of those to keep alongside what is already here.
+      const only = chosen.map((r) => r.key);
+      const renames = chosen
+        .filter((r) => r.clashes && impView.mode[r.key] === "new")
+        .map((r) => [r.key, r.suggested]);
+      const answer = await invoke("import_env", {
+        path: imp.file, only, renames,
+        // Anything kept alongside is renamed, so it cannot collide. Overwrite
+        // therefore only ever lands on a key somebody chose to replace.
+        overwrite: chosen.some((r) => r.clashes && impView.mode[r.key] !== "new"),
+      });
+      if (answer?.state) state = answer.state;
+      const count = only.length;
+      imp = null;
+      impView = { picked: {}, mode: {}, busy: false, error: "", done: count };
+      resetRows();
+      paintImport();
+    } catch (e) {
+      impView.error = String(e);
+      impView.busy = false;
+      paintImport();
+    }
+  }
+
+  function wireImport() {
+    ask.querySelectorAll("[data-ikey]").forEach((box) => box.onchange = () => {
+      impView.picked[box.dataset.ikey] = box.checked;
+      paintImport();
+    });
+    ask.querySelectorAll("[data-imode]").forEach((sel) => sel.onchange = () => {
+      impView.mode[sel.dataset.imode] = sel.value;
+      paintImport();
+    });
+    ask.querySelectorAll("[data-iall]").forEach((b) => b.onclick = () => {
+      imp.rows.forEach((r) => impView.picked[r.key] = true); paintImport();
+    });
+    ask.querySelectorAll("[data-inone]").forEach((b) => b.onclick = () => {
+      imp.rows.forEach((r) => impView.picked[r.key] = false); paintImport();
+    });
+    ask.querySelectorAll("[data-icancel]").forEach((b) => b.onclick = () => impClose());
+    ask.querySelectorAll("[data-idone]").forEach((b) => b.onclick = () => impClose());
+    ask.querySelectorAll("[data-igo]").forEach((b) => b.onclick = () => impRun());
+    ask.querySelectorAll("[data-ipick]").forEach((b) => b.onclick = () => chooseEnv());
+  }
+
+  /** The file picker, for people who would rather not drag anything. */
+  async function chooseEnv() {
+    const dialog = window.__TAURI__?.dialog;
+    if (!dialog?.open) {
+      notice = "Drag a .env onto this window to import it.";
+      paint();
+      return;
+    }
+    const picked = await dialog.open({
+      multiple: false, title: "Choose a .env to import",
+      filters: [{ name: "Environment files", extensions: ["env", "txt", ""] }],
+    });
+    if (picked) await openEnv(typeof picked === "string" ? picked : picked.path);
+  }
+
+  /** Drag and drop, through Tauri rather than the DOM.
+   *
+   *  The DOM would hand the window a File and its contents. Tauri hands it a
+   *  path, so the credentials in that file are read by the CLI and never enter
+   *  the webview at all.
+   */
+  function wireDrop() {
+    const events = window.__TAURI__?.event;
+    if (!events?.listen) return;
+    events.listen("tauri://drag-enter", () => { drop.hidden = false;
+      drop.innerHTML = `<div class="dropcard">${icon("into", "big")}
+        <b>Drop it to import</b><span>Nothing is stored until you choose what to keep.</span></div>`; });
+    events.listen("tauri://drag-leave", () => { drop.hidden = true; });
+    events.listen("tauri://drag-drop", async (e) => {
+      drop.hidden = true;
+      const paths = e?.payload?.paths || e?.payload || [];
+      const first = Array.isArray(paths) ? paths[0] : null;
+      if (first) await openEnv(first);
+    });
+  }
+
   function paint() {
     if (!state) return;
     paintNav();
@@ -3575,7 +3858,7 @@ passbook oauth connect google:work</pre>
                    broker: brokerPage, record: recordPage }[page]();
     main.innerHTML = lockBanner() + body + noticeBar();
     paintGate();
-    paintAsk();
+    paintSheet();
     dressPage();
 
     main.querySelectorAll("[data-goto]").forEach((b) => b.onclick = () => {
@@ -4061,6 +4344,7 @@ passbook oauth connect google:work</pre>
       // A link that launched this window fired its event before there was a
       // window to hear it, so the first question is always "is one waiting?".
       await loadAsk();
+      wireDrop();
       const events = window.__TAURI__?.event;
       if (events?.listen) {
         events.listen("passbook://ask", () => loadAsk());

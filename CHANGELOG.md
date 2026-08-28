@@ -89,7 +89,7 @@ First public release.
 
 ### The store
 - One credential store per machine at `$HIVE_HOME`, else `~/.hivemindos/.env`,
-  resolved the same way by every app that opts in (`SPEC.md`).
+  resolved the same way by every app that opts in (`docs/SPEC.md`).
 - `ensure()` provisions or links in one idempotent call; `request()` is the
   narrow door that names what it needs and leaves a receipt.
 

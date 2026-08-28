@@ -1360,9 +1360,68 @@ fn apply_ask(id: String, typed: Vec<(String, String)>, replace: bool) -> Result<
     state()
 }
 
+
+// ── importing a .env ────────────────────────────────────────────────────────
+//
+// Dropping a `.env` on the window is the fastest way from "I have a project
+// full of keys" to "they are in the vault". Both of these are thin: the CLI
+// decides what a `.env` contains, what clashes, and what a kept-alongside copy
+// should be called, so the window and the terminal cannot disagree about it.
+//
+// Values never come back here. The list is names, and the import is done by
+// the CLI reading the same file again.
+
+/// What is in a file, without importing any of it.
+#[tauri::command]
+fn inspect_env(path: String) -> Result<Value, String> {
+    let target = path.trim();
+    if target.is_empty() {
+        return Err("Which file?".into());
+    }
+    let raw = run(&["import", target, "--dry-run", "--json"])?;
+    serde_json::from_str(&raw)
+        .map_err(|error| format!("PassBook returned something unreadable: {error}"))
+}
+
+/// Import the chosen keys, renaming the ones being kept alongside.
+///
+/// `renames` arrives as pairs so the window can offer "add as new" per key
+/// without inventing the new name itself.
+#[tauri::command]
+fn import_env(
+    path: String,
+    only: Vec<String>,
+    renames: Vec<(String, String)>,
+    overwrite: bool,
+) -> Result<Value, String> {
+    let target = path.trim().to_string();
+    if target.is_empty() {
+        return Err("Which file?".into());
+    }
+    if only.is_empty() {
+        return Err("Nothing was selected to import.".into());
+    }
+    let mut args: Vec<String> = vec!["import".into(), target, "--only".into()];
+    args.extend(only.iter().cloned());
+    if !renames.is_empty() {
+        args.push("--as".into());
+        for (from, to) in &renames {
+            args.push(format!("{from}={to}"));
+        }
+    }
+    if overwrite {
+        args.push("--overwrite".into());
+    }
+    let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
+    let detail = run(&borrowed)?;
+    let next = state()?;
+    Ok(serde_json::json!({ "ok": true, "detail": detail.trim(), "state": next }))
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             // A link can arrive before the window exists (cold start) or long
@@ -1428,7 +1487,7 @@ fn main() {
             forget_machine, verify_record, vault_create_workspace, vault_add_passkey,
             vault_signin_passkey, biometric_status, vault_signin_device, vault_trust_device,
             set_key_projects, set_confirmation,
-            pending_ask, dismiss_ask, apply_ask
+            pending_ask, dismiss_ask, apply_ask, inspect_env, import_env
         ])
         .run(tauri::generate_context!())
         .expect("PassBook failed to start");

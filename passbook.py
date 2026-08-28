@@ -2,7 +2,7 @@
 # Copyright 2026 Rizzma, Inc.
 """The PassBook standard, v1 — Python reference implementation.
 
-One credential store per machine, shared by every app that opts in. See SPEC.md.
+One credential store per machine, shared by every app that opts in. See docs/SPEC.md.
 
 Single file, standard library only, meant to be copied into a project as-is.
 Nothing here imports from the app that hosts it.

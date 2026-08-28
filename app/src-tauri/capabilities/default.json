@@ -8,6 +8,7 @@
   "permissions": [
     "core:default",
     "notification:default",
+    "dialog:allow-open",
     "allow-state",
     "allow-set-mode",
     "allow-unlock",
@@ -54,7 +55,9 @@
     "allow-set-confirmation",
     "allow-pending-ask",
     "allow-dismiss-ask",
-    "allow-apply-ask"
+    "allow-apply-ask",
+    "allow-inspect-env",
+    "allow-import-env"
   ],
   "remote": {
     "urls": [

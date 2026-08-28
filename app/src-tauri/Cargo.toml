@@ -19,6 +19,9 @@ tauri-plugin-notification = "2"
 # The "Add to PassBook" button on a docs page opens `passbook://add?key=...`.
 # Names only; see src/ask.rs for why a value never travels in a URL.
 tauri-plugin-deep-link = "2"
+# "Choose a different file" in the import sheet. Drag and drop needs no
+# plugin, but a picker does, and both hand over a path rather than contents.
+tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

@@ -858,7 +858,7 @@ are the sort of promise that erodes one convenience at a time.
 
 | | |
 |---|---|
-| `SPEC.md` | the standard: layout, format, precedence, conformance |
+| `docs/SPEC.md` | the standard: layout, format, precedence, conformance |
 | `passbook.py` | Python 3.9+ reference implementation, no dependencies |
 | `passbook.mjs` | Node 18+ twin, byte compatible with the Python side |
 | `passbook_vault.py` | profiles, sign-in, and encryption that travels |
@@ -874,7 +874,7 @@ are the sort of promise that erodes one convenience at a time.
 | `bin/passbook` | the command line |
 | `app/` | the desktop app, which holds no logic of its own |
 | `app/src-tauri/biometric/` | Touch ID, behind a small safe API |
-| `AGENT_PROMPT.md` | paste into a coding agent to put a project on PassBook |
+| `docs/AGENT_PROMPT.md` | paste into a coding agent to put a project on PassBook |
 
 ### PassBook and the hive env
 

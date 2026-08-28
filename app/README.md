@@ -42,6 +42,6 @@ be visible to `ps` for as long as the process lived.
 ## Signing
 
 It cannot be distributed yet: this machine has no Developer ID Application
-certificate. See [`SIGNING.md`](../SIGNING.md), which also explains why this
+certificate. See [`../docs/SIGNING.md`](../SIGNING.md), which also explains why this
 app — being a bundle — is the only PassBook surface whose identity can ever be
 *enforced* rather than merely claimed.

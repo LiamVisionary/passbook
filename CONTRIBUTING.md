@@ -2,7 +2,7 @@
 
 ## The shape of the thing
 
-PassBook is a **standard first** and an implementation second. `SPEC.md` is the
+PassBook is a **standard first** and an implementation second. `docs/SPEC.md` is the
 contract; `passbook.py` and `passbook.mjs` are two implementations of it that
 must stay byte-compatible with each other. A change that makes them disagree is
 a bug in whichever one moved.

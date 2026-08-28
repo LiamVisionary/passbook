@@ -2,7 +2,7 @@
 # Copyright 2026 Rizzma, Inc.
 """Conformance tests for the PassBook standard, Python reference implementation.
 
-Every test names a property from SPEC.md. Run against any implementation that
+Every test names a property from docs/SPEC.md. Run against any implementation that
 claims conformance by pointing the import at it.
 """
 

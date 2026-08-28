@@ -117,4 +117,4 @@ py-modules = [
 ]
 
 [tool.setuptools.data-files]
-"share/passbook" = ["SPEC.md", "SIGNING.md", "AGENT_PROMPT.md", "passbook.mjs"]
+"share/passbook" = ["docs/SPEC.md", "docs/SIGNING.md", "docs/AGENT_PROMPT.md", "passbook.mjs"]

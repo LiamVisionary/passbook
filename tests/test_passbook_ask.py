@@ -14,16 +14,19 @@ which is only safe while four things stay true, and these tests keep them true:
   * who is asking comes from the browser, not from the page's own claim.
 
 The parser itself is tested in Rust, next to the code, where a value in a link
-can be asserted against the parsed struct. What is checked here is the wiring
-around it: the window, the ACL, and the documentation people will copy.
+can be asserted against the parsed struct. Those run in the `parser` CI job,
+which has the system libraries a Tauri crate needs to build. Trying to run them
+from here instead took down all six Python jobs, because a GUI crate does not
+build on a runner that only installed Python.
+
+What is checked here is the wiring around it: the window, the ACL, and the
+documentation people will copy.
 """
 
 from __future__ import annotations
 
 import json
 import re
-import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -68,30 +71,6 @@ def test_the_page_hands_the_value_over_on_loopback():
     main = MAIN.read_text(encoding="utf-8")
     assert '"/ask"' in main, "there is no endpoint for a page to post to"
     assert "Access-Control-Allow-Origin" in main, "a button on someone else's page could not reach it"
-
-
-def test_the_rust_tests_for_the_parser_actually_run():
-    """A parser test that is never executed is a comment.
-
-    `cargo test` is not part of the Python suite, so this runs the one module
-    that matters rather than trusting that somebody did.
-    """
-    if not (REPO / "app/src-tauri/Cargo.toml").is_file():
-        pytest.skip("no Rust project here")
-    # The Python CI matrix installs no Rust, and `subprocess.run` raises rather
-    # than returning a code when the program is not there. Asking first is the
-    # difference between "skipped on a machine that cannot run it" and a red
-    # job on every platform.
-    if shutil.which("cargo") is None:
-        pytest.skip("no Rust toolchain on this machine")
-    done = subprocess.run(
-        ["cargo", "test", "--quiet", "ask::"],
-        cwd=str(REPO / "app/src-tauri"), capture_output=True, text=True,
-    )
-    if done.returncode != 0 and "could not compile" in (done.stderr or ""):
-        pytest.skip(f"the Rust toolchain could not build here:\n{done.stderr[-400:]}")
-    assert done.returncode == 0, done.stdout + done.stderr
-    assert "test result: ok" in done.stdout
 
 
 def test_the_window_shows_a_preview_and_not_the_credential():

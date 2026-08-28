@@ -33,6 +33,32 @@ jobs:
       - name: Test
         run: python -m pytest tests -q -rs
 
+  # The link parser is the one place a value could leak into a URL, so its
+  # tests are not optional. They live in Rust next to the code and need the
+  # webview's system libraries to build, which is why they get their own job
+  # rather than riding along in the Python matrix.
+  parser:
+    name: link parser
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build dependencies for the webview crate
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+            librsvg2-dev patchelf build-essential curl wget file libssl-dev \
+            libgtk-3-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri -> target
+      - name: The staged CLI the app carries
+        run: python3 scripts/stage-runtime.py
+      - name: Test the parser
+        working-directory: app/src-tauri
+        # Quoted: a trailing `::` in a plain scalar reads as a YAML mapping.
+        run: "cargo test --quiet ask::"
+
   # A machine with no OS keystore is the normal case on a headless server, and
   # the vault has to work there on a password alone. This pins that.
   no-keystore:

@@ -1598,13 +1598,23 @@ RELEASES_API = "https://api.github.com/repos/LiamVisionary/passbook/releases/lat
 
 
 def installed_version() -> str:
-    """What this copy is, from the metadata its installer wrote."""
-    try:
-        from importlib.metadata import PackageNotFoundError, version
+    """What THIS copy is, from the metadata its installer wrote.
 
-        return version("passbook")
+    `importlib.metadata` answers about a distribution on `sys.path`, which is
+    not necessarily the one that got imported: run a checkout on a machine that
+    also has PassBook installed and it cheerfully reports the installed copy's
+    version for code that did not come from it. Reporting a different copy's
+    version is worse than reporting none, because it is the number somebody
+    will put in a bug report.
+    """
+    try:
+        from importlib.metadata import version
+
+        found = version("passbook")
     except Exception:  # noqa: BLE001 — a checkout has no metadata, and that is fine
         return ""
+    # Only trust it when the module actually came from an installed location.
+    return found if "site-packages" in str(Path(passbook.__file__).resolve()) else ""
 
 
 def latest_version(*, timeout: float = 10.0) -> tuple[str, str]:

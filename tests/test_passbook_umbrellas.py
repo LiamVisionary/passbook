@@ -322,12 +322,30 @@ def test_an_umbrella_never_carries_a_value(store):
 # ── knowing what this copy is ───────────────────────────────────────────────
 
 
-def test_the_cli_can_say_what_version_it_is():
+def test_asking_the_version_is_answerable_from_anywhere():
     """A copy that cannot name itself cannot be diagnosed. A dead end fixed
-    before 1.0.0 was still being hit months later on a machine whose CLI
-    predated the fix, and nothing on that machine could say so."""
+    before 1.0.0 was still being hit weeks later on a machine whose CLI
+    predated the fix, and nothing on that machine could say so.
+
+    What is asserted is the CONTRACT — a string, never a raise — rather than a
+    particular value. The first version of this test asserted the value was
+    non-empty, which is true of an installed copy and false of a checkout: it
+    passed on a laptop that happened to have PassBook installed and failed on
+    all nine CI jobs, which run against the source tree. That is a test about
+    the machine wearing the clothes of a test about the code.
+    """
     import passbook_cli
-    assert passbook_cli.installed_version()  # from the installed metadata
+    assert isinstance(passbook_cli.installed_version(), str)
+
+
+def test_the_version_flag_always_prints_something_usable(capsys):
+    """Including from a checkout, where there is no metadata to read. Printing
+    nothing would leave a bug report with a blank where the version goes."""
+    import passbook_cli
+    assert passbook_cli.main(["--version"]) == 0
+    printed = capsys.readouterr().out.strip()
+    assert printed, "no version line"
+    assert printed[0].isdigit() or "checkout" in printed, printed
 
 
 def test_a_checkout_is_not_something_update_replaces():

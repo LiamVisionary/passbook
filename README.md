@@ -38,6 +38,7 @@ you see here, you can do from a terminal.
 - [Activity](#activity)
 - [Devices](#devices)
 - [Sign-ins that stay alive](#sign-ins-that-stay-alive)
+- [Add to PassBook](#add-to-passbook)
 - [Agents](#agents)
 - [The broker](#the-broker)
 - [Backup](#backup)
@@ -561,6 +562,122 @@ access tokens on demand and usually outlives them by months. If you were
 undecided about `passbook secure`, holding sign-ins is the argument for it.
 
 ---
+
+## Add to PassBook
+
+Every API page ends the same way. Here is your key, now go and put it somewhere.
+So you paste it into a `.env`, and that is how keys end up in repositories.
+
+A platform can hand it over instead. One button on the page that just minted the
+key, and it lands in your vault, sealed, without touching your clipboard.
+
+![The window asking whether to add two keys, showing who is asking and where they would go](docs/app-add-to-passbook.png)
+
+You see who is asking, which keys, and which workspace. Nothing is stored until
+you say so and open the vault.
+
+### The button
+
+Drop this next to the key you just showed someone. Replace the two values and
+the label.
+
+```html
+<button id="add-to-passbook">Add to PassBook</button>
+
+<script>
+document.getElementById("add-to-passbook").addEventListener("click", async () => {
+  const request = {
+    app: "OpenAI",                       // your product, shown to the person
+    note: "Read from the environment by the SDK",
+    keys: [
+      { name: "OPENAI_API_KEY", value: theKeyYouJustMinted },
+      { name: "OPENAI_ORG_ID",  value: theOrgId },
+    ],
+  };
+
+  // The app listens on loopback. It prefers 17817 and walks upward if that
+  // port is taken, so try the range rather than assuming.
+  async function hand(over) {
+    for (let port = 17817; port < 17826; port++) {
+      try {
+        const answer = await fetch(`http://127.0.0.1:${port}/ask`, {
+          method: "POST",
+          // text/plain keeps this a simple request, so there is no preflight.
+          headers: { "Content-Type": "text/plain" },
+          body: JSON.stringify(over),
+        });
+        if (answer.ok) return true;
+      } catch { /* nothing listening on that port */ }
+    }
+    return false;
+  }
+
+  if (await hand(request)) return;
+
+  // Not running. The link starts it; then hand the keys over for real.
+  // The link carries names only, never a value: see below.
+  location.href = "passbook://add?app=OpenAI&key=OPENAI_API_KEY&key=OPENAI_ORG_ID";
+  setTimeout(() => hand(request), 2500);
+});
+</script>
+```
+
+That is the whole integration. No SDK, no account, no key of your own.
+
+### Why the value does not travel in the link
+
+The link exists to start the app, and it carries key names only. It is not a
+smaller version of the same thing.
+
+A URL handed to an operating system's URL handler is not private. Windows passes
+it to the app as a command line, which any process on the machine can read, and
+the others log it. This project's own CLI says the same of
+`passbook add KEY=value`: a value passed that way is visible in shell history
+and, briefly, to `ps`.
+
+So values go over loopback in a request body instead. They never appear in a
+URL, an argument list or a log. As a bonus the browser sets `Origin`, so PassBook
+learns who is asking from the browser rather than from the page's own claim,
+which is the one part of a request a page cannot forge.
+
+The value does not reach the window either. It stays in the app and the window
+is sent a preview — `sk-pr…4f21` — because a window is a thing people
+screen-share.
+
+### Hand this to an assistant
+
+Paste this and the page will wire itself up.
+
+```text
+Add a PassBook button to this page.
+
+PassBook is a local credential manager. It runs a small HTTP server on
+127.0.0.1, preferring port 17817 and walking upward to 17825 if taken. Posting
+a key to it opens a window where the person approves storing it.
+
+Add a button labelled "Add to PassBook" next to where we display the API key.
+On click, POST JSON to http://127.0.0.1:<port>/ask with Content-Type text/plain
+(this keeps it a simple request and avoids a CORS preflight). The body is:
+
+  { "app": "<our product name>",
+    "note": "<one short line about what the keys are for>",
+    "keys": [ { "name": "<ENV_VAR_NAME>", "value": "<the key value>" } ] }
+
+Try each port until one answers ok. If none do, the app is not running: set
+location.href to
+  passbook://add?app=<our product name>&key=<ENV_VAR_NAME>
+which starts it, wait about 2.5 seconds, then POST again.
+
+Rules that matter:
+- Never put a key value in the passbook:// URL. Names only. A URL becomes a
+  command line on Windows and any process can read it.
+- Key names must be plain environment variables: a letter or underscore, then
+  letters, digits and underscores. Anything else is refused.
+- A value must fit on one line. Multi-line values such as PEM blocks are
+  refused rather than half stored.
+- At most 25 keys per request.
+- Do not add retries, polling, or analytics around it. One click, one request.
+```
 
 ## Agents
 

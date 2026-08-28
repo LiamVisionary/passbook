@@ -1,0 +1,452 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PassBook — one credential store per machine</title>
+<meta name="description" content="One credential store per machine, shared by every app that opts in. Sealed at rest, opened by a password or a passkey, with a record of every read.">
+<link rel="icon" href="icon.png">
+<meta property="og:title" content="PassBook">
+<meta property="og:description" content="One credential store per machine, shared by every app that opts in.">
+<meta property="og:image" content="logo.png">
+<style>
+  /* The app is one HTML file with no build step and no dependencies. These
+     docs are the same, on purpose: a documentation site that needs a toolchain
+     is a documentation site that goes stale the first time the toolchain
+     breaks. */
+  :root {
+    --bg: #f4f5f7; --paper: #ffffff; --card: #ffffff; --soft: #f0f1f4;
+    --ink: #14161a; --ink2: #3c4048; --ink3: #6b7280;
+    --line: rgba(0,0,0,.08); --line2: rgba(0,0,0,.14);
+    --accent: #0060ee; --accent-ink: #ffffff; --accent-soft: rgba(0,96,238,.10);
+    --warn: #8a5a00; --warn-soft: rgba(180,120,0,.10);
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e1013; --paper: #15181d; --card: #15181d; --soft: #1b1f26;
+      --ink: #eef0f3; --ink2: #c2c7d0; --ink3: #8b93a1;
+      --line: rgba(255,255,255,.09); --line2: rgba(255,255,255,.16);
+      --accent: #4d9bff; --accent-ink: #05203f; --accent-soft: rgba(77,155,255,.14);
+      --warn: #e0b567; --warn-soft: rgba(224,181,103,.10);
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; scroll-padding-top: 24px; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 400 15.5px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { font-family: var(--mono); font-size: .89em; background: var(--soft);
+         padding: .12em .38em; border-radius: 5px; }
+  pre {
+    background: var(--paper); border: 1px solid var(--line); border-radius: 11px;
+    padding: 15px 17px; overflow-x: auto; margin: 16px 0;
+  }
+  pre code { background: none; padding: 0; font-size: 13px; line-height: 1.6; }
+  h1, h2, h3 { letter-spacing: -.02em; line-height: 1.25; }
+  h2 { font-size: 27px; margin: 52px 0 6px; font-weight: 660; scroll-margin-top: 20px; }
+  h3 { font-size: 18px; margin: 32px 0 4px; font-weight: 640; }
+  p { margin: 13px 0; }
+  img.shot {
+    width: 100%; border: 1px solid var(--line); border-radius: 12px;
+    margin: 20px 0; display: block;
+  }
+  hr { border: 0; border-top: 1px solid var(--line); margin: 44px 0; }
+
+  .wrap { display: grid; grid-template-columns: 232px minmax(0, 1fr); gap: 52px;
+          max-width: 1120px; margin: 0 auto; padding: 40px 28px 96px; }
+  nav { position: sticky; top: 28px; align-self: start; max-height: calc(100vh - 56px); overflow-y: auto; }
+  nav .brand { display: flex; align-items: center; gap: 9px; margin-bottom: 22px; }
+  nav .brand img { width: 26px; height: 26px; }
+  nav .brand b { font-size: 16.5px; font-weight: 660; letter-spacing: -.02em; }
+  nav a { display: block; padding: 5px 10px; margin-left: -10px; border-radius: 7px;
+          color: var(--ink3); font-size: 13.5px; }
+  nav a:hover { background: var(--soft); color: var(--ink); text-decoration: none; }
+  nav .grp { margin: 16px 0 5px; padding-left: 0; font-size: 10.5px; font-weight: 660;
+             text-transform: uppercase; letter-spacing: .09em; color: var(--ink3); opacity: .75; }
+
+  header.hero { margin-bottom: 6px; }
+  header.hero .logo {
+    display: flex; align-items: center; gap: 14px; margin: 0 0 16px;
+    font-size: 44px; font-weight: 640; letter-spacing: -.035em; color: var(--ink);
+  }
+  header.hero .logo img { width: 46px; height: 46px; }
+  header.hero .logo b { color: var(--accent); font-weight: 640; }
+  .tag { font-size: 20px; color: var(--ink2); line-height: 1.5; margin: 0 0 18px; font-weight: 500; }
+  .cta { display: flex; flex-wrap: wrap; gap: 10px; margin: 22px 0 6px; }
+  .cta a {
+    display: inline-block; padding: 10px 18px; border-radius: 10px;
+    font-weight: 600; font-size: 14px;
+  }
+  .cta .go { background: var(--accent); color: var(--accent-ink); }
+  .cta .go:hover { text-decoration: none; opacity: .92; }
+  .cta .alt { background: var(--soft); color: var(--ink2); border: 1px solid var(--line); }
+  .cta .alt:hover { text-decoration: none; }
+
+  table { border-collapse: collapse; width: 100%; margin: 18px 0; font-size: 14px; display: block; overflow-x: auto; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-weight: 640; color: var(--ink2); font-size: 12.5px; text-transform: uppercase; letter-spacing: .05em; }
+  td code { white-space: nowrap; }
+
+  .note {
+    background: var(--soft); border-left: 3px solid var(--accent);
+    border-radius: 0 10px 10px 0; padding: 13px 17px; margin: 20px 0; font-size: 14.5px;
+  }
+  .warn { background: var(--warn-soft); border-left-color: var(--warn); }
+  .note p:first-child { margin-top: 0; } .note p:last-child { margin-bottom: 0; }
+
+  footer { border-top: 1px solid var(--line); margin-top: 60px; padding-top: 22px;
+           color: var(--ink3); font-size: 13.5px; }
+  @media (max-width: 860px) {
+    .wrap { grid-template-columns: 1fr; gap: 0; padding: 26px 20px 70px; }
+    nav { position: static; max-height: none; margin-bottom: 28px;
+          border-bottom: 1px solid var(--line); padding-bottom: 18px; }
+    nav .links { display: flex; flex-wrap: wrap; gap: 2px; }
+    nav .grp { display: none; }
+    header.hero .logo { font-size: 34px; }
+    header.hero .logo img { width: 36px; height: 36px; }
+    h2 { font-size: 23px; margin-top: 40px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<nav>
+  <div class="brand"><img src="icon.png" alt=""><b>PassBook</b></div>
+  <div class="links">
+    <p class="grp">Start</p>
+    <a href="#install">Install</a>
+    <a href="#idea">The idea</a>
+    <a href="#use">Use it</a>
+    <p class="grp">Credentials</p>
+    <a href="#add">Add to PassBook</a>
+    <a href="#workspaces">Workspaces</a>
+    <a href="#encryption">Encryption</a>
+    <a href="#signing-in">Signing in</a>
+    <p class="grp">Control</p>
+    <a href="#access">Who can read what</a>
+    <a href="#broker">The broker</a>
+    <a href="#activity">Activity</a>
+    <a href="#agents">Agents</a>
+    <p class="grp">Operating</p>
+    <a href="#backup">Backup</a>
+    <a href="#reference">Command reference</a>
+    <a href="#limits">What it does not claim</a>
+  </div>
+</nav>
+
+<main>
+<header class="hero">
+  <!-- The wordmark is set in text rather than shipped as the logo PNG: that
+       image bakes in a dark "Pass", which vanishes on a dark background. -->
+  <h1 class="logo"><img src="icon.png" alt=""><span>Pass<b>Book</b></span></h1>
+  <p class="tag">One credential store per machine, shared by every app that opts in.</p>
+  <div class="cta">
+    <a class="go" href="https://github.com/LiamVisionary/passbook/releases/latest">Download</a>
+    <a class="alt" href="https://github.com/LiamVisionary/passbook">Source on GitHub</a>
+  </div>
+</header>
+
+<hr>
+
+<h2 id="idea">The idea</h2>
+<p>Ship three apps and you get three credential stores. The same OpenAI key gets
+pasted three times, revoked in one place, and still works in the other two.</p>
+<p>PassBook fixes that by agreeing on a path instead of building a sync protocol.
+Every app resolves the same file by the same rule, so provisioning and linking
+are the same operation. The first app that needs credentials creates the store,
+and every app installed after it finds that file and adopts it. Nothing forks,
+so nothing has to be merged.</p>
+<p>There is a desktop app and it holds no logic of its own. Every question it
+answers goes through the same command line an agent or a script would use. What
+you see in the window, you can do from a terminal.</p>
+<img class="shot" src="app-keys.png" alt="The Keys screen, grouped by vendor, with every value hidden until you reveal it">
+
+<div class="note">
+  <p><b>The store is a default, never an override.</b> A value exported into the
+  process, or set in the project's own <code>.env</code>, always wins. PassBook
+  fills in what is missing. It does not take anything over.</p>
+</div>
+
+<h2 id="install">Install</h2>
+<p>Grab the app from
+<a href="https://github.com/LiamVisionary/passbook/releases/latest">releases</a>.
+On Windows that is the whole thing. The installer brings its own Python and its
+own copy of every <code>passbook</code> command, puts them on your PATH, and
+takes them back off when you uninstall. Nothing needs to be on the machine
+first.</p>
+
+<p>For the command line on its own:</p>
+<pre><code># macOS and Linux
+./install.sh
+
+# Windows
+.\install.ps1</code></pre>
+
+<p>It finds a Python, installs the commands, provisions the store, and prints
+what it decided. Encryption and linking need <code>cryptography</code>, which is
+not in the standard library, so setup provisions its own interpreter under
+<code>~/.hivemindos/passbook-runtime</code> rather than touching a Python the
+machine already relies on. No root, nothing broken.</p>
+
+<p>If you already have <code>uv</code>:</p>
+<pre><code>uv tool install git+https://github.com/LiamVisionary/passbook</code></pre>
+
+<div class="note warn">
+  <p>The name <code>passbook</code> on PyPI belongs to an unrelated project.
+  Install from the repository, not from PyPI.</p>
+</div>
+
+<h2 id="use">Use it</h2>
+<pre><code>import passbook
+
+passbook.ensure(app="my-app", name="My App")   # idempotent: creates or adopts
+passbook.apply()                               # fill in what the process lacks</code></pre>
+
+<pre><code>import { ensure, apply } from './passbook.mjs';
+ensure({ app: 'my-app', name: 'My App' });
+apply();</code></pre>
+
+<p>Then read credentials from the environment as you already do.</p>
+
+<p>For an app that should ask for what it needs rather than inherit everything:</p>
+<pre><code>key = passbook.request(["OPENAI_API_KEY"], app="my-app", reason="image render")</code></pre>
+
+<p>Both read the same file today, so <code>request</code> grants no less than
+<code>apply</code> does. The difference is that an app written against
+<code>request</code> can be moved behind a broker that says no to a key it was
+never granted. An app written against <code>apply</code> cannot.</p>
+
+<h3>On the command line</h3>
+<pre><code>passbook-check OPENAI_API_KEY          # set or missing, never the value
+passbook-add OPENAI_API_KEY            # prompts without echo
+passbook-run -- npm run dev            # run with the store loaded as a base</code></pre>
+
+<div class="note warn">
+  <p>Use the bare <code>passbook-add KEY</code> prompt. A value typed as
+  <code>KEY=value</code> lands in shell history and is briefly visible to
+  <code>ps</code>.</p>
+</div>
+
+<h2 id="add">Add to PassBook</h2>
+<p>Every API page ends the same way. Here is your key, now go and put it
+somewhere. So you paste it into a <code>.env</code>, and that is how keys end up
+in repositories.</p>
+<p>A platform can hand it over instead. One button on the page that just minted
+the key, and it lands in your vault, sealed, without touching your clipboard.</p>
+<img class="shot" src="app-add-to-passbook.png" alt="PassBook asking whether to add two keys, showing who is asking, a preview of each value, and which workspace they would go to">
+<p>You see who is asking, which keys, and which workspace. Nothing is stored
+until you say so and open the vault.</p>
+
+<h3>Putting the button on your page</h3>
+<pre><code>&lt;button id="add-to-passbook"&gt;Add to PassBook&lt;/button&gt;
+
+&lt;script&gt;
+document.getElementById("add-to-passbook").addEventListener("click", async () =&gt; {
+  const request = {
+    app: "OpenAI",
+    note: "Read from the environment by the SDK",
+    keys: [
+      { name: "OPENAI_API_KEY", value: theKeyYouJustMinted },
+      { name: "OPENAI_ORG_ID",  value: theOrgId },
+    ],
+  };
+
+  async function hand(over) {
+    for (let port = 17817; port &lt; 17826; port++) {
+      try {
+        const answer = await fetch(`http://127.0.0.1:${port}/ask`, {
+          method: "POST",
+          headers: { "Content-Type": "text/plain" },
+          body: JSON.stringify(over),
+        });
+        if (answer.ok) return true;
+      } catch { /* nothing listening on that port */ }
+    }
+    return false;
+  }
+
+  if (await hand(request)) return;
+
+  location.href = "passbook://add?app=OpenAI&amp;key=OPENAI_API_KEY&amp;key=OPENAI_ORG_ID";
+  setTimeout(() =&gt; hand(request), 2500);
+});
+&lt;/script&gt;</code></pre>
+
+<p>That is the whole integration. No SDK, no account, no key of your own.</p>
+
+<h3>Why the value does not travel in the link</h3>
+<p>The link exists to start the app, and it carries key names only. It is not a
+smaller version of the same thing.</p>
+<p>A URL handed to an operating system's URL handler is not private. Windows
+passes it to the app as a command line, which any process on the machine can
+read, and the others log it. So values go over loopback in a request body
+instead. They never appear in a URL, an argument list, or a log.</p>
+<p>The browser sets <code>Origin</code>, which means PassBook learns who is
+asking from the browser rather than from the page's own claim. That is the one
+part of a request a page cannot forge.</p>
+<p>The value does not reach the window either. It stays in the app, and the
+window is sent a preview like <code>sk-pr…4f21</code>, because a window is a
+thing people screen-share.</p>
+
+<table>
+  <tr><th>Field</th><th>What it is</th></tr>
+  <tr><td><code>app</code></td><td>Your product name. Shown to the person as a claim, next to the origin the browser reported.</td></tr>
+  <tr><td><code>note</code></td><td>One short line about what the keys are for. Optional.</td></tr>
+  <tr><td><code>keys[].name</code></td><td>A plain environment variable: a letter or underscore, then letters, digits and underscores. At most 25 per request.</td></tr>
+  <tr><td><code>keys[].value</code></td><td>The credential. One line, up to 8&nbsp;KB. Leave it out and the person fills it in themselves.</td></tr>
+  <tr><td><code>workspace</code></td><td>A suggestion. The window still defaults to the active workspace and the person can change it.</td></tr>
+</table>
+
+<h2 id="workspaces">Workspaces</h2>
+<p>A machine can hold several stores, and each one has its own key.</p>
+<p>That second half is the part that matters. A workspace is not a folder. It is
+a set of credentials plus the thing that opens them, so picking a workspace and
+picking whose key you are holding is one decision, not two. Sign in to Personal
+and the Acme keys stay encrypted, on the same disk, in the same second.</p>
+<img class="shot" src="app-workspaces.png" alt="The workspace picker showing Personal, Acme and Lab, each with its own key">
+<pre><code>passbook workspace                       # what is here, and which is active
+passbook workspace use acme              # switch
+passbook signin --workspace acme         # open that one, leave the rest shut
+passbook signout --workspace acme        # shut it, leave the rest open</code></pre>
+<p>Reads layer the machine store, then the workspace store, so a workspace
+inherits the machine's keys and a more specific value wins. Writes go to the
+workspace. That is the half people get bitten by. A key added while you are
+scoped to a client's workspace must not appear machine wide.</p>
+<p>Set <code>"inherit": false</code> to cut the machine store out entirely. Use
+it for anything holding someone else's credentials. Siblings never see each
+other either way.</p>
+
+<h2 id="encryption">Encryption</h2>
+<p>Sealing turns every value into ciphertext at rest. The store is still one
+file in one place, and it is unreadable until something signs in.</p>
+<pre><code>passbook secure          # seal it, and set up a way back in
+passbook seal            # seal under the active profile
+passbook unseal          # undo it</code></pre>
+<p>You can leave specific keys readable on purpose with
+<code>--skip</code>, which is for the feature flags an app reads before anyone
+has signed in.</p>
+<img class="shot" src="app-security.png" alt="The security screen showing what is sealed, which profiles exist, and how to get back in">
+
+<h2 id="signing-in">Signing in</h2>
+<p>A password, a passkey, or the device itself. Touch ID and Windows Hello count
+as the device factor.</p>
+<img class="shot" src="app-signin.png" alt="The sign-in screen offering a password, a passkey, or Touch ID">
+<pre><code>passbook signin                    # password
+passbook signin --passkey ID       # passkey, PRF secret on stdin
+passbook signin --device           # this machine's device factor
+passbook signin --for 8h           # how long to stay open
+passbook signout</code></pre>
+<p>A sign-in is held by the broker, not by your shell. It survives the terminal
+that started it and expires when you said it should.</p>
+
+<h2 id="access">Who can read what</h2>
+<p>Every key has a mode, an audience, and a scope. An app gets what it was
+granted and nothing else.</p>
+<img class="shot" src="app-apps.png" alt="The apps screen showing which app may read which keys">
+<pre><code>passbook access                   # the grid
+passbook scope KEY --projects a,b # narrow a key to named projects
+passbook policy --learn           # build a policy from what apps actually asked for</code></pre>
+<p>Write the policy from what happened rather than from imagination. Run in
+<code>audit</code> mode, let it record, then turn what it saw into a starting
+policy. Policies written from a blank page are how things end up permanently in
+audit mode.</p>
+
+<h2 id="broker">The broker</h2>
+<p>The broker is one door for credential reads, and a complete record of them.
+It is optional. Everything works without it, and it closes the holes in the
+audit trail.</p>
+<p>Without a broker, each app opts into stamping its own reads. A vendored
+<code>passbook.py</code> in somebody else's project does not, so the ledger has
+holes shaped exactly like the apps least likely to be careful. The broker stamps
+every request it serves either way.</p>
+<pre><code>passbook broker start
+passbook broker status
+passbook broker stop</code></pre>
+<p>It speaks over a Unix socket on macOS and Linux, and a named pipe on Windows,
+restricted in both cases to the account that created it.</p>
+<div class="note warn">
+  <p><b>Read this before you trust it.</b> A process running as you can connect
+  and claim to be any app it likes. Nothing in the request proves otherwise. So
+  do not read "denied" in the ledger as "an attacker was stopped". What the
+  broker buys you is that the audit stops being voluntary, and that honest code
+  gets least privilege.</p>
+</div>
+
+<h2 id="activity">Activity</h2>
+<p>Every read lands in a hash chained ledger. You can see what asked for what,
+when, and whether it was granted.</p>
+<img class="shot" src="app-activity.png" alt="The activity screen listing reads, writes and sign-ins with what asked for them">
+<pre><code>passbook history            # what happened
+passbook state              # the whole picture as JSON
+passbook check KEY          # set or missing, never the value</code></pre>
+
+<h2 id="agents">Agents</h2>
+<p>Agents are the reason this exists. They run commands, they need credentials,
+and they should not be handed the whole environment.</p>
+<pre><code>claude mcp add passbook -- passbook mcp</code></pre>
+<p>Over MCP an agent asks for a named key and gets that key, recorded, or a
+refusal. It never implements token refresh, and it never sees the rest of the
+store.</p>
+
+<h2 id="backup">Backup</h2>
+<pre><code>passbook export --out backup.json   # sealed, portable
+passbook import backup.json
+passbook recovery                   # a code that gets you back in</code></pre>
+<p>Make the recovery code before you need it. That is the entire advice.</p>
+
+<h2 id="reference">Command reference</h2>
+<p>Every verb is also available hyphenated, so <code>passbook add</code> and
+<code>passbook-add</code> are the same command. That matters for shell scripts
+and for agents that prefer one binary per action.</p>
+<table>
+  <tr><th>Command</th><th>What it does</th></tr>
+  <tr><td><code>status</code></td><td>Where the store is, how many keys, whether it is sealed</td></tr>
+  <tr><td><code>check</code></td><td>Whether a key is set. Never prints the value</td></tr>
+  <tr><td><code>add</code> / <code>remove</code> / <code>delete</code></td><td>Change what is stored</td></tr>
+  <tr><td><code>get</code> / <code>reveal</code></td><td>Read one value, recorded</td></tr>
+  <tr><td><code>list</code></td><td>Key names, not values</td></tr>
+  <tr><td><code>run</code></td><td>Run a command with the store loaded as a base</td></tr>
+  <tr><td><code>secure</code> / <code>seal</code> / <code>unseal</code></td><td>Encryption at rest</td></tr>
+  <tr><td><code>signin</code> / <code>signout</code> / <code>lock</code> / <code>unlock</code></td><td>Open and shut the vault</td></tr>
+  <tr><td><code>profile</code> / <code>passkey</code> / <code>recovery</code></td><td>Ways back in</td></tr>
+  <tr><td><code>workspace</code> / <code>projects</code> / <code>scope</code></td><td>Which store, and how narrow</td></tr>
+  <tr><td><code>access</code> / <code>policy</code> / <code>apps</code> / <code>agents</code> / <code>approve</code> / <code>confirm</code></td><td>Who may read what</td></tr>
+  <tr><td><code>broker</code></td><td>Run the door that records reads</td></tr>
+  <tr><td><code>history</code> / <code>state</code> / <code>matrix</code></td><td>What happened, and what is true now</td></tr>
+  <tr><td><code>oauth</code></td><td>Grants that know how to refresh themselves</td></tr>
+  <tr><td><code>mcp</code></td><td>Serve the store to an agent</td></tr>
+  <tr><td><code>export</code> / <code>import</code> / <code>sync</code> / <code>link</code></td><td>Move a store between machines</td></tr>
+  <tr><td><code>install</code> / <code>forget</code> / <code>group</code></td><td>Set up, and tidy up</td></tr>
+</table>
+<p>Run <code>passbook &lt;command&gt; --help</code> for the flags. The help is
+generated from the parser, so it cannot drift from what the command accepts.</p>
+
+<h2 id="limits">What it does not claim</h2>
+<p>PassBook does not stop malware. A process running as you can read the store
+file directly, and stopping the broker restores full access. What it does is
+make reads recorded and narrow. It does not make unauthorised reads impossible.</p>
+<p>It is not a secrets manager for a fleet of servers. It is for the machine in
+front of you and the apps and agents running on it.</p>
+<p>Sealing protects the file at rest. It does not protect a value once an app
+has been granted it and loaded it into memory.</p>
+<p>Being clear about this is the point. A tool that oversells what it stops is a
+tool people trust in situations it was never built for.</p>
+
+<footer>
+  <p>PassBook is Apache-2.0.
+  <a href="https://github.com/LiamVisionary/passbook">Source</a> ·
+  <a href="https://github.com/LiamVisionary/passbook/releases/latest">Releases</a> ·
+  <a href="https://github.com/LiamVisionary/passbook/issues">Issues</a></p>
+  <p>Not connected to Apple Inc. in any way. If that turns out to be a problem,
+  the name is the easiest part of this to change.</p>
+</footer>
+</main>
+</div>
+</body>
+</html>

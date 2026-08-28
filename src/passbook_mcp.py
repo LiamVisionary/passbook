@@ -205,6 +205,19 @@ def _visible(agent: str, names: list[str], policy: Mapping[str, Any], root: Path
         entry: dict[str, Any] = {"name": name}
         if catalog is not None:
             entry["group"] = catalog.group_of(name, policy)
+            # A closed group is not advertised to a caller outside it. The key's
+            # NAME still appears — hiding that would make a refusal look like a
+            # missing credential, which is the confusion this whole surface
+            # exists to prevent — but which other projects share it is not this
+            # caller's business. What it sees instead is the group the name
+            # itself implies, which is what it would have seen anyway.
+            if access is not None:
+                held = access.umbrella_for_key(name, policy)
+                if held and held["reach"] != "everyone" \
+                        and passbook.project() not in held["projects"]:
+                    entry["group"] = catalog.infer_group(name)
+                elif held:
+                    entry["umbrella"] = held["label"]
         if access is not None:
             verdict = access.decide_key(agent, name, policy, root=root, project=passbook.project())
             entry["access"] = verdict["outcome"]
@@ -258,6 +271,14 @@ def _tool_list_credentials(arguments: Mapping[str, Any], state: Mapping[str, Any
     }
     if catalog is not None:
         payload["groups"] = catalog.groups(names, policy)
+    if access is not None:
+        # Groups the owner has opened, with the tags and note they wrote. This
+        # is how an agent tells whether a set of credentials is MEANT for what
+        # it is doing — a judgement it cannot make from key names alone, and one
+        # the owner would otherwise have to make inside every prompt.
+        shared = access.listed_umbrellas(policy, project=passbook.project())
+        if shared:
+            payload["umbrellas"] = shared
     return payload
 
 

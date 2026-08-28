@@ -367,6 +367,84 @@ passbook group set "Payments" STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET
 together. A family becomes a group once two keys share it. A group of one is a
 flat list wearing a costume. Anything you set by hand wins.
 
+### Umbrellas cover several projects with one set of keys
+
+The groups above arrange a store; they decide nothing. An **umbrella** is the
+one that governs: it covers projects, holds keys, and bounds a read. Two nouns
+because they answer different questions — a command whose meaning depends on
+invisible state is one you stop trusting.
+
+```bash
+passbook umbrella new "ai apps" --tag llm --tag media --note "keys the AI products share"
+passbook umbrella add ai-apps OPENAI_API_KEY SHARED_MEDIA_KEY
+passbook umbrella cover ai-apps ami hivemindos ansem
+```
+
+```
+ai apps  (its own projects, not shown to agents)
+    tags:     llm, media
+    projects: ami, ansem, hivemindos
+    keys:     2  (OPENAI_API_KEY, SHARED_MEDIA_KEY)
+```
+
+Those keys now read from those three checkouts and nowhere else.
+
+**Closed from the moment it exists**, not from the moment you finish filling it
+in — that window is exactly when you get interrupted. An umbrella covering
+nothing grants nothing, and says so rather than presenting as a missing key:
+
+```
+Refused: OPENAI_API_KEY — the ai apps umbrella is closed and covers no projects yet
+```
+
+#### Reach and visibility are separate
+
+Who may **use** it and whether agents can **see** it are two switches, so the
+useful middle is reachable: an umbrella an agent can see and may not use, which
+teaches it "there is a media umbrella and it is not mine" instead of teaching it
+nothing.
+
+```bash
+passbook umbrella reach ai-apps everyone     # or: members
+passbook umbrella show-agents ai-apps        # --hide to stop
+passbook umbrella open ai-apps               # both, the common corner
+passbook umbrella close ai-apps              # neither
+```
+
+#### How it sits beside workspaces
+
+They look alike and they are different axes, so they compose rather than
+compete:
+
+| | decides | granularity |
+| --- | --- | --- |
+| **workspace** | which store a key lives in | one per process, `HIVE_WORKSPACE` |
+| **umbrella** | which projects may read it, inside that store | a project can be under several |
+
+A project name is the basename of its git root, so an umbrella needs no
+per-checkout configuration — that is the thing a workspace cannot do.
+
+Both bounds must say yes. The hazard is not either being wrong but the two
+disagreeing, where a rule reads like a grant and behaves like a refusal, so a
+contradiction is reported when you write it rather than found in an outage:
+
+```
+These will not do what this umbrella says:
+  CLIENT_SECRET is scoped to the acme workspace, so this umbrella cannot reach it from main
+```
+
+Two boundaries worth knowing:
+
+- **Inferred groups never bound anything.** Every key belongs to a family
+  derived from its name, so if that gated reads, one umbrella would put the
+  whole store behind rules nobody wrote. A key is governed only by being put
+  under an umbrella by hand.
+- **A rule on the key itself wins.** `passbook projects set` on one key outranks
+  its umbrella, the same way an explicit group beats an inferred one.
+
+Like every bound here, an umbrella is enforced by the broker. A machine with no
+broker running is never locked out by one.
+
 ### Scopes say how far a key reaches
 
 ```bash

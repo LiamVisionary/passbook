@@ -2,7 +2,69 @@
 
 All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
-## [Unreleased]
+## [1.1.0] — 2026-08-28
+
+### Umbrellas
+
+An umbrella covers projects and holds keys, so one credential serves several
+checkouts without going machine-wide.
+
+```
+ai apps (umbrella, tags: llm, media)
+  ├── ami          (project)
+  ├── hivemindos   (project)
+  └── ansem        (project)
+```
+
+- **`passbook umbrella`** — `new`, `add`/`remove` keys, `cover`/`uncover`
+  projects, `reach`, `show-agents`, `open`, `close`, `tag`, `delete`.
+- **Closed from the moment it exists**, not from the moment somebody finishes
+  filling it in — that window is exactly when a person is interrupted. An
+  umbrella covering nothing grants nothing and says so, rather than presenting
+  as a key that has gone missing.
+- **Reach and visibility are two switches.** An umbrella an agent can see but
+  may not use teaches it "there is a media umbrella and it is not mine", which
+  one boolean could not express.
+- **Deliberately not called a group.** Groups are inferred from key names so a
+  large store can be read, and every key falls into one — gating on that would
+  put a whole store behind rules nobody wrote. A key's group arranges a listing;
+  a key's umbrella bounds a read. `passbook group` is unchanged and still
+  decides nothing.
+- **A contradiction is reported when the rule is written.** An umbrella covering
+  a project whose key is scoped to another workspace, or fenced by a per-key
+  rule, reads as a grant and behaves as a refusal. It now says so at the
+  keyboard instead of surfacing later as an outage.
+- Resolved at `decide_key`, the one place scope, projects and audience already
+  meet, so the broker, the MCP server and `passbook matrix` inherit it.
+
+### Add to PassBook
+
+- A platform's API page can hand the key it just minted straight to the app.
+  The value travels in a loopback request body — never in a URL or an argv — and
+  the window shows which keys, which workspace, and asks for approval before
+  anything is written.
+- The embed, and a block to paste into an agent that sets it up for you, are in
+  the README.
+
+### Importing a `.env`
+
+- `passbook import` gained `--dry-run --json`, `--only` and `--as`, and the
+  window gained a drop target. Names are listed without values; a clash offers
+  replace or keep-both, and the suggested name climbs (`KEY_2`, `KEY_3`) rather
+  than nesting.
+
+### Also
+
+- A documentation site at `docs/`.
+- Refusals say which of three things happened — refused, encrypted, or absent —
+  because "sign in" over a key that was refused by policy sends you to a repair
+  that fixes nothing.
+- The modules moved to `src/`, so a test can no longer import the working copy
+  in place of a broken install.
+
+## [1.0.0] — 2026-08-28
+
+First public release.
 
 ### Windows
 
@@ -82,10 +144,6 @@ produced for it and nothing that came out of that installer worked.
   reading the file when no broker is running — right for a plaintext store on a
   machine with no daemon, and wrong at that door, where it would have handed an
   agent a key the owner had excluded.
-
-## [1.0.0] — 2026-08-26
-
-First public release.
 
 ### The store
 - One credential store per machine at `$HIVE_HOME`, else `~/.hivemindos/.env`,

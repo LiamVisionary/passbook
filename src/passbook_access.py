@@ -58,6 +58,24 @@ __all__ = [
     "audience_for",
     "key_entry",
     "set_audience",
+    "REACHES",
+    "add_umbrella_projects",
+    "create_umbrella",
+    "delete_umbrella",
+    "listed_umbrellas",
+    "put_under_umbrella",
+    "read_umbrellas",
+    "remove_umbrella_projects",
+    "set_umbrella_listed",
+    "set_umbrella_projects",
+    "set_umbrella_reach",
+    "set_umbrella_tags",
+    "take_from_umbrella",
+    "umbrella_conflicts",
+    "umbrella_for_key",
+    "umbrella_id",
+    "umbrella_keys",
+    "umbrella_record",
     "GRANT_MODES",
     "POLICY_FILENAME",
     "SESSIONS_FILENAME",
@@ -478,6 +496,328 @@ def needs_confirmation(op: str, policy: Mapping[str, Any]) -> bool:
     return confirmations(policy).get(str(op).strip().lower(), False)
 
 
+# ── umbrellas ──────────────────────────────────────────────────────────────
+#
+# An umbrella covers projects and holds keys, so one credential serves several
+# checkouts without going machine-wide.
+#
+#     ai apps (umbrella, tags: llm, media)
+#       ├── ami          (project)
+#       ├── hivemindos   (project)
+#       └── ansem        (project)
+#
+# It is deliberately NOT called a group. `passbook_catalog` already has groups:
+# families inferred from a key's own name, so a store of three hundred keys can
+# be read. Those must never gate anything — every key on a machine falls into
+# one, so gating on inference would put the whole store behind rules nobody
+# wrote. Two things that decide such different questions cannot share a noun; a
+# command whose meaning depends on invisible state is one a person stops
+# reading. A key's group arranges a listing. A key's umbrella bounds a read.
+#
+# ## Where this sits, and what it is not
+#
+# There are two axes and it is worth being exact, because they look alike from
+# a distance and an owner choosing between them by feel will get it wrong:
+#
+#   * a WORKSPACE decides which store a key lives in — a separate file, one per
+#     process, `scope` bounds by it.
+#   * an UMBRELLA decides which projects may read a key inside whatever store it
+#     is already in. It moves nothing.
+#
+# So they compose rather than compete: a key can be workspace-scoped AND under
+# an umbrella, and both must say yes. What they must never do is disagree
+# silently — an umbrella that names projects a key cannot reach anyway reads as
+# a grant and behaves as a refusal. `umbrella_conflicts` exists to say so out
+# loud rather than leave somebody debugging a credential that was never coming.
+#
+# ## Reach and visibility are two switches, not one
+#
+# `open` used to mean both "every project may use it" and "agents may see it",
+# which made the useful middle unreachable: an umbrella an agent can SEE but may
+# not use, so it learns "there is a media umbrella and it is not for me" instead
+# of learning nothing. They are separate now. `open` and `close` remain as the
+# two common corners.
+#
+# Closed is the default and holds from the moment the umbrella exists, not from
+# the moment somebody finishes filling it in — that window is exactly when a
+# person is most likely to be interrupted.
+#
+# Umbrellas do not nest. A project may sit under several and then sees the union.
+
+REACHES = ("members", "everyone")
+DEFAULT_REACH = "members"
+
+_UMBRELLA_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+
+
+def umbrella_id(label: str) -> str:
+    """The id a label is filed under: lowercased, spaces to hyphens.
+
+    So `passbook umbrella new "ai apps"` and `passbook umbrella open ai-apps`
+    are the same umbrella. The label is kept verbatim for display.
+    """
+    handle = "-".join(str(label).strip().lower().split())
+    handle = re.sub(r"[^a-z0-9._-]", "-", handle).strip("-")
+    handle = re.sub(r"-{2,}", "-", handle)
+    if not _UMBRELLA_ID.match(handle):
+        raise ValueError(f"{label!r} is not a usable umbrella name")
+    return handle
+
+
+def read_umbrellas(policy: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    """Every umbrella, normalised. Never raises on a damaged entry."""
+    raw = policy.get("umbrellas")
+    if not isinstance(raw, dict):
+        return {}
+    found: dict[str, dict[str, Any]] = {}
+    for uid, entry in raw.items():
+        if not isinstance(entry, dict):
+            continue
+        try:
+            handle = umbrella_id(str(uid))
+        except ValueError:
+            continue
+        projects, tags = entry.get("projects"), entry.get("tags")
+        reach = str(entry.get("reach", "") or "").strip().lower()
+        found[handle] = {
+            "id": handle,
+            "label": str(entry.get("label") or uid),
+            # Anything unreadable is the CLOSED corner. Degrading open would
+            # hand an umbrella's keys to every project on the machine the first
+            # time something writes this file wrongly.
+            "reach": reach if reach in REACHES else DEFAULT_REACH,
+            "listed": entry.get("listed") is True,
+            "projects": sorted({str(x).strip() for x in projects if str(x).strip()})
+            if isinstance(projects, list) else [],
+            "tags": sorted({str(x).strip() for x in tags if str(x).strip()})
+            if isinstance(tags, list) else [],
+            "note": str(entry.get("note") or ""),
+        }
+    return found
+
+
+def umbrella_record(umbrella: str, policy: Mapping[str, Any]) -> dict[str, Any]:
+    """One umbrella, or `{}` when no such umbrella was ever created."""
+    try:
+        handle = umbrella_id(umbrella)
+    except ValueError:
+        return {}
+    return read_umbrellas(policy).get(handle, {})
+
+
+def umbrella_for_key(key: str, policy: Mapping[str, Any]) -> dict[str, Any]:
+    """The umbrella a key was put under, or `{}`.
+
+    Only an explicit `umbrella` on the key counts. A key's display GROUP is not
+    consulted here and must not be: that is the inference this whole design
+    keeps away from the decision.
+    """
+    named = key_entry(key, policy).get("umbrella")
+    if not isinstance(named, str) or not named.strip():
+        return {}
+    return umbrella_record(named, policy)
+
+
+def umbrella_keys(umbrella: str, policy: Mapping[str, Any]) -> list[str]:
+    """Which keys are under an umbrella, by name."""
+    try:
+        handle = umbrella_id(umbrella)
+    except ValueError:
+        return []
+    keys = policy.get("keys")
+    if not isinstance(keys, dict):
+        return []
+    found = []
+    for name, entry in keys.items():
+        if not isinstance(entry, dict):
+            continue
+        named = entry.get("umbrella")
+        if isinstance(named, str) and named.strip():
+            try:
+                if umbrella_id(named) == handle:
+                    found.append(str(name))
+            except ValueError:
+                continue
+    return sorted(found)
+
+
+def create_umbrella(label: str, policy: MutableMapping[str, Any], *,
+                    tags: Iterable[str] = (), note: str = "",
+                    reach: str = DEFAULT_REACH, listed: bool = False) -> dict[str, Any]:
+    """Create an umbrella. Closed and unlisted unless asked otherwise."""
+    handle = umbrella_id(label)
+    wanted = str(reach).strip().lower()
+    if wanted not in REACHES:
+        raise ValueError(f"reach must be one of {', '.join(REACHES)}")
+    umbrellas = policy.setdefault("umbrellas", {})
+    entry = umbrellas.setdefault(handle, {})
+    entry.setdefault("label", str(label).strip())
+    entry.setdefault("projects", [])
+    entry["reach"] = wanted
+    entry["listed"] = bool(listed) or entry.get("listed") is True
+    named = sorted({str(t).strip() for t in tags if str(t).strip()})
+    if named:
+        entry["tags"] = sorted(set(entry.get("tags") or []) | set(named))
+    if note:
+        entry["note"] = str(note).strip()
+    return read_umbrellas(policy)[handle]
+
+
+def delete_umbrella(umbrella: str, policy: MutableMapping[str, Any]) -> bool:
+    """Remove an umbrella, and take its keys out from under it."""
+    handle = umbrella_id(umbrella)
+    umbrellas = policy.get("umbrellas")
+    if not isinstance(umbrellas, dict) or handle not in umbrellas:
+        return False
+    for key in umbrella_keys(handle, policy):
+        policy["keys"][key].pop("umbrella", None)
+    del umbrellas[handle]
+    return True
+
+
+def _require(umbrella: str, policy: Mapping[str, Any]) -> str:
+    handle = umbrella_id(umbrella)
+    if not umbrella_record(handle, policy):
+        raise ValueError(f"there is no umbrella called {umbrella!r}")
+    return handle
+
+
+def set_umbrella_projects(umbrella: str, projects: Iterable[str],
+                          policy: MutableMapping[str, Any]) -> dict[str, Any]:
+    handle = _require(umbrella, policy)
+    policy["umbrellas"][handle]["projects"] = sorted(
+        {str(p).strip() for p in projects if str(p).strip()})
+    return read_umbrellas(policy)[handle]
+
+
+def add_umbrella_projects(umbrella: str, projects: Iterable[str],
+                          policy: MutableMapping[str, Any]) -> dict[str, Any]:
+    existing = umbrella_record(umbrella, policy)
+    if not existing:
+        raise ValueError(f"there is no umbrella called {umbrella!r}")
+    return set_umbrella_projects(umbrella, [*existing["projects"], *projects], policy)
+
+
+def remove_umbrella_projects(umbrella: str, projects: Iterable[str],
+                             policy: MutableMapping[str, Any]) -> dict[str, Any]:
+    existing = umbrella_record(umbrella, policy)
+    if not existing:
+        raise ValueError(f"there is no umbrella called {umbrella!r}")
+    dropping = {str(p).strip() for p in projects if str(p).strip()}
+    return set_umbrella_projects(
+        umbrella, [p for p in existing["projects"] if p not in dropping], policy)
+
+
+def put_under_umbrella(umbrella: str, keys: Iterable[str],
+                       policy: MutableMapping[str, Any]) -> dict[str, Any]:
+    """Put keys under an umbrella. This is an access change, not an arrangement."""
+    handle = _require(umbrella, policy)
+    held = policy.setdefault("keys", {})
+    for key in keys:
+        held.setdefault(str(key), {})["umbrella"] = handle
+    return read_umbrellas(policy)[handle]
+
+
+def take_from_umbrella(keys: Iterable[str], policy: MutableMapping[str, Any]) -> list[str]:
+    """Take keys out from under whatever umbrella they were under."""
+    held = policy.get("keys")
+    if not isinstance(held, dict):
+        return []
+    freed = []
+    for key in keys:
+        entry = held.get(str(key))
+        if isinstance(entry, dict) and entry.pop("umbrella", None) is not None:
+            freed.append(str(key))
+    return sorted(freed)
+
+
+def set_umbrella_reach(umbrella: str, reach: str,
+                       policy: MutableMapping[str, Any]) -> dict[str, Any]:
+    """Who may USE it: its own projects, or every project."""
+    handle = _require(umbrella, policy)
+    wanted = str(reach).strip().lower()
+    if wanted not in REACHES:
+        raise ValueError(f"reach must be one of {', '.join(REACHES)}")
+    policy["umbrellas"][handle]["reach"] = wanted
+    return read_umbrellas(policy)[handle]
+
+
+def set_umbrella_listed(umbrella: str, listed: bool,
+                        policy: MutableMapping[str, Any]) -> dict[str, Any]:
+    """Whether agents are told this umbrella exists. Independent of reach."""
+    handle = _require(umbrella, policy)
+    policy["umbrellas"][handle]["listed"] = bool(listed)
+    return read_umbrellas(policy)[handle]
+
+
+def set_umbrella_tags(umbrella: str, tags: Iterable[str], policy: MutableMapping[str, Any], *,
+                      note: str | None = None) -> dict[str, Any]:
+    """What an agent reads to judge whether an umbrella is meant for its task."""
+    handle = _require(umbrella, policy)
+    policy["umbrellas"][handle]["tags"] = sorted(
+        {str(t).strip() for t in tags if str(t).strip()})
+    if note is not None:
+        policy["umbrellas"][handle]["note"] = str(note).strip()
+    return read_umbrellas(policy)[handle]
+
+
+def listed_umbrellas(policy: Mapping[str, Any], *, project: str = "") -> list[dict[str, Any]]:
+    """The umbrellas an agent may be told about: name, tags, note, and whether
+    it may actually use them. Never keys.
+
+    An unlisted umbrella is not advertised. Its keys still appear in a listing
+    under their own names — hiding a NAME would make a refusal look like a
+    missing credential — but which projects share it is not an outsider's
+    business.
+    """
+    here = str(project).strip()
+    return [
+        {"name": record["label"], "id": record["id"], "tags": record["tags"],
+         "note": record["note"],
+         # Answered for the CALLER, not in the abstract. An umbrella reachable
+         # by everyone is usable; so is one this caller's project sits under.
+         # Reporting reach alone told a member it could not use the very
+         # umbrella that was granting it keys.
+         "usable_here": record["reach"] == "everyone" or (bool(here) and here in record["projects"])}
+        for record in sorted(read_umbrellas(policy).values(), key=lambda r: r["id"])
+        if record["listed"]
+    ]
+
+
+def umbrella_conflicts(umbrella: str, policy: Mapping[str, Any], *,
+                       workspace: str = "") -> list[dict[str, str]]:
+    """Where this umbrella promises something another bound already refuses.
+
+    Two bounds on one key are fine and are the point — they compose, and both
+    must say yes. What is not fine is a rule that READS like a grant and
+    BEHAVES like a refusal, which is what an umbrella covering a project does
+    when the key it covers is scoped to a workspace, or fenced by a per-key
+    rule of its own. Nothing here changes a decision; it exists so the owner is
+    told at the moment they write the rule rather than by an outage later.
+    """
+    record = umbrella_record(umbrella, policy)
+    if not record:
+        return []
+    found: list[dict[str, str]] = []
+    for key in umbrella_keys(record["id"], policy):
+        entry = key_entry(key, policy)
+        if "projects" in entry and str(entry.get("projects")).strip().lower() not in {"all", "*"}:
+            rule = project_for(key, policy)
+            found.append({
+                "key": key,
+                "why": f"{key} has its own project rule ({rule['mode']}: "
+                       f"{', '.join(rule['projects']) or 'none'}), which outranks this umbrella",
+            })
+        reach = scope_for(key, policy)
+        if reach["scope"] == "workspace" and reach.get("owner") and workspace                 and reach["owner"] != workspace:
+            found.append({
+                "key": key,
+                "why": f"{key} is scoped to the {reach['owner']} workspace, so this "
+                       f"umbrella cannot reach it from {workspace}",
+            })
+    return found
+
+
 # ── projects ───────────────────────────────────────────────────────────────
 #
 # A third bound, beside scope (which workspaces) and audience (which agents):
@@ -502,10 +842,11 @@ def project_for(key: str, policy: Mapping[str, Any]) -> dict[str, Any]:
     corrupt entry must not cut every project off from a credential, because the
     failure would look like an outage somewhere else entirely.
     """
-    raw = key_entry(key, policy).get("projects", "all")
-    if isinstance(raw, str):
-        return {"mode": "all", "projects": []} if raw.strip().lower() in {"", "all", "*"} else {
-            "mode": "include", "projects": [raw.strip()]}
+    entry = key_entry(key, policy)
+    raw = entry.get("projects", "all")
+    explicit = "projects" in entry
+    if isinstance(raw, str) and raw.strip().lower() not in {"", "all", "*"}:
+        return {"mode": "include", "projects": [raw.strip()]}
     if isinstance(raw, list):
         return {"mode": "include",
                 "projects": sorted({str(a).strip() for a in raw if str(a).strip()})}
@@ -516,6 +857,15 @@ def project_for(key: str, policy: Mapping[str, Any]) -> dict[str, Any]:
                 names = sorted({str(a).strip() for a in listed if str(a).strip()})
                 if names:
                     return {"mode": mode, "projects": names}
+    # A rule written on the key itself is somebody's decision about that key and
+    # outranks the group it happens to sit in — the same instinct that lets an
+    # explicit group beat an inferred one. Only when the key says nothing does
+    # its group get to speak.
+    if not explicit or str(raw).strip().lower() in {"", "all", "*"}:
+        held = umbrella_for_key(key, policy)
+        if held and held["reach"] != "everyone":
+            return {"mode": "include", "projects": list(held["projects"]),
+                    "umbrella": held["label"]}
     return {"mode": "all", "projects": []}
 
 
@@ -525,6 +875,24 @@ def project_allows(project: str, key: str, policy: Mapping[str, Any]) -> dict[st
     name = str(project).strip()
     if rule["mode"] == "all":
         return {"allowed": True, "why": "every project"}
+    # A closed group with nothing in it yet. Closed means closed from the moment
+    # it exists, so this is readable by nobody — and the reason has to name the
+    # group, or it presents as a key that has gone missing.
+    if rule["mode"] == "include" and not rule["projects"]:
+        held = rule.get("umbrella")
+        return {"allowed": False,
+                "why": (f"the {held} umbrella is closed and covers no projects yet"
+                        if held else "this key is limited to projects, and none are listed")}
+    if rule.get("umbrella"):
+        covers = ", ".join(rule["projects"])
+        if name and name in rule["projects"]:
+            return {"allowed": True, "why": f"{name} is under the {rule['umbrella']} umbrella"}
+        if not name:
+            return {"allowed": False,
+                    "why": f"this key is under the {rule['umbrella']} umbrella ({covers}), "
+                           "and this caller named no project"}
+        return {"allowed": False,
+                "why": f"this key is under the {rule['umbrella']} umbrella, which covers {covers}"}
     if not name:
         # An `include` list is a statement that this key belongs to named
         # projects. A caller that names none is not one of them.

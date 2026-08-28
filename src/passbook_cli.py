@@ -168,13 +168,17 @@ def cmd_check(args: argparse.Namespace) -> int:
     values = _store_values()
     held = set(passbook.key_names())
 
+    refused = _refusals([k for k in args.keys if k in held], caller("passbook-check", args))
     missing, locked = [], []
     for key in args.keys:
         value = values.get(key, "")
-        if value:
+        if value and key not in refused:
             detail = f" ({len(value)} chars)" if args.length else ""
             if not args.quiet:
                 print(f"{key}: set{detail}")
+        elif key in refused:
+            if not args.quiet:
+                print(f"{key}: refused — {refused[key]}")
         elif key in held:
             locked.append(key)
             if not args.quiet:
@@ -184,6 +188,12 @@ def cmd_check(args: argparse.Namespace) -> int:
             if not args.quiet:
                 print(f"{key}: missing")
 
+    if refused and not missing and not locked:
+        return _fail(
+            f"\nRefused by this machine's policy: {', '.join(refused)}",
+            "Nothing is wrong with them and nothing needs re-adding.\n"
+            "See what governs them:  passbook group list",
+        )
     if locked and not missing:
         return _fail(
             f"\nIn the store but encrypted: {', '.join(locked)}",
@@ -194,8 +204,11 @@ def cmd_check(args: argparse.Namespace) -> int:
         if locked:
             remedy += (f"\nSeparately, these are encrypted rather than absent: "
                        f"{', '.join(locked)} — run `passbook signin`.")
+        if refused:
+            remedy += (f"\nSeparately, these are refused rather than absent: "
+                       f"{', '.join(refused)} — see `passbook group list`.")
         return _fail(f"\nNot set: {', '.join(missing)}", remedy)
-    return 0
+    return 0 if not refused else 1
 
 
 def _write_values(values, *, overwrite: bool, exact: bool = False,
@@ -438,6 +451,65 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0  # unreachable; execvpe replaces this process
 
 
+def _refusals(keys: list[str], app: str) -> dict[str, str]:
+    """Which of these the policy refuses, and in whose words.
+
+    A key that is present, unsealed, and still did not arrive was REFUSED, and
+    that is a third state beside "encrypted" and "missing". Reporting it as
+    either sends the reader to the wrong repair: `passbook signin` unlocks
+    nothing that was not locked, and `passbook add` overwrites a credential that
+    was never gone. The reason is already computed by the thing that refused it,
+    so it is quoted rather than guessed at.
+    """
+    try:
+        import passbook_access as access
+        import passbook_broker
+    except ImportError:
+        return {}
+    # A bound is something the BROKER enforces. With none running, a caller
+    # reads the file and the policy is not in the path at all — so reporting a
+    # refusal here would be describing a machine other than this one.
+    try:
+        if not passbook_broker.running():
+            return {}
+    except Exception:  # noqa: BLE001
+        return {}
+    try:
+        policy = access.read_policy()
+        project = passbook.project()
+    except Exception:  # noqa: BLE001 — a policy we cannot read refuses nothing
+        return {}
+    found = {}
+    for key in keys:
+        try:
+            verdict = access.decide_key(app, key, policy, project=project)
+        except Exception:  # noqa: BLE001
+            continue
+        if verdict.get("outcome") == "refuse":
+            found[key] = str(verdict.get("why") or "refused by this machine's policy")
+    return found
+
+
+def _report_withheld(absent: list[str], app: str) -> None:
+    """Say which of three things happened to each key that did not arrive."""
+    held = set(passbook.key_names())
+    gone = [key for key in absent if key not in held]
+    present = [key for key in absent if key in held]
+    refused = _refusals(present, app)
+    locked = [key for key in present if key not in refused]
+
+    if gone:
+        print(f"Not in this store: {', '.join(gone)}", file=sys.stderr)
+        print(f"Add with:  passbook add {gone[0]}", file=sys.stderr)
+    for key, why in refused.items():
+        print(f"Refused: {key} — {why}", file=sys.stderr)
+    if refused:
+        print("See:  passbook group list", file=sys.stderr)
+    if locked:
+        print(f"In the store but encrypted: {', '.join(locked)}", file=sys.stderr)
+        print("Sign in to read them:  passbook signin", file=sys.stderr)
+
+
 def cmd_get(args: argparse.Namespace) -> int:
     """Named values, as JSON, for a script that cannot ask the broker itself.
 
@@ -462,14 +534,7 @@ def cmd_get(args: argparse.Namespace) -> int:
         # Same three answers as `check`. "Not available" over a key that is
         # present but shut sends a reader off to re-create a credential that
         # was never gone.
-        held = set(passbook.key_names())
-        locked = [key for key in absent if key in held]
-        gone = [key for key in absent if key not in held]
-        if gone:
-            print(f"Not in this store: {', '.join(gone)}", file=sys.stderr)
-        if locked:
-            print(f"In the store but encrypted: {', '.join(locked)}", file=sys.stderr)
-            print("Sign in to read them:  passbook signin", file=sys.stderr)
+        _report_withheld(absent, caller("passbook-get", args))
         return 1
     return 0
 
@@ -1299,6 +1364,219 @@ def cmd_group_set(args: argparse.Namespace) -> int:
     access.write_policy(policy)
     where = args.group or "inferred from the name"
     print(f"{len(args.keys)} key(s) -> {where}")
+    return 0
+
+
+def _umbrella_policy():
+    import passbook_access as access
+    return access, access.read_policy()
+
+
+def _show_umbrella(record: dict, policy=None) -> None:
+    reach = "every project" if record["reach"] == "everyone" else "its own projects"
+    seen = "agents can see it" if record["listed"] else "not shown to agents"
+    print(f"{record['label']}  ({reach}, {seen})")
+    if record["tags"]:
+        print(f"    tags:     {', '.join(record['tags'])}")
+    if record["note"]:
+        print(f"    note:     {record['note']}")
+    if record["projects"]:
+        print(f"    projects: {', '.join(record['projects'])}")
+    elif record["reach"] != "everyone":
+        print("    projects: none yet — so nothing can read its keys")
+    if policy is not None:
+        import passbook_access as access
+        held = access.umbrella_keys(record["id"], policy)
+        print(f"    keys:     {len(held)}" + (f"  ({', '.join(held[:4])}"
+              + (" ..." if len(held) > 4 else "") + ")" if held else ""))
+
+
+def _warn_conflicts(access, record, policy) -> None:
+    """Say where another bound already refuses what this umbrella promises."""
+    try:
+        import passbook
+        here = passbook.workspace()
+    except Exception:  # noqa: BLE001
+        here = ""
+    clashes = access.umbrella_conflicts(record["id"], policy, workspace=here)
+    if not clashes:
+        return
+    # stderr is unbuffered and stdout is not, so without this the warning
+    # arrives above the thing it is warning about.
+    sys.stdout.flush()
+    print("\nThese will not do what this umbrella says:", file=sys.stderr)
+    for clash in clashes:
+        print(f"  {clash['why']}", file=sys.stderr)
+
+
+def cmd_umbrella(args: argparse.Namespace) -> int:
+    """Every umbrella, what it covers, and how far it reaches."""
+    access, policy = _umbrella_policy()
+    records = sorted(access.read_umbrellas(policy).values(), key=lambda r: r["id"])
+    if getattr(args, "json", False):
+        print(json.dumps([{**r, "keys": access.umbrella_keys(r["id"], policy)}
+                          for r in records], indent=2))
+        return 0
+    if not records:
+        print("No umbrellas yet.  passbook umbrella new \"<name>\"")
+        return 0
+    for record in records:
+        _show_umbrella(record, policy)
+    return 0
+
+
+def cmd_umbrella_new(args: argparse.Namespace) -> int:
+    access, policy = _umbrella_policy()
+    try:
+        record = access.create_umbrella(
+            args.name, policy, tags=args.tag or (), note=args.note or "",
+            reach="everyone" if args.everyone else access.DEFAULT_REACH,
+            listed=bool(args.listed))
+    except ValueError as error:
+        return _fail(str(error))
+    access.write_policy(policy)
+    _show_umbrella(record, policy)
+    if record["reach"] != "everyone":
+        print(f"\nClosed from now, not from when you finish. Nothing reads its keys until"
+              f" it covers a project:\n  passbook umbrella cover {record['id']} <project>")
+    return 0
+
+
+def cmd_umbrella_cover(args: argparse.Namespace) -> int:
+    """Put a project under an umbrella."""
+    access, policy = _umbrella_policy()
+    try:
+        record = access.add_umbrella_projects(args.umbrella, args.projects, policy)
+    except ValueError as error:
+        return _fail(str(error), "See:  passbook umbrella")
+    access.write_policy(policy)
+    _show_umbrella(record, policy)
+    _warn_conflicts(access, record, policy)
+    return 0
+
+
+def cmd_umbrella_uncover(args: argparse.Namespace) -> int:
+    access, policy = _umbrella_policy()
+    try:
+        record = access.remove_umbrella_projects(args.umbrella, args.projects, policy)
+    except ValueError as error:
+        return _fail(str(error), "See:  passbook umbrella")
+    access.write_policy(policy)
+    _show_umbrella(record, policy)
+    return 0
+
+
+def cmd_umbrella_add(args: argparse.Namespace) -> int:
+    """Put keys under an umbrella. Says what it did to them."""
+    access, policy = _umbrella_policy()
+    held = set(passbook.key_names())
+    missing = [k for k in args.keys if k not in held]
+    if missing:
+        return _fail(f"Not in this store: {', '.join(missing)}")
+    try:
+        record = access.put_under_umbrella(args.umbrella, args.keys, policy)
+    except ValueError as error:
+        return _fail(str(error), "See:  passbook umbrella")
+    access.write_policy(policy)
+    print(f"{len(args.keys)} key(s) under {record['label']}")
+    if record["reach"] == "everyone":
+        print("Every project can read them.")
+    elif record["projects"]:
+        print(f"They now read from {', '.join(record['projects'])} and nowhere else.")
+    else:
+        print(f"{record['label']} covers no projects, so NOTHING can read them now."
+              f"\n  passbook umbrella cover {record['id']} <project>"
+              f"\n  passbook umbrella remove {' '.join(args.keys[:3])}"
+              f"{' ...' if len(args.keys) > 3 else ''}   # to undo")
+    _warn_conflicts(access, record, policy)
+    return 0
+
+
+def cmd_umbrella_remove(args: argparse.Namespace) -> int:
+    access, policy = _umbrella_policy()
+    freed = access.take_from_umbrella(args.keys, policy)
+    if not freed:
+        return _fail("None of those were under an umbrella.")
+    access.write_policy(policy)
+    print(f"Out from under: {', '.join(freed)}")
+    return 0
+
+
+def cmd_umbrella_reach(args: argparse.Namespace) -> int:
+    """Who may USE it. Separate from whether agents can see it."""
+    access, policy = _umbrella_policy()
+    try:
+        record = access.set_umbrella_reach(args.umbrella, args.reach, policy)
+    except ValueError as error:
+        return _fail(str(error), "See:  passbook umbrella")
+    access.write_policy(policy)
+    _show_umbrella(record, policy)
+    return 0
+
+
+def cmd_umbrella_show_agents(args: argparse.Namespace) -> int:
+    """Whether agents are told it exists. Separate from who may use it."""
+    access, policy = _umbrella_policy()
+    try:
+        record = access.set_umbrella_listed(args.umbrella, not args.hide, policy)
+    except ValueError as error:
+        return _fail(str(error), "See:  passbook umbrella")
+    access.write_policy(policy)
+    _show_umbrella(record, policy)
+    if record["listed"] and record["reach"] != "everyone":
+        print("\nAgents can see this umbrella and will be told they may not use it, "
+              "which is more useful to them than seeing nothing.")
+    return 0
+
+
+def cmd_umbrella_open(args: argparse.Namespace) -> int:
+    """The common corner: every project, and agents can see it."""
+    access, policy = _umbrella_policy()
+    try:
+        access.set_umbrella_reach(args.umbrella, "everyone", policy)
+        record = access.set_umbrella_listed(args.umbrella, True, policy)
+    except ValueError as error:
+        return _fail(str(error), "See:  passbook umbrella")
+    access.write_policy(policy)
+    _show_umbrella(record, policy)
+    return 0
+
+
+def cmd_umbrella_close(args: argparse.Namespace) -> int:
+    """The other corner: its own projects, and not advertised."""
+    access, policy = _umbrella_policy()
+    try:
+        access.set_umbrella_reach(args.umbrella, "members", policy)
+        record = access.set_umbrella_listed(args.umbrella, False, policy)
+    except ValueError as error:
+        return _fail(str(error), "See:  passbook umbrella")
+    access.write_policy(policy)
+    _show_umbrella(record, policy)
+    return 0
+
+
+def cmd_umbrella_tag(args: argparse.Namespace) -> int:
+    access, policy = _umbrella_policy()
+    existing = access.umbrella_record(args.umbrella, policy)
+    if not existing:
+        return _fail(f"there is no umbrella called {args.umbrella!r}", "See:  passbook umbrella")
+    wanted = sorted(set(existing["tags"]) | {t for t in (args.tag or []) if t.strip()})
+    record = access.set_umbrella_tags(args.umbrella, wanted, policy, note=args.note)
+    access.write_policy(policy)
+    _show_umbrella(record, policy)
+    return 0
+
+
+def cmd_umbrella_delete(args: argparse.Namespace) -> int:
+    access, policy = _umbrella_policy()
+    try:
+        gone = access.delete_umbrella(args.umbrella, policy)
+    except ValueError as error:
+        return _fail(str(error))
+    if not gone:
+        return _fail(f"there is no umbrella called {args.umbrella!r}", "See:  passbook umbrella")
+    access.write_policy(policy)
+    print(f"{args.umbrella} removed. Its keys are no longer limited by it.")
     return 0
 
 
@@ -3320,6 +3598,68 @@ def build_parser() -> argparse.ArgumentParser:
 
     mcp = subs.add_parser("mcp", help="speak MCP on stdio so any agent can find these credentials")
     mcp.set_defaults(func=cmd_mcp)
+
+    umbrella_cmd = subs.add_parser(
+        "umbrella", help="cover several projects with one set of keys")
+    umbrella_cmd.add_argument("--json", action="store_true")
+    umbrella_cmd.set_defaults(func=cmd_umbrella)
+    u_subs = umbrella_cmd.add_subparsers(dest="umbrella_command")
+
+    u_new = u_subs.add_parser("new", help="create one; closed and unlisted by default")
+    u_new.add_argument("name")
+    u_new.add_argument("--tag", action="append", metavar="TAG",
+                       help="what it is for; agents read these when it is shown to them")
+    u_new.add_argument("--note", default="", help="one line an agent can read")
+    u_new.add_argument("--everyone", action="store_true", help="usable from every project")
+    u_new.add_argument("--listed", action="store_true", help="agents are told it exists")
+    u_new.set_defaults(json=False, func=cmd_umbrella_new)
+
+    u_cover = u_subs.add_parser("cover", help="put a project under it")
+    u_cover.add_argument("umbrella")
+    u_cover.add_argument("projects", nargs="+", metavar="PROJECT")
+    u_cover.set_defaults(json=False, func=cmd_umbrella_cover)
+
+    u_uncover = u_subs.add_parser("uncover", help="take a project out")
+    u_uncover.add_argument("umbrella")
+    u_uncover.add_argument("projects", nargs="+", metavar="PROJECT")
+    u_uncover.set_defaults(json=False, func=cmd_umbrella_uncover)
+
+    u_add = u_subs.add_parser("add", help="put keys under it")
+    u_add.add_argument("umbrella")
+    u_add.add_argument("keys", nargs="+", metavar="KEY")
+    u_add.set_defaults(json=False, func=cmd_umbrella_add)
+
+    u_rm = u_subs.add_parser("remove", help="take keys out from under it")
+    u_rm.add_argument("keys", nargs="+", metavar="KEY")
+    u_rm.set_defaults(json=False, func=cmd_umbrella_remove)
+
+    u_reach = u_subs.add_parser("reach", help="who may USE it")
+    u_reach.add_argument("umbrella")
+    u_reach.add_argument("reach", choices=("members", "everyone"))
+    u_reach.set_defaults(json=False, func=cmd_umbrella_reach)
+
+    u_show = u_subs.add_parser("show-agents", help="whether agents are told it exists")
+    u_show.add_argument("umbrella")
+    u_show.add_argument("--hide", action="store_true", help="stop telling them")
+    u_show.set_defaults(json=False, func=cmd_umbrella_show_agents)
+
+    u_open = u_subs.add_parser("open", help="every project, and agents can see it")
+    u_open.add_argument("umbrella")
+    u_open.set_defaults(json=False, func=cmd_umbrella_open)
+
+    u_close = u_subs.add_parser("close", help="its own projects, and not advertised")
+    u_close.add_argument("umbrella")
+    u_close.set_defaults(json=False, func=cmd_umbrella_close)
+
+    u_tag = u_subs.add_parser("tag", help="what it is for")
+    u_tag.add_argument("umbrella")
+    u_tag.add_argument("--tag", action="append", metavar="TAG")
+    u_tag.add_argument("--note", default=None)
+    u_tag.set_defaults(json=False, func=cmd_umbrella_tag)
+
+    u_del = u_subs.add_parser("delete", help="remove it; its keys stop being limited")
+    u_del.add_argument("umbrella")
+    u_del.set_defaults(json=False, func=cmd_umbrella_delete)
 
     group_cmd = subs.add_parser("group", help="how the store is arranged")
     group_cmd.add_argument("--json", action="store_true")

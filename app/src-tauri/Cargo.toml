@@ -16,6 +16,9 @@ tauri = { version = "2", features = ["macos-private-api"] }
 # AppleScript one. `osascript -e 'display notification'` posts under Script
 # Editor's identity — its icon, and its window when you click the banner.
 tauri-plugin-notification = "2"
+# The "Add to PassBook" button on a docs page opens `passbook://add?key=...`.
+# Names only; see src/ask.rs for why a value never travels in a URL.
+tauri-plugin-deep-link = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

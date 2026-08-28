@@ -30,7 +30,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 use serde_json::Value;
 
@@ -1014,8 +1014,11 @@ fn key_history(name: String) -> Result<Value, String> {
 /// Only the two files that make up the window are served, only to loopback,
 /// and only to a request that asked for this host. They contain no credential:
 /// the store is read over IPC by the process that needs it, never over this.
+mod ask;
+
 mod ui {
     use std::io::{Read, Write};
+    use std::sync::OnceLock;
     use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 
     const INDEX: &[u8] = include_bytes!("../../ui/index.html");
@@ -1059,36 +1062,136 @@ mod ui {
         Ok(port)
     }
 
+    /// What to do with a request a page posted. Set once, by `main`.
+    ///
+    /// The server lives in here and knows nothing about vaults; this is the
+    /// one seam between "bytes arrived on a socket" and "a person is asked".
+    pub static ON_ASK: OnceLock<Box<dyn Fn(&str, &str) -> Result<(), String> + Send + Sync>> =
+        OnceLock::new();
+
+    /// A request body is a credential list. Big enough for 25 of them, small
+    /// enough that nothing can be parked in this process's memory.
+    const MAX_BODY: usize = 64 * 1024;
+
+    fn header<'a>(request: &'a str, name: &str) -> Option<&'a str> {
+        request.split("\r\n").skip(1).find_map(|line| {
+            let (key, value) = line.split_once(':')?;
+            key.trim().eq_ignore_ascii_case(name).then(|| value.trim())
+        })
+    }
+
     fn answer(mut stream: TcpStream) -> std::io::Result<()> {
-        let mut buffer = [0u8; 2048];
-        let read = stream.read(&mut buffer)?;
-        let request = String::from_utf8_lossy(&buffer[..read]);
-        let mut lines = request.split("\r\n");
-        let start = lines.next().unwrap_or("");
+        // Read until the headers are complete rather than taking one fixed
+        // bite: a POST body arrives behind them and can span reads.
+        let mut raw: Vec<u8> = Vec::with_capacity(4096);
+        let mut chunk = [0u8; 2048];
+        let head_end = loop {
+            let read = stream.read(&mut chunk)?;
+            if read == 0 {
+                break None;
+            }
+            raw.extend_from_slice(&chunk[..read]);
+            if let Some(at) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+                break Some(at + 4);
+            }
+            if raw.len() > MAX_BODY {
+                break None;
+            }
+        };
+        let Some(head_end) = head_end else {
+            return send(&mut stream, "400 Bad Request", "text/plain", b"no", false);
+        };
+        let request = String::from_utf8_lossy(&raw[..head_end]).into_owned();
+        let start = request.split("\r\n").next().unwrap_or("");
         let mut parts = start.split(' ');
         let method = parts.next().unwrap_or("");
-        let path = parts.next().unwrap_or("/");
+        let path = parts.next().unwrap_or("/").split('?').next().unwrap_or("/");
 
         // A page fetched under some other name is not this window's page, and
         // the Host is what decides the origin a passkey would be bound to.
-        let host_ok = lines
-            .filter_map(|line| line.strip_prefix("Host:").or_else(|| line.strip_prefix("host:")))
-            .any(|value| {
-                let value = value.trim();
-                let name = value.split(':').next().unwrap_or("");
-                name == "localhost" || name == "127.0.0.1"
-            });
-        if !host_ok || (method != "GET" && method != "HEAD") {
-            return send(&mut stream, "400 Bad Request", "text/plain", b"no", method == "HEAD");
+        let host_ok = header(&request, "host").is_some_and(|value| {
+            let name = value.split(':').next().unwrap_or("");
+            name == "localhost" || name == "127.0.0.1"
+        });
+        if !host_ok {
+            return send(&mut stream, "400 Bad Request", "text/plain", b"no", false);
         }
 
-        let path = path.split('?').next().unwrap_or("/");
+        // The handover endpoint. A button on somebody else's documentation
+        // posts here, so it has to be reachable cross-origin — which is safe
+        // only because nothing here stores anything. It parks a request for a
+        // person to look at, and that person is the entire access control.
+        if path == "/ask" {
+            if method == "OPTIONS" {
+                return send_cors(&mut stream, "204 No Content", b"");
+            }
+            if method != "POST" {
+                return send_cors(&mut stream, "405 Method Not Allowed", b"post here");
+            }
+            let length: usize = header(&request, "content-length")
+                .and_then(|v| v.trim().parse().ok())
+                .unwrap_or(0);
+            if length > MAX_BODY {
+                return send_cors(&mut stream, "413 Payload Too Large", b"too much");
+            }
+            let mut body: Vec<u8> = raw[head_end..].to_vec();
+            while body.len() < length {
+                let read = stream.read(&mut chunk)?;
+                if read == 0 {
+                    break;
+                }
+                body.extend_from_slice(&chunk[..read]);
+            }
+            body.truncate(length);
+            let origin = header(&request, "origin").unwrap_or("").to_string();
+            let text = String::from_utf8_lossy(&body).into_owned();
+            let answered = match ON_ASK.get() {
+                Some(handler) => handler(&text, &origin),
+                None => Err("PassBook is still starting up.".into()),
+            };
+            return match answered {
+                Ok(()) => send_cors(&mut stream, "202 Accepted", br#"{"ok":true}"#),
+                // The reason goes back so the page can tell the person
+                // something better than "it did not work".
+                Err(reason) => {
+                    let body = serde_json::json!({ "ok": false, "error": reason }).to_string();
+                    send_cors(&mut stream, "400 Bad Request", body.as_bytes())
+                }
+            };
+        }
+
+        if method != "GET" && method != "HEAD" {
+            return send(&mut stream, "400 Bad Request", "text/plain", b"no", false);
+        }
         let (status, kind, body): (&str, &str, &[u8]) = match path {
             "/" | "/index.html" => ("200 OK", "text/html; charset=utf-8", INDEX),
             "/mark.png" => ("200 OK", "image/png", MARK),
             _ => ("404 Not Found", "text/plain", b"not here"),
         };
         send(&mut stream, status, kind, body, method == "HEAD")
+    }
+
+    /// The handover reply. `*` rather than an echoed origin because there are
+    /// no cookies and no credentials on this endpoint: the reply says only
+    /// whether a request was parked, and reading that tells a page nothing it
+    /// did not already know.
+    fn send_cors(stream: &mut TcpStream, status: &str, body: &[u8]) -> std::io::Result<()> {
+        let headers = format!(
+            "HTTP/1.1 {status}\r\n\
+             Content-Type: application/json\r\n\
+             Content-Length: {len}\r\n\
+             Access-Control-Allow-Origin: *\r\n\
+             Access-Control-Allow-Methods: POST, OPTIONS\r\n\
+             Access-Control-Allow-Headers: content-type\r\n\
+             Access-Control-Allow-Private-Network: true\r\n\
+             Access-Control-Max-Age: 600\r\n\
+             Cache-Control: no-store\r\n\
+             X-Content-Type-Options: nosniff\r\n\
+             Connection: close\r\n\r\n",
+            status = status, len = body.len());
+        stream.write_all(headers.as_bytes())?;
+        stream.write_all(body)?;
+        stream.flush()
     }
 
     fn send(stream: &mut TcpStream, status: &str, kind: &str, body: &[u8], head_only: bool)
@@ -1109,10 +1212,184 @@ mod ui {
     }
 }
 
+
+// ── "Add to PassBook" ───────────────────────────────────────────────────────
+//
+// A link names the keys a service wants. Everything that decides whether they
+// are stored happens in the window and in the vault, not here: this only holds
+// the most recent request until somebody looks at it.
+
+/// One at a time. A second link replaces the first rather than queueing,
+/// because a stack of credential prompts is how people start clicking through
+/// them without reading.
+static PENDING: OnceLock<std::sync::Mutex<Option<ask::Ask>>> = OnceLock::new();
+
+fn pending() -> &'static std::sync::Mutex<Option<ask::Ask>> {
+    PENDING.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// Remember a request and wake the window.
+fn remember_ask(app: &tauri::AppHandle, url: &str) {
+    // Distinct per request, so approving cannot be replayed against whatever
+    // arrived afterwards.
+    let id = format!("{:x}", std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
+    match ask::parse(url, &id) {
+        Ok(parsed) => {
+            if let Ok(mut slot) = pending().lock() {
+                *slot = Some(parsed);
+            }
+            // The window may not exist yet on a cold start; it asks for the
+            // pending request itself once it loads, so a missed event is not a
+            // missed request.
+            let _ = app.emit("passbook://ask", ());
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }
+        Err(reason) => {
+            let _ = app.emit("passbook://ask-refused", reason);
+        }
+    }
+}
+
+/// Take what a page posted, and put it in front of the person.
+fn remember_page_ask(app: &tauri::AppHandle, body: &str, origin: &str) -> Result<(), String> {
+    let id = format!("{:x}", std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
+    let parsed = ask::parse_page(body, origin, &id)?;
+    if let Ok(mut slot) = pending().lock() {
+        *slot = Some(parsed);
+    }
+    let _ = app.emit("passbook://ask", ());
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+    Ok(())
+}
+
+/// What the window should be showing, if anything.
+#[tauri::command]
+fn pending_ask() -> Option<ask::Ask> {
+    pending().lock().ok().and_then(|slot| slot.clone())
+}
+
+/// Put the request down without storing anything.
+#[tauri::command]
+fn dismiss_ask() {
+    if let Ok(mut slot) = pending().lock() {
+        *slot = None;
+    }
+}
+
+/// Store a set of keys in one go, and clear the request that asked for them.
+///
+/// One CLI call rather than one per key: `passbook add --stdin` reads
+/// `KEY=value` lines, so the whole set lands as a single operation with a
+/// single line in the ledger, and a half-applied request cannot happen.
+/// Values go down stdin and never appear in an argument list.
+#[tauri::command]
+fn apply_ask(id: String, typed: Vec<(String, String)>, replace: bool) -> Result<Value, String> {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    // Values the page handed over never went to the window, so they are read
+    // back from here. `typed` fills only the keys nobody supplied.
+    let wanted = {
+        let slot = pending().lock().map_err(|_| "PassBook lost track of that request.")?;
+        match slot.as_ref() {
+            Some(current) if current.id == id => current.keys.clone(),
+            _ => return Err("That request is no longer the one on screen.".into()),
+        }
+    };
+
+    let mut lines = String::new();
+    for key in &wanted {
+        let value = match key.value.as_deref() {
+            Some(held) => held.to_string(),
+            None => typed
+                .iter()
+                .find(|(name, _)| name == &key.name)
+                .map(|(_, value)| value.trim().to_string())
+                .unwrap_or_default(),
+        };
+        if value.is_empty() {
+            return Err(format!("{} has no value.", key.name));
+        }
+        // Belt and braces: `ask` refuses both already, and either one here
+        // would write a key nobody approved.
+        if key.name.contains(['\n', '\r', '=']) || value.contains(['\n', '\r']) {
+            return Err(format!("{} cannot be stored as written.", key.name));
+        }
+        lines.push_str(&format!("{}={}\n", key.name, value));
+    }
+    if lines.is_empty() {
+        return Err("Nothing to add.".into());
+    }
+
+    let mut args = vec!["add", "--stdin"];
+    if replace {
+        args.push("--replace");
+    }
+    let mut child = passbook_command()
+        .args(&args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("Could not run PassBook: {error}"))?;
+    {
+        let stdin = child.stdin.as_mut().ok_or("Could not write to PassBook")?;
+        stdin
+            .write_all(lines.as_bytes())
+            .map_err(|error| format!("Could not write to PassBook: {error}"))?;
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("PassBook did not finish: {error}"))?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr);
+        let detail = detail.trim();
+        return Err(if detail.is_empty() { "Those keys were not added.".into() } else { detail.to_string() });
+    }
+    dismiss_ask();
+    state()
+}
+
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
+            // A link can arrive before the window exists (cold start) or long
+            // after it (the app was already open), so both are wired: the
+            // launch URL is read once, and the handler stays for the rest.
+            {
+                // A page that posts to the loopback server ends up in the same
+                // place a link does: one pending request, one person deciding.
+                let handle = app.handle().clone();
+                let _ = ui::ON_ASK.set(Box::new(move |body: &str, origin: &str| {
+                    remember_page_ask(&handle, body, origin)
+                }));
+            }
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                let handle = app.handle().clone();
+                app.deep_link().on_open_url(move |event| {
+                    for url in event.urls() {
+                        remember_ask(&handle, url.as_str());
+                    }
+                });
+                if let Ok(Some(urls)) = app.deep_link().get_current() {
+                    for url in urls {
+                        remember_ask(app.handle(), url.as_str());
+                    }
+                }
+            }
             // Asked of Tauri rather than derived from the executable's path:
             // the answer differs per platform and per bundle format, and
             // guessing it wrong means falling back to "not installed".
@@ -1150,7 +1427,8 @@ fn main() {
             set_workspace, export_store, inspect_export, import_store, make_recovery_code,
             forget_machine, verify_record, vault_create_workspace, vault_add_passkey,
             vault_signin_passkey, biometric_status, vault_signin_device, vault_trust_device,
-            set_key_projects, set_confirmation
+            set_key_projects, set_confirmation,
+            pending_ask, dismiss_ask, apply_ask
         ])
         .run(tauri::generate_context!())
         .expect("PassBook failed to start");

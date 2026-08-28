@@ -51,7 +51,10 @@
     "allow-vault-signin-device",
     "allow-vault-trust-device",
     "allow-set-key-projects",
-    "allow-set-confirmation"
+    "allow-set-confirmation",
+    "allow-pending-ask",
+    "allow-dismiss-ask",
+    "allow-apply-ask"
   ],
   "remote": {
     "urls": [

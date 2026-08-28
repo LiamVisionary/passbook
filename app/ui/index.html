@@ -742,11 +742,112 @@
   .gagents button { min-height: 0; padding: 6px 11px; border-radius: 8px;
     background: var(--chip); color: var(--ink1); border: 1px solid var(--line2);
     font: 600 12px inherit; cursor: pointer; }
+  /* ── Add to PassBook ──────────────────────────────────────────────────────
+     A page asked for keys. This sits above the sign-in sheet on purpose: the
+     request is what the person came here to answer, and making them sign in
+     first would mean approving something they had not read yet. */
+  #ask {
+    position: fixed; inset: 0; z-index: 120; display: grid; place-items: center;
+    padding: 24px; background: var(--bg); overflow-y: auto;
+    -webkit-app-region: drag;
+  }
+  #ask[hidden] { display: none; }
+  #ask > * { -webkit-app-region: no-drag; }
+  .awrap { width: min(520px, 100%); display: grid; gap: 18px; }
+  .acard {
+    background: var(--card); border: 1px solid var(--line); border-radius: 16px;
+    padding: 26px; display: grid; gap: 18px; box-shadow: 0 18px 46px rgba(0,0,0,.10);
+  }
+  .ahead { display: grid; justify-items: center; gap: 10px; text-align: center; }
+  .amark {
+    width: 42px; height: 42px; display: grid; place-items: center; border-radius: 11px;
+    background: var(--accent-soft); color: var(--accent);
+  }
+  .ahead h1 { margin: 0; font-size: 21px; font-weight: 650; letter-spacing: -.015em; }
+  .aorigin {
+    margin: 0; font-size: 12.5px; color: var(--ink3); line-height: 1.5;
+    word-break: break-word;
+  }
+  .aorigin b { color: var(--ink); font-weight: 600; }
+  .anote {
+    margin: 0; font-size: 12.5px; color: var(--ink3); line-height: 1.5;
+    background: var(--soft); border-radius: 9px; padding: 9px 11px;
+  }
+  .akeys { display: grid; gap: 12px; }
+  .akey { display: grid; gap: 5px; }
+  .akey label { font: 600 11.5px/1 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink2); letter-spacing: .01em; }
+  /* Longhand, because `font: ... inherit` is not a valid shorthand -- the
+     family slot needs a real family, so the whole declaration was dropped and
+     the password label kept the monospace meant for key names. */
+  .akey label.aplain {
+    font-family: inherit; font-size: 12px; font-weight: 500; line-height: 1;
+    color: var(--ink3); letter-spacing: 0;
+  }
+  .akey input {
+    width: 100%; box-sizing: border-box; min-height: 40px; padding: 0 11px;
+    border: 1px solid var(--line2); border-radius: 9px; background: var(--paper);
+    color: var(--ink); font: 400 13px inherit;
+  }
+  .akey input:focus { outline: 0; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .akey .ahint { font-size: 11px; color: var(--ink3); }
+  .asent {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    min-height: 40px; padding: 0 12px; border: 1px solid var(--line2);
+    border-radius: 9px; background: var(--soft);
+  }
+  .asent .aname { font: 600 11.5px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink2); }
+  .asent .apreview { font: 400 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink3); }
+  .aws {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    border-top: 1px solid var(--line); padding-top: 14px; font-size: 12.5px; color: var(--ink3);
+  }
+  .aws b { color: var(--ink); font-weight: 600; }
+  .alink {
+    background: none; border: 0; padding: 0; font: 600 12.5px inherit; color: var(--accent);
+    cursor: pointer; text-decoration: none;
+  }
+  .alink:hover { text-decoration: underline; }
+  .apick { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+  .apick button {
+    width: 100%; text-align: left; min-height: 38px; padding: 0 11px; cursor: pointer;
+    border: 1px solid var(--line2); border-radius: 9px; background: var(--paper);
+    color: var(--ink); font: 500 13px inherit;
+  }
+  .apick button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
+  .arow { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .arow button { min-height: 44px; border: 0; border-radius: 10px; font: 600 14px inherit; cursor: pointer; }
+  .aghost { background: var(--soft); color: var(--ink2); }
+  .aprimary { background: var(--accent); color: var(--accent-ink); }
+  .aprimary:disabled { opacity: .55; cursor: default; }
+  .aerr { margin: 0; font-size: 12.5px; color: var(--bad); line-height: 1.5; }
+  .arefused { margin: 0; font-size: 11.5px; color: var(--ink3); line-height: 1.5; }
+
+  /* The confirmation. A tick that draws itself, because "it worked" should be
+     something you see rather than a sentence you have to read. */
+  .adone { display: grid; justify-items: center; gap: 14px; text-align: center; padding: 12px 0 4px; }
+  .atick { width: 68px; height: 68px; }
+  .atick circle {
+    fill: none; stroke: var(--accent); stroke-width: 2.4;
+    stroke-dasharray: 176; stroke-dashoffset: 176;
+    animation: adraw .45s cubic-bezier(.2,.7,.3,1) forwards;
+  }
+  .atick path {
+    fill: none; stroke: var(--accent); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round;
+    stroke-dasharray: 40; stroke-dashoffset: 40;
+    animation: adraw .3s cubic-bezier(.2,.7,.3,1) .35s forwards;
+  }
+  @keyframes adraw { to { stroke-dashoffset: 0; } }
+  @media (prefers-reduced-motion: reduce) {
+    .atick circle, .atick path { animation: none; stroke-dashoffset: 0; }
+  }
+  .adone h1 { margin: 0; font-size: 20px; font-weight: 650; letter-spacing: -.015em; }
+
 </style>
 
 <nav id="nav"></nav>
 <main id="main"><p class="empty">Reading this device…</p></main>
 <div id="gate" hidden></div>
+<div id="ask" hidden></div>
 
 <script>
 (() => {
@@ -754,6 +855,7 @@
   const nav = document.getElementById("nav");
   const main = document.getElementById("main");
   const gate = document.getElementById("gate");
+  const ask = document.getElementById("ask");
   const esc = (v) => String(v ?? "").replace(/[&<>"]/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
 
   /** The icon set.
@@ -2654,6 +2756,9 @@ passbook oauth connect google:work</pre>
    *  ask for, so asking would be theatre.
    */
   function gateShouldShow() {
+    // A request on screen carries its own unlock step, and the sign-in
+    // sheet underneath it would mean approving something unread.
+    if (askShouldShow()) return false;
     // The passkey offer comes AFTER a successful sign-in, which is the one
     // moment it can succeed — and the same moment the gate would otherwise
     // decide it is no longer needed and take the offer down with it.
@@ -3171,6 +3276,296 @@ passbook oauth connect google:work</pre>
     wireGate();
   }
 
+
+  // ── Add to PassBook ────────────────────────────────────────────────────────
+  //
+  //  A page says which keys its SDK reads and opens `passbook://add?key=...`.
+  //  The link carries names and never values, so what happens here is: show
+  //  who asked and what they asked for, take the values from the person, open
+  //  the vault, store the set in one operation.
+  //
+  //  Nothing on this path can be skipped by the link. There is no parameter
+  //  that pre-approves, pre-fills a value, or picks a workspace on the
+  //  person's behalf, because a credential prompt that can be steered from
+  //  outside is a phishing form with a native title bar.
+
+  let askReq = null;
+  let askView = { step: "review", values: {}, workspace: "", picking: false,
+                  error: "", busy: false, added: 0, where: "" };
+
+  const askShouldShow = () => Boolean(askReq);
+
+  /** The workspace the keys would land in: whatever was chosen, else active. */
+  function askTarget() {
+    const rows = workspaceRows();
+    const chosen = rows.find((row) => row.id === askView.workspace);
+    return chosen || rows.find((row) => row.active) || null;
+  }
+
+  function askReview() {
+    const target = askTarget();
+    const count = askReq.keys.length;
+    const sent = askReq.keys.filter((k) => k.has_value).length;
+    const site = askReq.origin
+      ? `<b>${esc(askReq.app)}</b> at <b>${esc(askReq.origin)}</b>`
+      : `<b>${esc(askReq.app)}</b>`;
+    // Where the values came from decides what this screen is. If the page sent
+    // them, there is nothing to fill in and the only question is whether to
+    // keep them. If it sent names only, the person supplies the values.
+    const lede = sent === count
+      ? `${site} wants to put ${count === 1 ? "this credential" : "these credentials"} in your vault.`
+      : sent === 0
+        ? `${site} is asking for ${count === 1 ? "this credential" : "these credentials"}. It sent the names only, so the ${count === 1 ? "value is" : "values are"} yours to fill in.`
+        : `${site} sent ${sent} of ${count} values. Fill in the rest.`;
+    return `
+      <div class="acard">
+        <div class="ahead">
+          <div class="amark">${icon("key")}</div>
+          <h1>Add ${count} key${count === 1 ? "" : "s"} to PassBook?</h1>
+          <p class="aorigin">${lede}</p>
+        </div>
+        ${askReq.note ? `<p class="anote">${esc(askReq.note)}</p>` : ""}
+        <div class="akeys">
+          ${askReq.keys.map((k, i) => k.has_value ? `
+            <div class="asent">
+              <span class="aname">${esc(k.name)}</span>
+              <span class="apreview" title="Only part of the value is shown">${esc(k.preview)}</span>
+            </div>` : `
+            <div class="akey">
+              <label for="ak-${i}">${esc(k.name)}</label>
+              <input id="ak-${i}" data-akey="${esc(k.name)}" type="password"
+                     autocomplete="off" spellcheck="false" placeholder="Paste the value"
+                     value="${esc(askView.values[k.name] || "")}">
+            </div>`).join("")}
+        </div>
+        ${askReq.refused.length ? `<p class="arefused">${askReq.refused.length}
+          ${askReq.refused.length === 1 ? "entry was" : "entries were"} left out:
+          ${askReq.refused.map((r) => esc(r)).join(", ")}. A name has to be a plain
+          environment variable, and a value has to fit on one line.</p>` : ""}
+        <div class="aws">
+          <span>Adding to <b>${esc(target?.label || "this device")}</b></span>
+          <button class="alink" data-apick="1">${askView.picking ? "Keep this one" : "Use another workspace"}</button>
+        </div>
+        ${askView.picking ? `<ul class="apick">
+          ${workspaceRows().map((row) => `
+            <li><button data-aws="${esc(row.id)}"
+                        aria-pressed="${row.id === target?.id ? "true" : "false"}">
+              ${esc(row.label)}${row.active ? " · current" : ""}
+            </button></li>`).join("")}
+        </ul>` : ""}
+        ${askView.error ? `<p class="aerr">${esc(askView.error)}</p>` : ""}
+        <div class="arow">
+          <button class="aghost" data-acancel="1">Not now</button>
+          <button class="aprimary" data-aadd="1" ${askView.busy ? "disabled" : ""}>
+            ${askView.busy ? "Adding…" : `Add ${count === 1 ? "key" : "keys"}`}</button>
+        </div>
+      </div>`;
+  }
+
+  function askUnlock() {
+    const target = askTarget();
+    return `
+      <div class="acard">
+        <div class="ahead">
+          <div class="amark">${icon("lock")}</div>
+          <h1>Open ${esc(target?.label || "the vault")}</h1>
+          <p class="aorigin">The keys are ready. Signing in seals them with everything else.</p>
+        </div>
+        <form class="akeys" id="ak-form">
+          <div class="akey">
+            <label class="aplain" for="ak-pw">Vault password</label>
+            <input id="ak-pw" type="password" autocomplete="current-password" placeholder="Password">
+          </div>
+        </form>
+        ${biometry.available ? `<button class="alink" data-abio="1">Use ${esc(biometry.label || "this device")} instead</button>` : ""}
+        ${askView.error ? `<p class="aerr">${esc(askView.error)}</p>` : ""}
+        <div class="arow">
+          <button class="aghost" data-acancel="1">Cancel</button>
+          <button class="aprimary" data-aunlock="1" ${askView.busy ? "disabled" : ""}>
+            ${askView.busy ? "Opening…" : "Unlock and add"}</button>
+        </div>
+      </div>`;
+  }
+
+  function askDone() {
+    const n = askView.added;
+    return `
+      <div class="acard">
+        <div class="adone">
+          <svg class="atick" viewBox="0 0 68 68" aria-hidden="true">
+            <circle cx="34" cy="34" r="28"/>
+            <path d="M21 35.5 30 44 47 25"/>
+          </svg>
+          <h1>${n} key${n === 1 ? "" : "s"} added</h1>
+          <p class="aorigin">Stored in <b>${esc(askView.where)}</b>. Any app that opts in can read
+            ${n === 1 ? "it" : "them"} now, and every read is recorded.</p>
+        </div>
+        <div class="arow" style="grid-template-columns: 1fr;">
+          <button class="aprimary" data-adone="1">Done</button>
+        </div>
+      </div>`;
+  }
+
+  function paintAsk() {
+    const show = askShouldShow();
+    ask.hidden = !show;
+    if (!show) return;
+    const body = askView.step === "done" ? askDone()
+      : askView.step === "unlock" ? askUnlock() : askReview();
+    ask.innerHTML = `<div class="awrap">${body}</div>`;
+    wireAsk();
+  }
+
+  /** Close the request without storing anything. */
+  async function askClose() {
+    askReq = null;
+    askView = { step: "review", values: {}, workspace: "", picking: false,
+                error: "", busy: false, added: 0, where: "" };
+    try { await invoke("dismiss_ask"); } catch { /* nothing pending */ }
+    paint();
+  }
+
+  /** Read the typed values off the form, so a repaint cannot lose them. */
+  function askHarvest() {
+    ask.querySelectorAll("[data-akey]").forEach((input) => {
+      askView.values[input.dataset.akey] = input.value;
+    });
+    // "Paste the values first" outliving the paste is the kind of small lie
+    // that makes people stop reading the messages.
+    if (askView.error && askReq
+        && askReq.keys.every((k) => k.has_value || (askView.values[k.name] || "").trim())) {
+      askView.error = "";
+    }
+  }
+
+  /** Store the set, once the vault is open. */
+  async function askApply() {
+    const target = askTarget();
+    // Only what was typed. Anything the page supplied stayed in the app and is
+    // read there, so a credential the window never held is not sent back to it.
+    const typed = askReq.keys.filter((k) => !k.has_value)
+      .map((k) => [k.name, (askView.values[k.name] || "").trim()]);
+    askView.busy = true; askView.error = ""; paintAsk();
+    try {
+      // A different workspace is a real switch, not a hidden one: the window
+      // stays where the keys went, so what you see afterwards is where they are.
+      if (target && !target.active) {
+        state = await invoke("set_workspace", { name: target.id });
+      }
+      const id = askReq.id;
+      const count = askReq.keys.length;
+      const where = target?.label || "this device";
+      state = await invoke("apply_ask", { id, typed, replace: false });
+      askReq = null;
+      askView = { step: "done", values: {}, workspace: "", picking: false,
+                  error: "", busy: false, added: count, where };
+      // `askReq` is gone, so the overlay would vanish; the confirmation is the
+      // point of the whole flow, so it is drawn from `askView` alone.
+      ask.hidden = false;
+      ask.innerHTML = `<div class="awrap">${askDone()}</div>`;
+      wireAsk();
+      resetRows();
+      return;
+    } catch (e) {
+      askView.error = String(e);
+    } finally {
+      askView.busy = false;
+    }
+    paintAsk();
+  }
+
+  function wireAsk() {
+    ask.querySelectorAll("[data-acancel]").forEach((b) => b.onclick = () => askClose());
+    ask.querySelectorAll("[data-adone]").forEach((b) => b.onclick = () => {
+      askView.step = "review"; askView.added = 0; ask.hidden = true; paint();
+    });
+    ask.querySelectorAll("[data-apick]").forEach((b) => b.onclick = () => {
+      askHarvest(); askView.picking = !askView.picking; paintAsk();
+    });
+    ask.querySelectorAll("[data-aws]").forEach((b) => b.onclick = () => {
+      askHarvest(); askView.workspace = b.dataset.aws; askView.picking = false; paintAsk();
+    });
+    ask.querySelectorAll("[data-aadd]").forEach((b) => b.onclick = async () => {
+      askHarvest();
+      const missing = askReq.keys.filter((k) => !k.has_value && !(askView.values[k.name] || "").trim());
+      if (missing.length) {
+        askView.error = missing.length === askReq.keys.length
+          ? "Paste the values first."
+          : `Still empty: ${missing.map((k) => k.name).join(", ")}.`;
+        paintAsk();
+        return;
+      }
+      askView.error = "";
+      const target = askTarget();
+      // Only ask for the password when there is a vault that is shut. A device
+      // with nothing sealed yet has nothing to open.
+      if (target?.has_vault && !(vault?.unlocked_workspaces || []).includes(target.id)) {
+        askView.step = "unlock"; paintAsk();
+        document.getElementById("ak-pw")?.focus();
+        return;
+      }
+      await askApply();
+    });
+    ask.querySelectorAll("[data-aunlock]").forEach((b) => b.onclick = () => askUnlockNow());
+    ask.querySelectorAll("[data-abio]").forEach((b) => b.onclick = async () => {
+      askView.busy = true; askView.error = ""; paintAsk();
+      try {
+        vault = await invoke("vault_signin_device", { workspace: askTarget()?.id ?? "" });
+        askView.busy = false;
+        await askApply();
+      } catch (e) {
+        askView.error = String(e); askView.busy = false; paintAsk();
+      }
+    });
+    const form = document.getElementById("ak-form");
+    if (form) form.onsubmit = (e) => { e.preventDefault(); askUnlockNow(); };
+    ask.querySelectorAll("input").forEach((input) => {
+      input.oninput = () => {
+        if (!askView.error) return;
+        askHarvest();
+        const stale = ask.querySelector(".aerr");
+        if (stale && !askView.error) stale.remove();
+      };
+      input.onkeydown = (e) => {
+        if (e.key === "Enter" && askView.step === "review") { e.preventDefault();
+          ask.querySelector("[data-aadd]")?.click(); }
+      };
+    });
+  }
+
+  async function askUnlockNow() {
+    const password = document.getElementById("ak-pw")?.value ?? "";
+    if (!password) { askView.error = "Enter the vault password."; paintAsk(); return; }
+    askView.busy = true; askView.error = ""; paintAsk();
+    try {
+      vault = await invoke("vault_signin", {
+        profile: "", password, duration: "always", workspace: askTarget()?.id ?? "",
+      });
+      unlockWindow();
+      askView.busy = false;
+      await askApply();
+    } catch (e) {
+      askView.error = String(e); askView.busy = false; paintAsk();
+      document.getElementById("ak-pw")?.focus();
+    }
+  }
+
+  /** Ask the backend whether a link is waiting. Called at startup and on the
+   *  event, because a link that arrives during a cold start would otherwise
+   *  fire before this window existed to hear it. */
+  async function loadAsk() {
+    if (!invoke) return;
+    try {
+      const next = await invoke("pending_ask");
+      if (!next) return;
+      askReq = next;
+      askView = { step: "review", values: {}, workspace: next.workspace || "",
+                  picking: false, error: "", busy: false, added: 0, where: "" };
+      paint();
+      ask.querySelector("input")?.focus();
+    } catch { /* an older build without the command */ }
+  }
+
   function paint() {
     if (!state) return;
     paintNav();
@@ -3180,6 +3575,7 @@ passbook oauth connect google:work</pre>
                    broker: brokerPage, record: recordPage }[page]();
     main.innerHTML = lockBanner() + body + noticeBar();
     paintGate();
+    paintAsk();
     dressPage();
 
     main.querySelectorAll("[data-goto]").forEach((b) => b.onclick = () => {
@@ -3662,6 +4058,17 @@ passbook oauth connect google:work</pre>
       try { biometry = await invoke("biometric_status") || biometry; } catch { /* older build */ }
       if (biometry.available) { paintGate(); paint(); }
       announce(state?.broker?.pending);
+      // A link that launched this window fired its event before there was a
+      // window to hear it, so the first question is always "is one waiting?".
+      await loadAsk();
+      const events = window.__TAURI__?.event;
+      if (events?.listen) {
+        events.listen("passbook://ask", () => loadAsk());
+        events.listen("passbook://ask-refused", (e) => {
+          notice = String(e?.payload || "That link could not be read.");
+          paint();
+        });
+      }
     }
     catch (e) { main.innerHTML = `<h2>PassBook</h2><p class="lede err">${esc(String(e))}</p>`; }
   }

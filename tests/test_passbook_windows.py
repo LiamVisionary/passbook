@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import passbook_broker
@@ -98,7 +98,7 @@ def test_the_broker_is_detached_by_a_means_this_platform_has():
     with it — a sign-in that lasted exactly as long as the command that asked
     for one, which looks like the vault re-locking itself at random.
     """
-    source = (REPO / "passbook_broker.py").read_text(encoding="utf-8")
+    source = (REPO / "src" / "passbook_broker.py").read_text(encoding="utf-8")
     assert "_DETACHED_PROCESS" in source
     assert "creationflags" in source
     # The POSIX spelling must still be there for the platforms it works on.
@@ -165,7 +165,7 @@ def test_the_staging_script_collects_every_module_the_cli_imports():
     )
     assert done.returncode == 0, done.stderr
     staged = {path.name for path in (REPO / "app/src-tauri/cli").glob("*.py")}
-    expected = {path.name for path in REPO.glob("passbook*.py")}
+    expected = {path.name for path in (REPO / "src").glob("passbook*.py")}
     assert staged == expected, f"staged {sorted(staged)}, repo has {sorted(expected)}"
 
 

@@ -24,7 +24,8 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO))
+SRC = REPO / "src"
+sys.path.insert(0, str(SRC))
 
 import passbook  # noqa: E402
 import passbook_cli  # noqa: E402
@@ -56,7 +57,7 @@ def cli(*args, home: Path):
     return subprocess.run(
         [sys.executable, "-m", "passbook_cli", *args],
         capture_output=True, text=True, cwd=str(REPO),
-        env={**os.environ, "HIVE_HOME": str(home / "hive"), "PYTHONPATH": str(REPO)},
+        env={**os.environ, "HIVE_HOME": str(home / "hive"), "PYTHONPATH": str(SRC)},
     )
 
 

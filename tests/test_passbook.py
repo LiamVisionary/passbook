@@ -17,14 +17,16 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _platform import assert_private  # noqa: E402
 
 import passbook  # noqa: E402
 
-PACKAGE = Path(__file__).resolve().parents[1]
+REPO = Path(__file__).resolve().parents[1]
+# setuptools looks here too; see package-dir in pyproject.toml.
+PACKAGE = REPO / "src"
 
 
 @pytest.fixture
@@ -285,7 +287,7 @@ def test_an_explicit_hive_home_is_the_way_out_of_a_container(tmp_path, monkeypat
 # ── 9. the two implementations must agree ──────────────────────────────────
 
 
-NODE_TWIN = Path(__file__).resolve().parents[1] / "passbook.mjs"
+NODE_TWIN = Path(__file__).resolve().parents[1] / "src" / "passbook.mjs"
 # ESM imports a URL, not a path. On Windows a bare path is refused outright,
 # and interpolating one through `repr` leaves single backslashes that
 # JavaScript reads as escapes, so `D:\a\passbook` silently becomes
@@ -1221,7 +1223,7 @@ def test_run_hands_the_name_to_what_it_runs(tmp_path, monkeypatch):
     done = subprocess.run(
         [sys.executable, "-m", "passbook_cli", "run", "--app", "an-agent",
          "--", sys.executable, "-c", "import os; print(os.environ.get('PASSBOOK_APP'))"],
-        capture_output=True, text=True, cwd=str(PACKAGE),
+        capture_output=True, text=True, cwd=str(REPO),
         env={**os.environ, "HIVE_HOME": str(home), "PYTHONPATH": str(PACKAGE)},
     )
 

@@ -83,7 +83,8 @@ Write-Output "python:    $chosen $($chosenArgs -join ' ')"
 # does. Set for the child only: this process is about to exit anyway, but a
 # dot-sourced run would otherwise leave it behind.
 $previous = $env:PYTHONPATH
-$env:PYTHONPATH = if ($previous) { "$here;$previous" } else { $here }
+$src = Join-Path $here "src"
+$env:PYTHONPATH = if ($previous) { "$src;$previous" } else { $src }
 try {
     & $chosen @chosenArgs -m passbook_cli install @Rest
     exit $LASTEXITCODE

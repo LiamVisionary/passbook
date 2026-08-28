@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _platform import assert_private, broker_marker  # noqa: E402
@@ -31,7 +31,9 @@ import passbook_broker  # noqa: E402
 pytestmark = broker_marker()
 import passbook_stamp  # noqa: E402
 
-PACKAGE = Path(__file__).resolve().parents[1]
+REPO = Path(__file__).resolve().parents[1]
+# setuptools looks here too; see package-dir in pyproject.toml.
+PACKAGE = REPO / "src"
 
 
 @pytest.fixture

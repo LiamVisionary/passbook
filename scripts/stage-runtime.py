@@ -38,6 +38,8 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+# The modules live under src/, which is where setuptools looks too.
+SRC = ROOT / "src"
 TAURI = ROOT / "app/src-tauri"
 CLI_DIR = TAURI / "cli"
 BIN_DIR = TAURI / "bin"
@@ -89,7 +91,7 @@ def stage_cli() -> list[str]:
         shutil.rmtree(CLI_DIR)
     CLI_DIR.mkdir(parents=True)
     copied = []
-    for source in sorted(ROOT.glob("passbook*.py")):
+    for source in sorted(SRC.glob("passbook*.py")):
         shutil.copy2(source, CLI_DIR / source.name)
         copied.append(source.name)
     # Shipped alongside the code they cover, because this directory is
@@ -106,7 +108,7 @@ def alias_names() -> list[str]:
     done = subprocess.run(
         [sys.executable, "-c",
          "import passbook_cli, json; print(json.dumps(sorted(passbook_cli.aliases())))"],
-        cwd=str(ROOT), capture_output=True, text=True, check=True,
+        cwd=str(SRC), capture_output=True, text=True, check=True,
     )
     return ["passbook", *json.loads(done.stdout)]
 

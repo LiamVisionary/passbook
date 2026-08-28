@@ -23,15 +23,17 @@ import pytest
 needs_a_posix_shell = pytest.mark.skipif(
     os.name == "nt", reason="install.sh and the shims are POSIX shell")
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import passbook  # noqa: E402
 from _platform import WINDOWS, command_file
 
 import passbook_cli  # noqa: E402
 
-PACKAGE = Path(__file__).resolve().parents[1]
-INSTALLER = PACKAGE / "install.sh"
+REPO = Path(__file__).resolve().parents[1]
+# setuptools looks here too; see package-dir in pyproject.toml.
+PACKAGE = REPO / "src"
+INSTALLER = REPO / "install.sh"
 
 
 @pytest.fixture
@@ -45,7 +47,7 @@ def machine(tmp_path, monkeypatch):
 def _install(prefix: Path, *extra: str, home: Path, env: dict | None = None):
     return subprocess.run(
         [sys.executable, "-m", "passbook_cli", "install", "--prefix", str(prefix), *extra],
-        capture_output=True, text=True, cwd=str(PACKAGE),
+        capture_output=True, text=True, cwd=str(REPO),
         env={**os.environ, "HIVE_HOME": str(home), "PYTHONPATH": str(PACKAGE), **(env or {})},
     )
 
@@ -163,7 +165,7 @@ def test_setup_reports_honestly_when_the_runtime_is_missing(machine, crypto_free
     done = subprocess.run(
         [str(crypto_free_python), "-m", "passbook_cli", "install",
          "--prefix", str(machine / "bin"), "--no-runtime"],
-        capture_output=True, text=True, cwd=str(PACKAGE),
+        capture_output=True, text=True, cwd=str(REPO),
         env={**os.environ, "HIVE_HOME": str(machine / "hive"), "PYTHONPATH": str(PACKAGE)},
     )
 
@@ -177,7 +179,7 @@ def test_setup_provisions_a_runtime_when_the_interpreter_lacks_one(machine, cryp
     """The whole point: a machine that cannot pip-install still ends up working."""
     done = subprocess.run(
         [str(crypto_free_python), "-m", "passbook_cli", "install", "--prefix", str(machine / "bin")],
-        capture_output=True, text=True, cwd=str(PACKAGE),
+        capture_output=True, text=True, cwd=str(REPO),
         env={**os.environ, "HIVE_HOME": str(machine / "hive"), "PYTHONPATH": str(PACKAGE)},
     )
 
@@ -204,7 +206,7 @@ def test_setup_never_tells_anyone_to_pip_install_into_their_system_python(machin
     assert "pip install" not in done.stdout + done.stderr
 
     seal = subprocess.run(
-        [sys.executable, "-m", "passbook_cli", "link"], capture_output=True, text=True, cwd=str(PACKAGE),
+        [sys.executable, "-m", "passbook_cli", "link"], capture_output=True, text=True, cwd=str(REPO),
         env={k: v for k, v in os.environ.items() if k != "PATH"}
         | {"HIVE_HOME": str(machine / "hive"), "PYTHONPATH": str(PACKAGE), "PATH": "/nonexistent"},
     )
@@ -274,7 +276,7 @@ def test_every_module_in_the_repo_is_declared_for_install():
         ["tool"]["setuptools"]["py-modules"]
     )
     on_disk = {
-        path.stem for path in repo.glob("passbook*.py")
+        path.stem for path in (repo / "src").glob("passbook*.py")
         if not path.stem.endswith("_test")
     }
     missing = on_disk - declared

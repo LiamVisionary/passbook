@@ -86,6 +86,15 @@ passbook-vault = "passbook_cli:main"
 passbook-set = "passbook_cli:main"
 
 [tool.setuptools]
+# `src/` rather than the repository root. This is the layout the packaging
+# guide recommends, and the reason is not tidiness: with the modules beside the
+# tests, an `import passbook` in a test resolves to the working copy whether or
+# not the install worked. From `src/` it cannot, so a broken install fails in
+# CI instead of on somebody's machine.
+#
+# They stay loose modules rather than becoming a package, because `passbook.py`
+# is meant to be copied into a project as one file. A package would end that.
+package-dir = { "" = "src" }
 # Every module, or the installed tool is quietly missing features. This list
 # went stale once and shipped without the vault, the access modes, the keystore
 # and the peer check — all of which import fine from a checkout, so nothing
@@ -117,4 +126,4 @@ py-modules = [
 ]
 
 [tool.setuptools.data-files]
-"share/passbook" = ["docs/SPEC.md", "docs/SIGNING.md", "docs/AGENT_PROMPT.md", "passbook.mjs"]
+"share/passbook" = ["docs/SPEC.md", "docs/SIGNING.md", "docs/AGENT_PROMPT.md", "src/passbook.mjs"]

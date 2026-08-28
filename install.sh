@@ -59,4 +59,4 @@ if [ -z "$chosen" ]; then
 fi
 
 echo "python:    $chosen"
-PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}" exec "$chosen" -m passbook_cli install "$@"
+PYTHONPATH="$here/src${PYTHONPATH:+:$PYTHONPATH}" exec "$chosen" -m passbook_cli install "$@"

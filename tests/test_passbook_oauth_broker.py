@@ -23,7 +23,7 @@ import pytest
 
 from _platform import broker_marker
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import passbook  # noqa: E402

@@ -1580,6 +1580,149 @@ def cmd_umbrella_delete(args: argparse.Namespace) -> int:
     return 0
 
 
+# ── keeping this copy current ───────────────────────────────────────────────
+#
+# PassBook installs from a git URL, which resolves once and then never moves.
+# HivemindOS's setup script made that worse by design: `install_passbook` skips
+# when a `passbook` is already on PATH, so a machine set up months ago keeps the
+# version it was set up with for as long as it exists, and every later update
+# confirms it is "already installed".
+#
+# The cost is not abstract. A dead end fixed before 1.0.0 — `add` on a sealed
+# store sending you to `signin`, which refused because no broker was running —
+# was still being hit on a machine whose CLI predated the fix. Nothing on that
+# machine could say so: there was no version to print and no way to move.
+
+REPOSITORY = "https://github.com/LiamVisionary/passbook"
+RELEASES_API = "https://api.github.com/repos/LiamVisionary/passbook/releases/latest"
+
+
+def installed_version() -> str:
+    """What this copy is, from the metadata its installer wrote."""
+    try:
+        from importlib.metadata import PackageNotFoundError, version
+
+        return version("passbook")
+    except Exception:  # noqa: BLE001 — a checkout has no metadata, and that is fine
+        return ""
+
+
+def latest_version(*, timeout: float = 10.0) -> tuple[str, str]:
+    """The newest published release, as (version, tag). Empty when unreachable.
+
+    Anonymous: this is a public repository, and a self-update that needed a
+    token would be one nobody could run.
+    """
+    import urllib.request
+
+    try:
+        request = urllib.request.Request(
+            RELEASES_API, headers={"Accept": "application/vnd.github+json",
+                                   "User-Agent": "passbook-update"})
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except Exception:  # noqa: BLE001 — offline is not an error worth a traceback
+        return "", ""
+    tag = str(payload.get("tag_name") or "").strip()
+    return tag.lstrip("v"), tag
+
+
+def _as_numbers(text: str) -> tuple:
+    parts = []
+    for chunk in str(text).split("."):
+        digits = "".join(c for c in chunk if c.isdigit())
+        parts.append(int(digits) if digits else 0)
+    return tuple(parts)
+
+
+def install_method() -> tuple[str, list[str]]:
+    """How this copy got here, and the command that would replace it.
+
+    Asked of the path the module actually loaded from rather than of the
+    machine, because a box can have uv AND pipx AND a pip install, and
+    upgrading the one this process is not running from would report success
+    and change nothing.
+    """
+    here = str(Path(passbook.__file__).resolve())
+    source = os.environ.get("PASSBOOK_SOURCE", f"git+{REPOSITORY}")
+
+    if "/uv/tools/" in here:
+        return "uv tool", ["uv", "tool", "install", "--force", source]
+    if "/pipx/venvs/" in here:
+        return "pipx", ["pipx", "install", "--force", source]
+    # The app carries its own copy under `cli/`, beside a private runtime. That
+    # one is replaced when the app is, and pip would write into the bundle.
+    if f"{os.sep}cli{os.sep}" in here or ".app/Contents/" in here:
+        return "bundled with the app", []
+    # A checkout on PYTHONPATH is somebody's working copy and `git pull` is its
+    # update. Anything that reached site-packages was installed by something and
+    # can be replaced in place.
+    if "site-packages" not in here:
+        return "a checkout", []
+    # `uv venv` does not put pip in the environment it makes, so the obvious
+    # `python -m pip install --upgrade` fails there with "No module named pip"
+    # on exactly the machines most likely to have uv. Ask this interpreter
+    # whether it has pip rather than assuming every environment does.
+    has_pip = subprocess.run([sys.executable, "-c", "import pip"],
+                             capture_output=True).returncode == 0
+    if has_pip:
+        return "pip", [sys.executable, "-m", "pip", "install", "--upgrade", source]
+    if shutil.which("uv"):
+        return "uv", ["uv", "pip", "install", "--python", sys.executable, source]
+    return "pip", [sys.executable, "-m", "pip", "install", "--upgrade", source]
+
+
+def cmd_update(args: argparse.Namespace) -> int:
+    """Say what this copy is, what the newest one is, and move to it."""
+    current = installed_version()
+    newest, tag = latest_version()
+    method, command = install_method()
+
+    if getattr(args, "json", False):
+        print(json.dumps({"installed": current, "latest": newest, "tag": tag,
+                          "method": method, "can_update": bool(command),
+                          "behind": bool(current and newest
+                                         and _as_numbers(current) < _as_numbers(newest))},
+                         indent=2))
+        return 0
+
+    print(f"installed: {current or 'unknown (installed from a checkout)'}")
+    if not newest:
+        print("latest:    could not reach GitHub")
+    else:
+        print(f"latest:    {newest}")
+    print(f"installed by: {method}")
+
+    if not newest:
+        return _fail("Could not check for a newer version.",
+                     f"Update by hand:  uv tool install --force git+{REPOSITORY}")
+    if current and _as_numbers(current) >= _as_numbers(newest):
+        print("\nThis is the newest release.")
+        return 0
+    if args.check:
+        print(f"\n{newest} is available.  passbook update")
+        return 0
+    if not command:
+        return _fail(
+            f"This copy is {method}, so it is not this command's to replace.",
+            "Update the app itself; the command line inside it comes with it."
+            if "app" in method else
+            f"From a checkout:  git pull\nOr install it properly:  uv tool install --force git+{REPOSITORY}")
+
+    # Pinned to the release rather than to the branch: the tag is the build that
+    # was tested and published, and `update` that lands on an untested commit is
+    # a worse thing to have than no `update` at all.
+    pinned = [part if not part.startswith("git+") else f"{part}@{tag}" for part in command]
+    print(f"\nUpdating to {newest} ...")
+    done = subprocess.run(pinned, capture_output=True, text=True)
+    if done.returncode != 0:
+        return _fail("The update did not go through.",
+                     (done.stderr or done.stdout).strip()[:400]
+                     or f"Run it by hand:  {' '.join(pinned)}")
+    print(f"Updated to {newest}.")
+    return 0
+
+
 def cmd_agents(args: argparse.Namespace) -> int:
     """Who each key is for. The inverse of `policy`, which is per-app."""
     catalog = _catalog()
@@ -3596,6 +3739,15 @@ def build_parser() -> argparse.ArgumentParser:
                               help="forget the sign-in but leave its keys in the store")
     oauth_remove.set_defaults(json=False, func=cmd_oauth_remove)
 
+    parser.add_argument("--version", action="store_true",
+                        help="print the installed version and exit")
+
+    update_cmd = subs.add_parser("update", help="move this copy to the newest release")
+    update_cmd.add_argument("--check", action="store_true",
+                            help="say whether one is available and stop")
+    update_cmd.add_argument("--json", action="store_true")
+    update_cmd.set_defaults(func=cmd_update)
+
     mcp = subs.add_parser("mcp", help="speak MCP on stdio so any agent can find these credentials")
     mcp.set_defaults(func=cmd_mcp)
 
@@ -3932,7 +4084,15 @@ def main(argv: list[str] | None = None) -> int:
     known = aliases()
     if invoked in known:
         argv.insert(0, known[invoked])
+    # Handled before dispatch, because `--version` has no subcommand and every
+    # other path here requires one.
+    if argv and argv[0] in ("--version", "-V"):
+        print(installed_version() or "unknown (running from a checkout)")
+        return 0
     args = build_parser().parse_args(argv)
+    if getattr(args, "version", False):
+        print(installed_version() or "unknown (running from a checkout)")
+        return 0
     return int(args.func(args) or 0)
 
 

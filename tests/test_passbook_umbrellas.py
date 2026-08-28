@@ -317,3 +317,41 @@ def test_an_umbrella_never_carries_a_value(store):
     cli("umbrella", "new", "ai apps", home=store)
     cli("umbrella", "add", "ai-apps", "OPENAI_API_KEY", home=store)
     assert "not-real" not in cli("umbrella", "--json", home=store).stdout
+
+
+# ── knowing what this copy is ───────────────────────────────────────────────
+
+
+def test_the_cli_can_say_what_version_it_is():
+    """A copy that cannot name itself cannot be diagnosed. A dead end fixed
+    before 1.0.0 was still being hit months later on a machine whose CLI
+    predated the fix, and nothing on that machine could say so."""
+    import passbook_cli
+    assert passbook_cli.installed_version()  # from the installed metadata
+
+
+def test_a_checkout_is_not_something_update_replaces():
+    """`git pull` is a checkout's update. pip writing over somebody's working
+    copy is not an improvement on that."""
+    import passbook_cli
+    method, command = passbook_cli.install_method()
+    if method == "a checkout":
+        assert command == []
+
+
+def test_versions_compare_as_numbers_not_as_text():
+    """`1.10.0` is newer than `1.9.0`, which string comparison gets backwards
+    and would report an update as already installed."""
+    import passbook_cli
+    assert passbook_cli._as_numbers("1.10.0") > passbook_cli._as_numbers("1.9.0")
+    assert passbook_cli._as_numbers("1.1.0") > passbook_cli._as_numbers("1.0.9")
+    assert passbook_cli._as_numbers("v1.1.0".lstrip("v")) == (1, 1, 0)
+
+
+def test_being_offline_is_not_a_traceback(monkeypatch):
+    """A self-update that explodes when GitHub is unreachable is worse than
+    one that says it could not check."""
+    import passbook_cli
+    monkeypatch.setattr("urllib.request.urlopen",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("no network")))
+    assert passbook_cli.latest_version() == ("", "")

@@ -2,6 +2,38 @@
 
 All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
+## [1.1.1] — 2026-08-28
+
+### `passbook update`, and knowing what you are running
+
+PassBook installs from a git URL, which resolves once and then never moves.
+HivemindOS's setup script made that permanent: it returned the moment a
+`passbook` was on PATH, so a machine kept the version it was set up with and
+every later update confirmed it was "already installed".
+
+That is how a dead end fixed before 1.0.0 was still being hit weeks after the
+fix shipped — `add` on a sealed store sending you to `signin`, which refused
+because no broker was running. Nothing on the machine could say what it was
+running, and nothing could move it.
+
+- **`passbook update`** moves this copy to the newest release, pinned to the
+  tag rather than the branch: an update that lands on an untested commit is
+  worse than no update. `--check` reports without installing; `--json` for
+  scripts.
+- **`passbook --version`**, which costs nothing — no network, no store, no
+  policy. A copy that cannot name itself cannot be diagnosed.
+- The upgrade asks the interpreter whether it has pip rather than assuming.
+  `uv venv` creates environments without it, so the obvious
+  `python -m pip install --upgrade` failed on exactly the machines most likely
+  to have uv; it falls back to `uv pip` there.
+- Versions compare as numbers, so `1.10.0` is newer than `1.9.0` rather than
+  older.
+
+A copy older than this release has no `update` command to run, so it cannot
+lift itself. The fix for those is a reinstall, or a HivemindOS setup run:
+`install_passbook` refreshes every time now, and keeps the working copy when
+the refresh cannot reach the network.
+
 ## [1.1.0] — 2026-08-28
 
 ### Umbrellas

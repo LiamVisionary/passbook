@@ -16,7 +16,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "passbook"
-version = "1.1.0"
+version = "1.1.1"
 description = "One credential store per machine, shared by every app that opts in."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -83,6 +83,7 @@ passbook-status = "passbook_cli:main"
 passbook-unlock = "passbook_cli:main"
 passbook-umbrella = "passbook_cli:main"
 passbook-unseal = "passbook_cli:main"
+passbook-update = "passbook_cli:main"
 passbook-vault = "passbook_cli:main"
 passbook-set = "passbook_cli:main"
 

@@ -104,8 +104,17 @@ def test_an_answer_cannot_be_applied_to_a_different_request():
 
 
 def test_the_request_outranks_the_sign_in_sheet():
-    """Otherwise a person signs in first and reads what they approved second."""
-    assert "if (askShouldShow()) return false;" in WINDOW
+    """Otherwise a person signs in first and reads what they approved second.
+
+    The .env import sheet shares the same element, and both have to outrank the
+    gate: the repaint used to take the import sheet down and drop the sign-in
+    screen on top of it, mid-decision.
+    """
+    gate = WINDOW[WINDOW.index("function gateShouldShow()"):]
+    gate = gate[:gate.index("function gateTiles()")]
+    assert "askShouldShow()" in gate, "a credential request does not outrank the gate"
+    assert "impShouldShow()" in gate, "an import does not outrank the gate"
+    assert "return false" in gate
 
 
 # ── what the window shows about the asker ───────────────────────────────────

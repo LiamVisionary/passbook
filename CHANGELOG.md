@@ -78,6 +78,29 @@ the machine, which this project's spec explicitly forbids a policy from doing.
 The Agent runs as you and keeps all three, while the code and the thing that
 starts it stop being yours to edit.
 
+### The shortest way in was neither of those
+
+Refusing a debugger and owning the code both assume an attacker has to subvert
+something. On the machine this was written, nothing needed subverting:
+
+    $ security find-generic-password -s hive-env-vault -w
+    <44 bytes of vault key material>
+
+That is the **device factor** — an opt-in that exists so a headless job can open
+the vault with nobody there to type a password. `passbook_keystore` has always
+said what it costs, in its own docstring: "anything running as you can open the
+vault." It was on, and it was the whole attack.
+
+- **`passbook harden`** now checks for it and reports it first, above the
+  debugger and the code, because it is the cheapest of the three to exploit.
+- **`--keychain-prompt`** rewrites the item with an empty trusted-application
+  list, so every read asks a person. An agent cannot answer that prompt.
+
+It is offered, never applied. The prompt breaks the exact thing the device
+factor is for, and only the owner knows whether anything here runs unattended —
+a watchdog that silently stops surviving reboots is a worse outcome than the
+exposure it was traded for.
+
 ### Known
 
 - **Root defeats all of it.** That is the ceiling of any user-space mechanism.

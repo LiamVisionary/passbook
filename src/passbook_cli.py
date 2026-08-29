@@ -3449,6 +3449,25 @@ def cmd_harden(args: argparse.Namespace) -> int:
         print("The broker is yours again. Start one:  passbook broker start")
         return 0
 
+    if args.keychain_prompt:
+        exposure = passbook_harden.keychain_exposure()
+        if not exposure.get("exposed"):
+            print(exposure.get("why", "nothing to tighten."))
+            return 0
+        print("This makes every read of the vault key ask a person.")
+        print(f"Cost: {exposure['cost']}")
+        try:
+            if input("Type 'prompt' to continue: ").strip() != "prompt":
+                return _fail("Left alone.")
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return _fail("Left alone.")
+        answer = passbook_harden.require_keychain_prompt()
+        if not answer.get("ok"):
+            return _fail(answer.get("why", "could not tighten it"))
+        print(f"\nDone. {answer['note']}")
+        return 0
+
     if args.install:
         answer = passbook_harden.install()
         if answer.get("needs_root"):
@@ -4511,6 +4530,9 @@ def build_parser() -> argparse.ArgumentParser:
     harden_cmd.add_argument("--install", action="store_true",
                             help="install PassBook as root-owned code with a root-owned start")
     harden_cmd.add_argument("--undo", action="store_true", help="put the machine back")
+    harden_cmd.add_argument("--keychain-prompt", action="store_true",
+                            dest="keychain_prompt",
+                            help="make every read of the vault key ask a person")
     harden_cmd.add_argument("--plan", action="store_true", help="show exactly what --install does")
     harden_cmd.add_argument("--json", action="store_true")
     harden_cmd.set_defaults(func=cmd_harden)

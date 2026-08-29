@@ -254,7 +254,15 @@ def posture(*, runtime: Path | None = None, plist: Path | None = None) -> dict[s
         "runtime_installed": runtime.exists(),
     }
 
+    # Checked last and reported first, because on the machine this was written
+    # it was the shortest way in by a wide margin: one command, no prompt.
+    findings["keychain"] = keychain_exposure()
+
     gaps = []
+    if findings["keychain"].get("exposed"):
+        gaps.append("vault key material comes back from `security "
+                    "find-generic-password` with no prompt, so anything running "
+                    "as you can open the vault without a debugger or an edit")
     if findings["code"]["writable_by_you"]:
         gaps.append("anything running as you can edit PassBook's own code, "
                     "including the part that removes secrets from output")
@@ -385,3 +393,118 @@ def undo(*, runtime: Path | None = None, plist: Path | None = None) -> dict[str,
         shutil.rmtree(runtime)
         removed.append(str(runtime))
     return {"ok": True, "removed": removed}
+
+
+# ── the keychain item, which turned out to be the shortest way in ───────────
+#
+# The device factor exists so a headless job can open the vault with nobody
+# there to type a password. `passbook_keystore` is blunt about the cost in its
+# own docstring — "anything running as you can open the vault" — and on the
+# machine this was written that was not a footnote, it was the whole attack:
+#
+#     $ security find-generic-password -s hive-env-vault -w
+#     <44 bytes of key material>
+#
+# No debugger, no edited module, no prompt. Refusing a debugger and owning the
+# code do nothing about it, because nothing is being subverted — the key is
+# simply being asked for, by a caller the keychain has no reason to doubt.
+#
+# macOS can doubt it. A keychain item carries an access control list naming the
+# programs allowed to read it without asking, and an item created with an EMPTY
+# list prompts for every reader. A person clicks Allow; an agent cannot.
+#
+# The cost is exactly the thing the device factor was for. A prompt means no
+# headless open, so this is offered and reported, never applied on somebody's
+# behalf — a watchdog that silently stops surviving reboots is a worse outcome
+# than the exposure, and only the owner knows which they have.
+
+KEYCHAIN_SERVICE = "hive-env-vault"
+
+
+def keychain_exposure(*, service: str = KEYCHAIN_SERVICE) -> dict[str, Any]:
+    """Whether vault key material can be fetched without anyone being asked.
+
+    Reads the item to find out, which is the only honest test — an item that
+    exists but prompts is not exposed, and nothing short of asking for it
+    distinguishes the two. The value is never returned, kept, or logged; only
+    whether one arrived.
+    """
+    if sys.platform != "darwin":
+        return {"applies": False, "why": "the keychain check is macOS-only"}
+    try:
+        found = subprocess.run(
+            ["/usr/bin/security", "find-generic-password", "-s", service, "-w"],
+            capture_output=True, timeout=10)
+    except (OSError, subprocess.SubprocessError) as error:
+        return {"applies": True, "exposed": False, "why": f"could not check: {error}"}
+
+    if found.returncode != 0:
+        return {"applies": True, "exposed": False,
+                "why": "no vault key is stored in the keychain on this machine"}
+    # Length only. The value is deliberately not bound to a name anywhere here.
+    got = len(found.stdout.strip())
+    return {
+        "applies": True,
+        "exposed": got > 0,
+        "service": service,
+        "why": (f"{got} bytes of vault key material came back with no prompt, so "
+                f"anything running as you can open the vault"),
+        "fix": "passbook harden --keychain-prompt",
+        "cost": ("every reader is then asked, including a headless job — which is "
+                 "the whole reason the device factor exists. Remove the factor "
+                 "instead if nothing here runs unattended."),
+    }
+
+
+def require_keychain_prompt(*, service: str = KEYCHAIN_SERVICE) -> dict[str, Any]:
+    """Rewrite the item so every reader must be approved by a person.
+
+    Re-created rather than modified: `security` offers no way to narrow an
+    existing item's access list, so the value is read once, deleted, and written
+    back with an empty trusted-application list. That read is the reason this
+    refuses to run when it cannot verify it got something — writing back an
+    empty value would destroy the device factor rather than protect it.
+    """
+    if sys.platform != "darwin":
+        return {"ok": False, "why": "macOS-only"}
+    account = None
+    try:
+        # -g puts the value on stderr and the attributes on stdout, which is how
+        # the account name comes back alongside it.
+        shown = subprocess.run(
+            ["/usr/bin/security", "find-generic-password", "-s", service, "-g"],
+            capture_output=True, text=True, timeout=10)
+        if shown.returncode != 0:
+            return {"ok": False, "why": "no such keychain item; nothing to tighten"}
+        for line in shown.stdout.splitlines():
+            if line.strip().startswith('"acct"'):
+                account = line.split("=", 1)[1].strip().strip('"')
+        secret = subprocess.run(
+            ["/usr/bin/security", "find-generic-password", "-s", service, "-w"],
+            capture_output=True, text=True, timeout=10).stdout.strip()
+    except (OSError, subprocess.SubprocessError) as error:
+        return {"ok": False, "why": f"could not read the item: {error}"}
+
+    if not secret or not account:
+        # Refusing here is the whole safety of this function. Continuing would
+        # delete a working device factor and write back nothing.
+        return {"ok": False,
+                "why": "could not read the existing item, so it was left alone"}
+
+    try:
+        subprocess.run(["/usr/bin/security", "delete-generic-password",
+                        "-s", service, "-a", account],
+                       capture_output=True, timeout=10, check=True)
+        # No -T at all: an empty trusted-application list, so every reader is
+        # asked. -U updates in place if anything raced us to recreate it.
+        subprocess.run(["/usr/bin/security", "add-generic-password", "-U",
+                        "-s", service, "-a", account, "-w", secret],
+                       capture_output=True, timeout=10, check=True)
+    except subprocess.CalledProcessError as error:
+        return {"ok": False,
+                "why": f"security failed: {(error.stderr or b'').decode()[:160]}"}
+    finally:
+        del secret
+    return {"ok": True, "service": service,
+            "note": "every read of this item now asks a person. Headless opens "
+                    "will stop working; that is the trade."}

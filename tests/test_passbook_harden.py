@@ -213,3 +213,73 @@ def test_it_is_a_launch_agent_not_a_daemon():
     this project's own spec forbids a policy from doing."""
     assert "LaunchAgents" in str(harden.AGENT_PLIST)
     assert "LaunchDaemons" not in str(harden.AGENT_PLIST)
+
+
+# ── the keychain item ──────────────────────────────────────────────────────
+
+
+def test_the_keychain_check_is_reported_as_inapplicable_off_macos(monkeypatch):
+    monkeypatch.setattr(harden.sys, "platform", "linux")
+    assert harden.keychain_exposure()["applies"] is False
+
+
+def test_a_missing_item_is_not_an_exposure(monkeypatch):
+    """"No key stored" and "a key anyone can read" are opposite findings, and
+    reporting the first as the second would send someone to remove a device
+    factor they never had."""
+    class _Gone:
+        returncode = 1
+        stdout = b""
+
+    monkeypatch.setattr(harden.sys, "platform", "darwin")
+    monkeypatch.setattr(harden.subprocess, "run", lambda *a, **k: _Gone())
+    answer = harden.keychain_exposure()
+    assert answer["applies"] is True and answer["exposed"] is False
+
+
+def test_an_item_that_answers_without_a_prompt_is_an_exposure(monkeypatch):
+    class _Got:
+        returncode = 0
+        stdout = b"forty-four-bytes-of-key-material-here-xxxxxx"
+
+    monkeypatch.setattr(harden.sys, "platform", "darwin")
+    monkeypatch.setattr(harden.subprocess, "run", lambda *a, **k: _Got())
+    answer = harden.keychain_exposure()
+    assert answer["exposed"] is True
+    # The fix must come with its cost attached; this one breaks the exact thing
+    # the device factor exists for.
+    assert answer["fix"] and "headless" in answer["cost"]
+
+
+def test_the_value_is_never_carried_in_the_finding(monkeypatch):
+    """The check has to read the secret to know it is readable. It must not
+    then hand it onward — this is a status surface."""
+    secret = "forty-four-bytes-of-key-material-here-xxxxxx"
+
+    class _Got:
+        returncode = 0
+        stdout = secret.encode()
+
+    monkeypatch.setattr(harden.sys, "platform", "darwin")
+    monkeypatch.setattr(harden.subprocess, "run", lambda *a, **k: _Got())
+    import json as _json
+
+    assert secret not in _json.dumps(harden.keychain_exposure())
+
+
+def test_it_refuses_to_rewrite_the_item_when_it_could_not_read_it(monkeypatch):
+    """The one that matters. Deleting the item and writing back an empty value
+    would destroy the device factor while claiming to protect it."""
+    class _Empty:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    monkeypatch.setattr(harden.sys, "platform", "darwin")
+    monkeypatch.setattr(harden.subprocess, "run", lambda *a, **k: _Empty())
+
+    def explode(*a, **k):  # pragma: no cover - must never be reached
+        raise AssertionError("it deleted the item without a value in hand")
+
+    answer = harden.require_keychain_prompt()
+    assert answer["ok"] is False and "left alone" in answer["why"]

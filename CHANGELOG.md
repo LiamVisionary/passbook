@@ -2,6 +2,58 @@
 
 All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
+## [1.2.0] — 2026-08-29
+
+### The agents on this machine are told PassBook is here
+
+PassBook installed 46 commands and an MCP server and told nobody. An agent on a
+PassBook machine knew only whatever some other installer had taught it, which on
+a HivemindOS box meant `hive-env-check` and `hive-env-run` — both of which work,
+and neither of which knows the word "sealed".
+
+That gap looked like a PassBook bug from the outside. On a sealed store
+`hive-env-run` correctly DROPS the values it cannot open, so an agent asking
+after a key saw it as missing, said so, and sometimes offered to add it again —
+over a credential that was there the whole time behind a locked vault.
+
+- **`passbook brief`** writes a short block into the context file each coding
+  agent already reads: what the store is, how to ask, never print a value, and
+  the three states that matter — absent (`passbook add`), sealed with the vault
+  locked (`passbook signin`), and refused by policy (`passbook umbrella`).
+  Reporting a sealed or refused key as missing is the mistake it exists to stop.
+- **Fifteen runtimes**: Claude Code, Codex, Gemini CLI, Amp, opencode, Cursor,
+  Windsurf, Cline, Qwen, Continue, Goose, Crush, Hermes, OpenClaw and AEON.
+  Written only where a runtime has left a footprint under `$HOME`.
+- **The MCP server is registered** with the nine that keep an editable server
+  list, so an agent gets `list_credentials`, `check_credentials`,
+  `get_credential`, `vault_status` and the OAuth pair as tools rather than
+  commands to shell out to.
+- **However PassBook arrived.** `passbook install` and `install.sh` do it, the
+  desktop app does it in its setup hook, and — because `uv tool install` puts 46
+  commands on PATH and executes none of them — the first command anybody types
+  does it too. That notice goes to stderr, never stdout: `passbook get` prints
+  `KEY=value` and people pipe it into `eval`.
+- `brief remove` takes it back out. `PASSBOOK_NO_BRIEF=1` is the escape hatch.
+  The broker and the MCP server never brief, because a daemon editing
+  `~/.claude/CLAUDE.md` after the terminal closed is not a thing to ship.
+
+Every one of these files belongs to another tool and several already carry a
+HivemindOS block, so the text lives between markers, only that span is
+rewritten, a backup is left beside the original, and the write is atomic.
+
+There is no `~/AGENTS.md`, which is worth saying because it is the obvious
+guess. AGENTS.md is a real standard and it is PROJECT scoped — repo root,
+nested files for subprojects, nearest wins. Global context is per-runtime
+convention; the nearest thing to a universal one is Amp's `~/.config/AGENTS.md`.
+
+### Known
+
+Six of the fifteen runtimes were verified on a machine that has them. The other
+nine come from documentation: their context paths are low risk, but if one keeps
+its MCP servers in a shape other than a root `mcpServers` object, registration
+writes a key that runtime ignores. Nothing breaks — the write is additive and
+backed up — it simply would not take effect.
+
 ## [1.1.1] — 2026-08-28
 
 ### `passbook update`, and knowing what you are running

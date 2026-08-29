@@ -1,6 +1,6 @@
 [package]
 name = "passbook-app"
-version = "1.1.1"
+version = "1.2.0"
 description = "PassBook — the credentials this machine shares, and who may use them"
 authors = ["Rizzma Inc."]
 edition = "2021"

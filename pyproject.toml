@@ -51,6 +51,7 @@ passbook-delete = "passbook_cli:main"
 passbook-get = "passbook_cli:main"
 passbook-grants = "passbook_cli:main"
 passbook-guard = "passbook_cli:main"
+passbook-harden = "passbook_cli:main"
 passbook-history = "passbook_cli:main"
 passbook-install = "passbook_cli:main"
 passbook-link = "passbook_cli:main"
@@ -120,6 +121,7 @@ py-modules = [
     "passbook_cli",
     "passbook_fleet",
     "passbook_grant",
+    "passbook_harden",
     "passbook_keystore",
     "passbook_link",
     "passbook_mcp",

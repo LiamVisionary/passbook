@@ -861,6 +861,10 @@ HTTP_REFRESH_WAIT = 30.0
 # these" a question with an answer, and it never leaves this process — the token
 # in a child's environment is a handle to a row here, not the row itself.
 
+# What `deny_debugger` answered when this broker started. The kernel offers no
+# way to read the flag back, so the one call is recorded rather than re-asked.
+_HARDENED: dict[str, Any] = {"ok": False, "how": "not attempted"}
+
 _GRANTS: dict[str, dict[str, Any]] = {}
 _GRANT_LOCK = threading.Lock()
 
@@ -1277,7 +1281,8 @@ def _handle(payload: Mapping[str, Any], root: Path | None = None,
     if operation == "proxy":
         return _proxy(payload, root, caller)
     if operation == "grants":
-        return {"ok": True, "grants": live_grants(), "reads": reads_mode(read_policy(root))}
+        return {"ok": True, "grants": live_grants(), "reads": reads_mode(read_policy(root)),
+                "hardened": dict(_HARDENED)}
     if operation != "request":
         return {"ok": False, "error": "unknown operation"}
 
@@ -1423,6 +1428,20 @@ def serve(*, root: Path | None = None, ready: threading.Event | None = None) -> 
     store_root(root).mkdir(parents=True, exist_ok=True)
     if running(root=root):
         raise RuntimeError(f"A broker is already listening on {endpoint(root)}")
+
+    # Before the socket exists, and before any key is ever opened here. This
+    # process is about to hold the data key in memory, and on a stock macOS
+    # `lldb -p <pid>` would read it straight out — no exploit, no root, a tool
+    # that ships with the OS. Refusing the attach is the wall beside the door
+    # every other check in this file is guarding.
+    global _HARDENED
+    try:
+        import passbook_harden
+
+        _HARDENED = passbook_harden.deny_debugger()
+    except ImportError:
+        _HARDENED = {"ok": False, "how": "not installed",
+                     "why": "process hardening is not installed on this machine"}
 
     server = _listen(root)
 

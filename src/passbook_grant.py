@@ -63,15 +63,28 @@ promoted, and `guarded()` is what reports which are.
 
 ## What this still does not buy
 
-The broker and the caller share a uid. A caller determined to write custom code
-can attach a debugger to the broker or to the child it spawned, and read the
-value out of memory. Closing *that* needs a privilege boundary — the broker
-under its own service account, the data key bound in the keychain to signed
-callers — and that is an installation-shaped project, not a module.
+The broker and the caller share a uid, so for a while the honest caveat here was
+that a caller could attach a debugger to the broker or to the child it spawned
+and read the value out of memory. That turned out to cost nothing at all —
+`lldb` ships with macOS and attached to both on the first try — so it is no
+longer a caveat. `passbook_harden` closes it: the broker refuses debugger
+attachment before it opens its socket, and every child is hardened between fork
+and exec, which works because the flag survives the exec into a binary that has
+never heard of PassBook.
 
-So this raises the cost of reading a credential from "type one command" to
-"write a debugger harness, against a process that is recording you". It does not
-make it impossible, and nothing that runs as the same user could.
+What remains:
+
+**Root wins.** Everywhere, always. The bar is now "root" rather than "anything
+running as you", which is the whole of what a user-space mechanism can reach.
+
+**A command still does what it likes with what it was given.** Redaction scrubs
+our output, not the network. Only `command_allowed` and `host_allowed` constrain
+that, and only for keys somebody bound.
+
+**The code is writable.** PassBook installs under the user's own home, so a
+caller that can write files can edit this module to stop redacting. Closing that
+needs the daemon's own files owned by another account — a privilege boundary at
+installation time, not a syscall.
 """
 
 from __future__ import annotations
@@ -306,7 +319,8 @@ def stream(command: Sequence[str], values: Mapping[str, str], *,
     try:
         child = subprocess.Popen(  # noqa: S603 — argv is a list, never a shell string
             argv, cwd=cwd or None, env=env,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            preexec_fn=_hardened_child())
     except FileNotFoundError:
         return {"ok": False, "error": f"command not found: {argv[0]}"}
     except PermissionError:
@@ -467,6 +481,29 @@ def _child_env(values: Mapping[str, str], *, extra: Mapping[str, str] | None,
     return env
 
 
+def _hardened_child():
+    """The `preexec_fn` that makes a spawned child refuse debuggers.
+
+    The child is what actually holds the credential — in its environment, for
+    as long as it runs — so hardening the broker and not its children would
+    protect the data key and leave the secret sitting in the open. The flag
+    survives `exec`, which is what lets this work on a binary that has never
+    heard of PassBook.
+
+    None on a platform that cannot do it, because `preexec_fn` must be None
+    rather than a no-op there: it is unsupported on Windows and passing any
+    callable raises before the command ever runs.
+    """
+    if os.name == "nt":
+        return None
+    try:
+        import passbook_harden
+
+        return passbook_harden.preexec if passbook_harden.available() else None
+    except ImportError:
+        return None
+
+
 def spawn(command: Sequence[str], values: Mapping[str, str], *,
           app: str = "", cwd: str = "", extra_env: Mapping[str, str] | None = None,
           timeout: float = DEFAULT_TIMEOUT, detach: bool = False,
@@ -496,12 +533,12 @@ def spawn(command: Sequence[str], values: Mapping[str, str], *,
             child = subprocess.Popen(  # noqa: S603 — argv is a list, never a shell string
                 argv, cwd=where, env=env,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                start_new_session=True)
+                start_new_session=True, preexec_fn=_hardened_child())
             return {"ok": True, "detached": True, "pid": child.pid,
                     "grant": token, "keys": sorted(values), "seconds": 0.0}
         done = subprocess.run(  # noqa: S603 — argv is a list, never a shell string
             argv, cwd=where, env=env, capture_output=True, text=True,
-            timeout=timeout, errors="replace")
+            timeout=timeout, errors="replace", preexec_fn=_hardened_child())
     except FileNotFoundError:
         return {"ok": False, "error": f"command not found: {argv[0]}"}
     except PermissionError:

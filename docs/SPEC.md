@@ -245,8 +245,8 @@ Reference implementation: `passbook_grant.py`.
 ## Nothing else may become required
 
 Every optional part of this standard — stamping, sealing, linking, brokering,
-access modes, using without reading — must leave a bare implementation working
-on its own. Concretely:
+access modes, using without reading, process hardening — must leave a bare
+implementation working on its own. Concretely:
 
 1. an app that vendors only the store implementation resolves credentials with
    no daemon, no companion module and no other application installed

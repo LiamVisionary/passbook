@@ -47,12 +47,43 @@ not pass through as two clean halves. Two real bugs were caught proving it: the
 first version missed `echo $S | base64` entirely (the newline shifts the tail),
 and the second emitted a form straddling its own buffer cut before redacting it.
 
+### The debugger hole, which turned out not to need custom code
+
+The caveat above was written as "a caller willing to write custom code could
+read a value out of process memory". Measured, it cost one command:
+
+    $ lldb -p <broker pid>
+    Process 51698 stopped
+
+`lldb` ships with macOS and carries the debugger entitlement, so it attaches to
+an unsigned same-uid process without ceremony — the broker holding the data key,
+and every child holding a credential in its environment.
+
+- **`ptrace(PT_DENY_ATTACH)`** in the broker before it opens its socket, and in
+  every spawned child between fork and exec. `lldb` now gets `attach failed` and
+  the target survives. Verified against `lldb` in the test suite, with a control
+  case, because a denied attach on a machine where nothing attaches proves
+  nothing. Linux gets `prctl(PR_SET_DUMPABLE, 0)`; Windows says it cannot.
+- The flag **survives exec**, which is why a child works at all — `wrangler` and
+  `npm` are protected without knowing PassBook exists.
+- **`passbook harden`** reports what is actually protected. **`--install`** moves
+  the code and its interpreter to root-owned `/usr/local/libexec/passbook` and
+  starts the broker from a root-owned LaunchAgent, closing the last user-space
+  gap: PassBook's own code being writable by anything running as you.
+
+A LaunchAgent rather than the service account first sketched here. A daemon
+under its own uid has no login keychain, no GUI session for Touch ID, and no
+read access to a store in the user's home — and a store it owned could strand
+the machine, which this project's spec explicitly forbids a policy from doing.
+The Agent runs as you and keeps all three, while the code and the thing that
+starts it stop being yours to edit.
+
 ### Known
 
-- **Same-uid remains the boundary.** The broker runs as you, so a caller willing
-  to write custom code can still read a value out of the memory of the broker or
-  the child it spawned. Closing that needs a service account and a keychain ACL
-  naming signed callers — an installation-shaped change, not a module.
+- **Root defeats all of it.** That is the ceiling of any user-space mechanism.
+- **`--install` was not verified end to end.** It needs root, which the author
+  could not exercise from the session that wrote it; the unprivileged paths,
+  the plan output and the refusal are tested, the privileged run is not.
 - **A command can still send what it was given anywhere**, unless the key is
   guarded. Redaction scrubs our output, not the network.
 - **Values under six characters cannot be redacted** from output without

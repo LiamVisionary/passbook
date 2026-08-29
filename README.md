@@ -891,11 +891,20 @@ A guarded key goes into the process that needs it and comes back redacted from
 everything that process printed, so it never lands in an agent's transcript.
 But the command still holds the real value, and a command that can reach the
 network can send it wherever it likes — only binding the key to specific hosts
-constrains that. And because the broker runs as you, a caller willing to write
-custom code can read the value out of the memory of the broker or the child it
-spawned. The honest summary is that this raises the cost of reading a credential
-from typing one command to writing a debugger harness against a process that is
-recording you.
+constrains that.
+
+**Refusing a debugger closes a hole that cost nothing to walk through.** The
+broker and its children hold credentials in memory, and `lldb` ships with macOS
+and attached to both on the first try — no exploit, no root. They now refuse
+attachment, and the refusal survives the exec into a child, so `wrangler` is
+covered without knowing PassBook exists. Root still wins. It always will.
+
+**Until you run `sudo passbook harden --install`, PassBook's own code is
+writable by you** — and so by anything running as you, which can edit the
+redactor out and never need a debugger at all. That command moves the code and
+its interpreter somewhere root owns, and starts the broker from a root-owned
+LaunchAgent. `passbook harden` reports which of these is true right now rather
+than assuming.
 
 **The record is tamper evident, not tamper proof.** It does not prevent an
 access, it makes one impossible to hide.

@@ -3430,6 +3430,73 @@ def cmd_grants(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_harden(args: argparse.Namespace) -> int:
+    """What protects this machine's credentials at the OS level, and what does not."""
+    try:
+        import passbook_harden
+    except ImportError:
+        return _fail("Process hardening is not installed on this machine.")
+
+    if args.undo:
+        answer = passbook_harden.undo()
+        if answer.get("needs_root"):
+            return _fail("That removes root-owned files.",
+                         "Run:  sudo passbook harden --undo")
+        if not answer.get("ok"):
+            return _fail(answer.get("why", "could not undo it"))
+        for path in answer.get("removed", []):
+            print(f"removed {path}")
+        print("The broker is yours again. Start one:  passbook broker start")
+        return 0
+
+    if args.install:
+        answer = passbook_harden.install()
+        if answer.get("needs_root"):
+            # Deliberately not re-running under sudo. A tool that escalates on
+            # its own behalf teaches people to let tools escalate, and this one
+            # is asking to own a path everything else will trust.
+            print("This needs root: it writes to /usr/local/libexec and /Library/LaunchAgents.")
+            print("\nIt will:")
+            for step in passbook_harden.plan():
+                print(f"  · {step['what']}")
+                print(f"      {step['why']}")
+            print("\nRun:  sudo passbook harden --install")
+            print("Undo: sudo passbook harden --undo")
+            return 1
+        if not answer.get("ok"):
+            return _fail(answer.get("why", "could not install it"))
+        print(f"PassBook now runs from {answer['runtime']}, owned by root.")
+        print(f"Started by {answer['plist']}, also owned by root.")
+        print("\nCheck it:  passbook harden")
+        return 0
+
+    state = passbook_harden.posture()
+    if args.json:
+        print(json.dumps(state, indent=2))
+        return 0
+    if args.plan:
+        for step in passbook_harden.plan():
+            print(f"  · {step['what']}")
+            print(f"      {step['why']}")
+        return 0
+
+    debugger = state["debugger"]
+    print(f"debugger:    {'refused by ' + debugger['how'] if debugger['supported'] else 'CANNOT be refused on ' + state['code']['path']}")
+    print(f"code:        {state['code']['path']}")
+    print(f"             {'writable by you' if state['code']['writable_by_you'] else 'not writable by you'}")
+    print(f"broker start:{' installed, root-owned' if state['daemon']['installed'] else ' by hand'}")
+    if state["gaps"]:
+        print("\nStill open:")
+        for gap in state["gaps"]:
+            print(f"  · {gap}")
+        print("\nClose them:  sudo passbook harden --install")
+        print("See exactly what that does, first:  passbook harden --plan")
+    else:
+        print("\nNothing further this machine can do in user space.")
+    print(f"\n{state['always']}")
+    return 0
+
+
 def cmd_state(args: argparse.Namespace) -> int:
     """One JSON object describing this machine's PassBook. Never a value."""
     print(json.dumps(machine_state(verify=getattr(args, "verify", False)),
@@ -4439,6 +4506,14 @@ def build_parser() -> argparse.ArgumentParser:
     grants_cmd = subs.add_parser("grants", help="what is holding credentials right now")
     grants_cmd.add_argument("--json", action="store_true")
     grants_cmd.set_defaults(func=cmd_grants)
+
+    harden_cmd = subs.add_parser("harden", help="what protects credentials at the OS level")
+    harden_cmd.add_argument("--install", action="store_true",
+                            help="install PassBook as root-owned code with a root-owned start")
+    harden_cmd.add_argument("--undo", action="store_true", help="put the machine back")
+    harden_cmd.add_argument("--plan", action="store_true", help="show exactly what --install does")
+    harden_cmd.add_argument("--json", action="store_true")
+    harden_cmd.set_defaults(func=cmd_harden)
 
     state_cmd = subs.add_parser("state", help="everything a management surface needs, as JSON")
     state_cmd.add_argument("--pretty", action="store_true")

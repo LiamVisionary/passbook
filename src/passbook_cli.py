@@ -4242,6 +4242,35 @@ def main(argv: list[str] | None = None) -> int:
     known = aliases()
     if invoked in known:
         argv.insert(0, known[invoked])
+    # `uv tool install` runs nothing, so the first command anybody types is the
+    # first time PassBook executes on this machine. Doing it here rather than
+    # only in `install` is what makes "the agents know" true however PassBook
+    # arrived.
+    #
+    # On stderr, never stdout: `passbook get` prints KEY=value and people pipe
+    # that into `eval` and into `--json` parsers. A helpful line on the wrong
+    # stream is a corrupted credential.
+    # Only for a command somebody typed. `broker` and `mcp` are the two that
+    # run as background processes — the broker is detached and outlives the
+    # shell, the MCP server is spawned BY an agent — and neither is a sensible
+    # thing to have writing into agent config files. A daemon quietly editing
+    # ~/.claude/CLAUDE.md minutes after the terminal closed is exactly the
+    # behaviour that makes people uninstall something.
+    _SILENT = {"brief", "broker", "mcp"}
+    if not os.environ.get("PASSBOOK_NO_BRIEF") and not (argv and argv[0] in _SILENT):
+        brief = _brief()
+        if brief is not None:
+            try:
+                changed = brief.brief_once()
+            except Exception:  # noqa: BLE001 — never fail a command over this
+                changed = []
+            if changed:
+                names = ", ".join(entry["id"] for entry in changed)
+                print(f"passbook: briefed {len(changed)} coding agent(s) about this "
+                      f"machine's credentials ({names})", file=sys.stderr)
+                print("passbook: they read it at the start of a session; "
+                      "`passbook brief remove` undoes it", file=sys.stderr)
+
     # Handled before dispatch, because `--version` has no subcommand and every
     # other path here requires one.
     if argv and argv[0] in ("--version", "-V"):

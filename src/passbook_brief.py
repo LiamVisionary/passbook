@@ -419,3 +419,50 @@ def registered(runtime: Runtime, root: Path | None = None) -> bool:
     except ValueError:
         return False
     return isinstance(data, dict) and SERVER_NAME in (data.get("mcpServers") or {})
+
+
+# ── the first time PassBook runs at all ─────────────────────────────────────
+
+MARKER = "agents-briefed"
+
+
+def _marker(root: Path | None = None) -> Path:
+    """Beside the store, because that is the thing this machine already has."""
+    import passbook
+
+    return (root or Path(passbook.root())) / MARKER
+
+
+def brief_once(*, root: Path | None = None, store_root: Path | None = None) -> list[dict[str, str]]:
+    """Brief the agents if this machine has not been briefed with THIS text.
+
+    `uv tool install` puts the commands on PATH and executes nothing, so there
+    is no install step to hang this on — the first command somebody types is the
+    first moment PassBook runs at all, and it is the only honest hook left.
+
+    Keyed on a hash of the brief rather than a bare flag, so a machine that was
+    briefed with older wording picks up the new one and a machine that is
+    current does one small file read and stops. Returns what it did, or `[]`.
+    """
+    import hashlib
+
+    digest = hashlib.sha256(block().encode("utf-8")).hexdigest()[:16]
+    marker = _marker(store_root)
+    try:
+        if marker.is_file() and marker.read_text(encoding="utf-8").strip() == digest:
+            return []
+    except OSError:
+        pass
+
+    runtimes = detected(root)
+    written = install(runtimes, root=root) if runtimes else []
+    if runtimes:
+        register(runtimes, root=root)
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(digest + "\n", encoding="utf-8")
+    except OSError:
+        # Not being able to record it means doing it again next time, which is
+        # idempotent and cheap. It is not a reason to fail somebody's command.
+        pass
+    return [entry for entry in written if entry["state"] in ("briefed", "updated")]

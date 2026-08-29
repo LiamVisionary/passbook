@@ -17,14 +17,17 @@ hide the bug, and the bug is a test that forgot to.
 
 from __future__ import annotations
 
-import hashlib
 import os
 from pathlib import Path
 
 import pytest
 
+BEGIN = "<!-- BEGIN PASSBOOK -->"
+END = "<!-- END PASSBOOK -->"
+
+
 # The files a PassBook install touches outside its prefix.
-def _watched() -> list[Path]:
+def _watched() -> list[tuple[Path, str]]:
     home = Path(os.environ.get("HOME") or os.environ.get("USERPROFILE") or "~").expanduser()
     import sys
 
@@ -35,20 +38,66 @@ def _watched() -> list[Path]:
         return []
     seen = []
     for runtime in passbook_brief.RUNTIMES:
-        seen.append(home / runtime.context)
+        seen.append((home / runtime.context, "context"))
         if runtime.mcp:
-            seen.append(home / runtime.mcp)
+            seen.append((home / runtime.mcp, runtime.mcp_format or "json"))
     return seen
 
 
-def _fingerprint(paths: list[Path]) -> dict[str, str]:
+def _fingerprint(paths_and_kinds: list[tuple[Path, str]]) -> dict[str, str]:
+    """PassBook's own footprint in each file — not the file's bytes.
+
+    These files belong to running applications that write to them constantly:
+    `~/.claude.json` holds session state and Claude Code updates it while the
+    suite runs. Hashing the whole file therefore fails random tests for changes
+    nothing here made, which is worse than no guard at all — a check that cries
+    wolf gets deleted, and then the real leak ships.
+
+    So this reads only the part PassBook would have written: the delimited block
+    in a context file, and the `passbook` server in an MCP config.
+    """
+    import json as _json
+
     found = {}
-    for path in paths:
+    for path, kind in paths_and_kinds:
         try:
-            found[str(path)] = hashlib.sha256(path.read_bytes()).hexdigest()
-        except OSError:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
             found[str(path)] = "absent"
+            continue
+        if kind == "context":
+            start, end = text.find(BEGIN), text.find(END)
+            found[str(path)] = text[start:end] if start != -1 and end > start else "absent"
+        elif kind == "toml":
+            marker = "[mcp_servers.passbook]"
+            at = text.find(marker)
+            found[str(path)] = text[at:at + 200] if at != -1 else "absent"
+        else:
+            try:
+                data = _json.loads(text) if text.strip() else {}
+                entry = (data.get("mcpServers") or {}).get("passbook")
+            except (ValueError, AttributeError):
+                entry = None
+            found[str(path)] = _json.dumps(entry, sort_keys=True) if entry else "absent"
     return found
+
+
+@pytest.fixture(autouse=True)
+def _no_briefing_from_the_suite(monkeypatch):
+    """Every PassBook command now briefs on first run, so every test that runs
+    one would write into the developer's own agent files.
+
+    Off by default for the suite, and the briefing tests turn it back on for
+    themselves inside a temporary home. Same shape as the check below: the
+    default is safe, and asking for the real behaviour is explicit.
+    """
+    monkeypatch.setenv("PASSBOOK_NO_BRIEF", "1")
+
+
+@pytest.fixture
+def briefing_enabled(monkeypatch):
+    """For tests that are ABOUT first-run briefing. Use only with a temp HOME."""
+    monkeypatch.delenv("PASSBOOK_NO_BRIEF", raising=False)
 
 
 @pytest.fixture(autouse=True)

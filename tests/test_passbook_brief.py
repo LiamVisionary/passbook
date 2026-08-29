@@ -454,3 +454,131 @@ def test_the_app_briefs_on_launch():
     setup = source[source.index("fn main()"):]
     assert '.arg("brief")' in setup and '.arg("install")' in setup
     assert "std::thread::spawn" in setup, "must not delay the window"
+
+
+# ── the path nothing can hook ───────────────────────────────────────────────
+
+
+def _fresh(tmp_path):
+    """A machine with two agents, a store, and PassBook never yet run."""
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    (home / ".codex").mkdir(parents=True)
+    return home, {**os.environ, "HOME": str(home), "USERPROFILE": str(home),
+                  "HIVE_HOME": str(tmp_path / "hive"), "PYTHONPATH": str(SRC)}
+
+
+def _run(env, *args):
+    return subprocess.run([sys.executable, "-m", "passbook_cli", *args],
+                          capture_output=True, text=True, cwd=str(REPO), env=env)
+
+
+def test_the_first_command_of_any_kind_briefs(tmp_path, briefing_enabled):
+    """`uv tool install` runs nothing, so the first command somebody types is
+    the first time PassBook executes at all. There is no earlier hook."""
+    home, env = _fresh(tmp_path)
+    env.pop("PASSBOOK_NO_BRIEF", None)
+    done = _run(env, "list")
+    assert done.returncode == 0, done.stderr
+    assert brief.BEGIN in (home / ".claude/CLAUDE.md").read_text(encoding="utf-8")
+    assert "briefed 2 coding agent" in done.stderr
+
+
+def test_it_says_so_on_stderr_and_never_on_stdout(tmp_path, briefing_enabled):
+    """`passbook get` prints KEY=value and people pipe that into `eval`. A
+    helpful line on the wrong stream is a corrupted credential."""
+    home, env = _fresh(tmp_path)
+    env.pop("PASSBOOK_NO_BRIEF", None)
+    # Seeded through the library, so `get` is genuinely the first CLI command
+    # this machine has ever run and the notice really does coincide with output
+    # somebody is about to pipe into `eval`.
+    import passbook
+    os.environ["HIVE_HOME"] = env["HIVE_HOME"]
+    passbook.ensure(app="test")
+    passbook.set_values({"DEMO_KEY": "not-a-real-value"})
+
+    done = _run(env, "get", "DEMO_KEY")
+    assert done.stdout.strip() == "DEMO_KEY=not-a-real-value", repr(done.stdout)
+    assert "briefed" in done.stderr
+
+
+def test_json_output_still_parses_on_the_very_first_run(tmp_path, briefing_enabled):
+    home, env = _fresh(tmp_path)
+    env.pop("PASSBOOK_NO_BRIEF", None)
+    done = _run(env, "status", "--json")
+    json.loads(done.stdout)  # raises if the notice leaked onto stdout
+
+
+def test_the_second_command_is_silent(tmp_path, briefing_enabled):
+    """Keyed on a marker, so this is one small file read on the hot path rather
+    than a dozen stats before every `passbook get`."""
+    home, env = _fresh(tmp_path)
+    env.pop("PASSBOOK_NO_BRIEF", None)
+    _run(env, "list")
+    again = _run(env, "list")
+    assert "briefed" not in again.stderr
+
+
+def test_changing_the_text_re_briefs(tmp_path, briefing_enabled):
+    """The marker holds a hash of the brief, not a bare flag, so a machine
+    briefed with older wording picks up the new one."""
+    home, env = _fresh(tmp_path)
+    env.pop("PASSBOOK_NO_BRIEF", None)
+    _run(env, "list")
+
+    # What a PassBook upgrade looks like from here: the files carry the OLD
+    # wording and the marker carries its hash. Only moving the marker would
+    # prove nothing, because `install` would find the text already current and
+    # correctly report that nothing changed.
+    context = home / ".claude/CLAUDE.md"
+    context.write_text(f"{brief.BEGIN}\nolder wording\n{brief.END}\n", encoding="utf-8")
+    (Path(env["HIVE_HOME"]) / brief.MARKER).write_text("an-older-hash\n", encoding="utf-8")
+
+    again = _run(env, "list")
+    assert "briefed" in again.stderr
+    assert "older wording" not in context.read_text(encoding="utf-8")
+
+
+def test_the_escape_hatch_stops_it(tmp_path):
+    """For scripts and CI that must not have their machine written to."""
+    home, env = _fresh(tmp_path)
+    env["PASSBOOK_NO_BRIEF"] = "1"
+    done = _run(env, "list")
+    assert "briefed" not in done.stderr
+    assert not (home / ".claude/CLAUDE.md").exists()
+
+
+def test_a_machine_with_no_agents_says_nothing(tmp_path, briefing_enabled):
+    home = tmp_path / "home"
+    home.mkdir()
+    env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home),
+           "HIVE_HOME": str(tmp_path / "hive"), "PYTHONPATH": str(SRC)}
+    env.pop("PASSBOOK_NO_BRIEF", None)
+    done = _run(env, "list")
+    assert done.returncode == 0
+    assert "briefed" not in done.stderr
+
+
+def test_brief_remove_is_not_undone_by_the_next_command(tmp_path, briefing_enabled):
+    """Somebody who takes the block out has said what they want. Putting it
+    back on their next command would be the tool arguing with them."""
+    home, env = _fresh(tmp_path)
+    env.pop("PASSBOOK_NO_BRIEF", None)
+    _run(env, "list")
+    _run(env, "brief", "remove")
+    assert brief.BEGIN not in (home / ".claude/CLAUDE.md").read_text(encoding="utf-8")
+    _run(env, "list")
+    assert brief.BEGIN not in (home / ".claude/CLAUDE.md").read_text(encoding="utf-8"), \
+        "the next command put it back"
+
+
+def test_the_broker_and_the_mcp_server_never_brief(tmp_path, briefing_enabled):
+    """Both run as background processes: the broker is detached and outlives
+    the shell that started it, and the MCP server is spawned by an agent. A
+    daemon editing ~/.claude/CLAUDE.md minutes after the terminal closed is the
+    behaviour that gets a tool uninstalled — and, as a detached write racing a
+    test's teardown, it is also how this turned up."""
+    import inspect
+    from passbook_cli import main
+    source = inspect.getsource(main)
+    assert '"broker"' in source and '"mcp"' in source and "_SILENT" in source

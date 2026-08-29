@@ -20,8 +20,7 @@ import pytest
 # `install.sh` and the command shims are POSIX shell scripts. Windows cannot
 # execute them at all: it answers "%1 is not a valid Win32 application". What
 # they check is real and is checked on the platforms that can run them.
-needs_a_posix_shell = pytest.mark.skipif(
-    os.name == "nt", reason="install.sh and the shims are POSIX shell")
+from _platform import needs_a_posix_shell  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 

@@ -28,12 +28,29 @@ one: an agent asks for the three keys it needs instead of helping itself to the
 environment, the owner can see which agent asked for what, and a key that is
 none of an agent's business can be marked so.
 
-## Values
+## Values, and why the interesting tools do not return any
 
 `list_credentials` returns NAMES, never values — the same rule every other
 status surface in this project follows. Exactly one tool returns a value,
-`get_credential`, one key at a time, by name, through the broker, recorded.
-That is so "can this leak?" stays answerable by reading the tool list.
+`get_credential`, one key at a time, by name, through the broker, recorded. That
+is so "can this leak?" stays answerable by reading the tool list.
+
+But an agent is a process whose entire output is written to a transcript, kept,
+and sent to a model. So a value that reaches one has reached a log file and a
+network service regardless of intent, and no policy in front of `get_credential`
+changes that — approving the read just makes the leak an approved one.
+
+Which is why the two tools an agent should actually reach for return no value at
+all. `run_with_credentials` puts the keys in a child process's environment and
+returns output with those values scrubbed out of it. `proxy_request` fills them
+into one HTTPS request and returns the response, scrubbed the same way. The
+credential does its job; the agent gets the result.
+
+`get_credential` remains for the cases that genuinely need a value on a machine
+that permits it, and is refused outright for a guarded key or when the owner has
+sealed reads. The refusal names the two tools above, because an agent that is
+told "no" without being told "do this instead" will simply try the next way it
+knows to read a file.
 """
 
 from __future__ import annotations
@@ -111,6 +128,51 @@ TOOLS = [
                 "reason": {"type": "string", "description": "Why you need it. Shown to the owner and recorded."},
             },
             "required": ["name"],
+        },
+    },
+    {
+        "name": "run_with_credentials",
+        "title": "Run a command that needs credentials",
+        "description": (
+            "Run a command with named credentials placed in its environment, and get "
+            "back its output with those values removed. This is how to USE a credential: "
+            "the command receives the real value, you receive the result. Prefer this "
+            "over reading a value — it works on keys that are never readable, and it "
+            "keeps secrets out of your context and your transcript."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "command": {"type": "array", "items": {"type": "string"},
+                            "description": "argv, e.g. [\"wrangler\", \"deploy\"]. Not a shell string."},
+                "keys": {"type": "array", "items": {"type": "string"},
+                         "description": "Credential names to place in its environment."},
+                "cwd": {"type": "string", "description": "Directory to run in."},
+                "reason": {"type": "string", "description": "Why. Shown to the owner and recorded."},
+            },
+            "required": ["command", "keys"],
+        },
+    },
+    {
+        "name": "proxy_request",
+        "title": "Make an HTTPS request with a credential",
+        "description": (
+            "Make one HTTPS request with credentials filled in, and get the response. "
+            "Write {{KEY_NAME}} where a credential belongs — in a header, the URL or "
+            "the body — and it is substituted at send time. The value never reaches "
+            "you, and the response is scrubbed of it. A key must be bound to the host "
+            "first; if it is not, this is refused and the refusal says so."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "https:// only."},
+                "method": {"type": "string", "description": "GET, POST, … Defaults to GET."},
+                "headers": {"type": "object", "description": "e.g. {\"Authorization\": \"Bearer {{OPENAI_API_KEY}}\"}"},
+                "body": {"description": "String, or an object which is sent as JSON."},
+                "reason": {"type": "string", "description": "Why. Recorded."},
+            },
+            "required": ["url"],
         },
     },
     {
@@ -304,6 +366,31 @@ def _tool_get_credential(arguments: Mapping[str, Any], state: Mapping[str, Any])
             _record(agent, name, granted=False, reason=verdict["why"], root=root)
             return {"name": name, "value": None, "refused": True, "why": verdict["why"]}
 
+    # The last bound, and the one this tool cannot talk its way past. An agent is
+    # a process that writes what it learns into a transcript, so handing it a
+    # value puts that value in a log and, on the next turn, in a request to a
+    # model. Where the owner has said a key is guarded — or that this machine
+    # does not hand out values at all — the answer is the effect, not the secret.
+    try:
+        import passbook_broker
+        import passbook_grant
+
+        policy = _access().read_policy(root) if _access() is not None else {}
+        if name in set(passbook_grant.guarded(policy)):
+            why = (f"{name} is guarded: it is used, never read. Call "
+                   f"run_with_credentials or proxy_request instead.")
+            _record(agent, name, granted=False, reason=why, root=root)
+            return {"name": name, "value": None, "refused": True, "why": why,
+                    "use_instead": ["run_with_credentials", "proxy_request"]}
+        if passbook_broker.reads_mode(policy) == "sealed":
+            why = ("this machine does not hand credential values to callers it did "
+                   "not start. Call run_with_credentials or proxy_request instead.")
+            _record(agent, name, granted=False, reason=why, root=root)
+            return {"name": name, "value": None, "refused": True, "why": why,
+                    "use_instead": ["run_with_credentials", "proxy_request"]}
+    except ImportError:
+        pass
+
     granted = passbook.request([name], app=agent, reason=reason)
     if name in granted:
         _record(agent, name, granted=True, reason=reason, root=root)
@@ -315,6 +402,57 @@ def _tool_get_credential(arguments: Mapping[str, Any], state: Mapping[str, Any])
         why = "the store is locked; the owner needs to sign in"
     _record(agent, name, granted=False, reason=why, root=root)
     return {"name": name, "value": None, "refused": True, "why": why}
+
+
+def _tool_run_with_credentials(arguments: Mapping[str, Any],
+                               state: Mapping[str, Any]) -> dict[str, Any]:
+    """Use credentials without receiving them. The tool an agent should reach for.
+
+    Everything is decided by the broker: it resolves the keys, forks the child
+    holding them, and returns output it has already scrubbed. Nothing in the
+    reply has ever contained a credential, so there is nothing here for a
+    transcript to keep.
+    """
+    command = [str(part) for part in (arguments.get("command") or []) if str(part) != ""]
+    keys = [str(k).strip() for k in (arguments.get("keys") or []) if str(k).strip()]
+    if not command:
+        raise ValueError("command is required")
+    try:
+        import passbook_broker
+    except ImportError:
+        return {"ok": False, "error": "the broker is not installed on this machine"}
+    if not passbook_broker.running():
+        return {"ok": False, "error": "no broker is running, so nothing can be run under a grant",
+                "fix": "passbook broker start"}
+    answer = passbook_broker._ask({
+        "op": "spawn", "app": _client_name(state), "command": command, "keys": keys,
+        "cwd": str(arguments.get("cwd") or ""),
+        "reason": str(arguments.get("reason") or "")[:200],
+        "project": passbook.project(),
+    }, root=state.get("root")) or {}
+    return answer or {"ok": False, "error": "the broker did not answer"}
+
+
+def _tool_proxy_request(arguments: Mapping[str, Any],
+                        state: Mapping[str, Any]) -> dict[str, Any]:
+    """Send one request with a credential in it, and return what came back."""
+    try:
+        import passbook_broker
+    except ImportError:
+        return {"ok": False, "error": "the broker is not installed on this machine"}
+    if not passbook_broker.running():
+        return {"ok": False, "error": "no broker is running, so nothing can be proxied",
+                "fix": "passbook broker start"}
+    answer = passbook_broker._ask({
+        "op": "proxy", "app": _client_name(state),
+        "url": str(arguments.get("url") or ""),
+        "method": str(arguments.get("method") or "GET"),
+        "headers": arguments.get("headers") or {},
+        "body": arguments.get("body"),
+        "reason": str(arguments.get("reason") or "")[:200],
+        "project": passbook.project(),
+    }, root=state.get("root")) or {}
+    return answer or {"ok": False, "error": "the broker did not answer"}
 
 
 def _tool_check_credentials(arguments: Mapping[str, Any], state: Mapping[str, Any]) -> dict[str, Any]:
@@ -426,6 +564,8 @@ def _tool_get_oauth_token(arguments: Mapping[str, Any], state: Mapping[str, Any]
 HANDLERS: dict[str, Callable[[Mapping[str, Any], Mapping[str, Any]], dict[str, Any]]] = {
     "list_credentials": _tool_list_credentials,
     "get_credential": _tool_get_credential,
+    "run_with_credentials": _tool_run_with_credentials,
+    "proxy_request": _tool_proxy_request,
     "check_credentials": _tool_check_credentials,
     "vault_status": _tool_vault_status,
     "list_sign_ins": _tool_list_sign_ins,

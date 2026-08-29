@@ -315,12 +315,19 @@ fn remove_key(name: String) -> Result<Value, String> {
 /// show you your own credential is not one — you keep keys in order to paste
 /// them somewhere eventually — but every other call in this file stays free of
 /// values so that "can this leak?" is answerable by reading the signature.
+/// `--confirm` carries the answer to the CLI's own question. `reveal` refuses a
+/// caller whose output is being captured — which is what an agent shelling out
+/// looks like, and also what this is — so the window has to say that a person
+/// asked. It is a hurdle rather than a boundary, exactly as the CLI documents:
+/// what actually cannot be revealed is a guarded key, and no flag reaches that.
 #[tauri::command]
 fn reveal_key(name: String) -> Result<String, String> {
     if name.trim().is_empty() {
         return Err("Which key?".into());
     }
-    Ok(run(&["reveal", name.trim()])?.trim_end_matches('\n').to_string())
+    Ok(run(&["reveal", name.trim(), "--confirm", name.trim()])?
+        .trim_end_matches('\n')
+        .to_string())
 }
 
 // ── sign-ins ───────────────────────────────────────────────────────────────

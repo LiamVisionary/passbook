@@ -2,6 +2,63 @@
 
 All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
+## [1.3.0] — 2026-08-30
+
+### A credential can be used without ever being shown
+
+Every surface here answered one question: may this caller HAVE this value. For
+an agent that is the wrong question. An agent writes what it observes into a
+transcript that is stored, replayed and sent to a model — so a value it reads
+has left the machine whatever it intended, and putting a policy in front of the
+read does not change that. It makes the copy authorised.
+
+Three holes were found by testing rather than reasoning, and each is closed:
+
+- `passbook get` printed the value. `passbook reveal` printed it and was, by
+  design, not policy-gated at all — the same key that `get --app x` blocked
+  under an `ask` rule came back instantly from `reveal`.
+- `passbook run` handed the child **every** key in the store, not the ones it
+  needed, and its output was never filtered.
+- the MCP `get_credential` tool put values directly into an agent's context.
+
+**The rule is now provenance, not identity.** Values go only into processes the
+broker starts itself. Identity could never carry this: a script, a CLI and an
+agent all run through the same interpreter and present the same signature, as
+`passbook_peer` has always said. "Did this process descend from a spawn I
+performed, holding a key set I chose?" has an exact answer.
+
+- **`passbook run`** now streams through the broker when a guarded key is
+  involved or reads are sealed. The child gets the real value; the output comes
+  back with it removed. `--only NAME` hands over named keys instead of all 301.
+- **`run_with_credentials`** and **`proxy_request`** replace reading, for agents.
+  The first runs a command holding the keys; the second fills `{{KEY_NAME}}`
+  into one HTTPS request. Both return results, never values.
+- **`passbook guard NAME --to host --into 'cmd *'`** binds a key to where it may
+  go. A guarded key is never printed — not by `get`, not by `reveal`, not to an
+  agent — and is refused for any command or host outside its binding.
+- **`passbook policy --reads sealed`** applies that to every key at once.
+- **`passbook grants`** shows what holds credentials right now.
+- A new `use` row in the record, distinct from `read`, because a row saying
+  `read` would assert the one thing that did not happen.
+
+Redaction covers the raw value, all three base64 alignments, hex, URL and JSON
+escaping — and holds across chunk boundaries, so a secret split by a pipe does
+not pass through as two clean halves. Two real bugs were caught proving it: the
+first version missed `echo $S | base64` entirely (the newline shifts the tail),
+and the second emitted a form straddling its own buffer cut before redacting it.
+
+### Known
+
+- **Same-uid remains the boundary.** The broker runs as you, so a caller willing
+  to write custom code can still read a value out of the memory of the broker or
+  the child it spawned. Closing that needs a service account and a keychain ACL
+  naming signed callers — an installation-shaped change, not a module.
+- **A command can still send what it was given anywhere**, unless the key is
+  guarded. Redaction scrubs our output, not the network.
+- **Values under six characters cannot be redacted** from output without
+  wrecking it. This is reported per key rather than assumed.
+- `reads` defaults to `open`, so upgrading changes nothing until you seal it.
+
 ## [1.2.0] — 2026-08-29
 
 ### The agents on this machine are told PassBook is here

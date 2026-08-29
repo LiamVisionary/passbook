@@ -408,6 +408,66 @@ def cmd_remove(args: argparse.Namespace) -> int:
     return 0
 
 
+def _sealed_run(command: list[str], who: str, args: argparse.Namespace) -> int | None:
+    """Run under a grant, with the child's output scrubbed as it streams.
+
+    Returns None when this machine has no reason to — no grants installed, no
+    guarded key in the store, and reads left open — in which case `run` execs
+    the child directly as it always has. Filtering a stream costs a pipe and two
+    threads where an exec costs nothing, and imposing that on a machine that has
+    not asked for the guarantee would be paying for a promise nobody made.
+
+    When it does apply, the child still gets real values: this changes where the
+    output goes, not what the process holds. `printenv` returns markers, and
+    `wrangler deploy` deploys.
+    """
+    try:
+        import passbook_access as access
+        import passbook_broker
+        import passbook_grant
+    except ImportError:
+        return None
+
+    policy = access.read_policy()
+    sealed = passbook_broker.reads_mode(policy) == "sealed"
+    guarded = set(passbook_grant.guarded(policy))
+    wanted = list(args.only or []) or passbook.key_names()
+    involved = guarded.intersection(wanted)
+    if not sealed and not involved:
+        return None
+    if not passbook_broker.running():
+        # Without a broker there is nobody to hold the values on our behalf, and
+        # doing it here would mean this process reads them — which is the thing
+        # sealed mode exists to stop. Saying so beats running the command with
+        # no credentials and letting it fail as an auth error.
+        return _fail("This machine seals credential reads, but no broker is running.",
+                     "Start one:  passbook broker start")
+
+    # The broker spawns the child and keeps the values. We get bytes it has
+    # already scrubbed, which is why this is a socket round trip rather than the
+    # `os.execvpe` below: an exec would need the values in THIS process first.
+    answer = passbook_broker.spawn_streaming(
+        command, wanted, app=who, reason=f"run {Path(command[0]).name}",
+        project=passbook.project())
+    if answer is None:
+        return _fail("The broker did not answer.", "Check it:  passbook broker start")
+    if not answer.get("ok"):
+        return _fail(answer.get("error", "could not run it"))
+    begin = answer.get("begin") or {}
+    for key, why in (begin.get("why") or {}).items():
+        print(f"note: {key} was withheld — {why}", file=sys.stderr)
+    unscrubbed = [name for name, ok in (begin.get("redacted") or {}).items() if not ok]
+    if unscrubbed:
+        # Saying so beats implying a completeness that is not there. A value
+        # under six characters cannot be searched for without wrecking the
+        # output, and the person running this should hear it from us rather
+        # than discover it in a log.
+        print(f"note: {', '.join(sorted(unscrubbed))} "
+              f"{'is' if len(unscrubbed) == 1 else 'are'} too short to redact from output.",
+              file=sys.stderr)
+    return int(answer.get("exit_code") or 0)
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     """Run a command with the store loaded as a base. The process env wins."""
     command = list(args.command)
@@ -416,8 +476,20 @@ def cmd_run(args: argparse.Namespace) -> int:
     if not command:
         return _fail("Nothing to run.", "Usage: passbook-run -- your-command --flags")
     who = caller("passbook-run", args)
+    sealed = _sealed_run(command, who, args)
+    if sealed is not None:
+        return sealed
     _use_broker_for_sealed_values(who, f"run {Path(command[0]).name}")
     child = dict(_store_values())
+    if args.only:
+        # Named keys only. `run` handing over the whole store was the reason an
+        # app that needed three credentials held three hundred, and every one of
+        # those was a key some dependency could read, log or ship in a crash
+        # report. The default stays "everything" for compatibility; this is how
+        # a caller says what it actually needs.
+        keep = set(args.only)
+        child = {name: value for name, value in child.items()
+                 if name in keep or name not in set(passbook.key_names())}
     # `load()` merges the process environment, so an empty result never happens.
     # The question that matters is whether the STORE's own keys resolved: if it
     # lists keys and not one of them came back, the vault is shut rather than the
@@ -510,6 +582,34 @@ def _report_withheld(absent: list[str], app: str) -> None:
         print("Sign in to read them:  passbook signin", file=sys.stderr)
 
 
+def _sealed_refusal(keys: list[str]) -> str:
+    """Why these keys may not be printed, or "" if they may.
+
+    Two reasons, and they read differently on purpose. A guarded key is refused
+    on a machine that is otherwise wide open, because somebody bound that
+    specific key and meant it. Sealed reads refuse everything, because somebody
+    decided this machine does not hand values to callers it did not start.
+    """
+    try:
+        import passbook_access as access
+        import passbook_broker
+        import passbook_grant
+    except ImportError:
+        return ""
+    if os.environ.get(passbook_grant.GRANT_ENV):
+        # Already inside a grant: this process was given these on purpose and
+        # printing them changes nothing about where they have got to.
+        return ""
+    policy = access.read_policy()
+    guarded = set(passbook_grant.guarded(policy)).intersection(keys)
+    if guarded:
+        return (f"{', '.join(sorted(guarded))} "
+                f"{'is' if len(guarded) == 1 else 'are'} guarded and never printed.")
+    if passbook_broker.reads_mode(policy) == "sealed":
+        return "This machine does not print credential values."
+    return ""
+
+
 def cmd_get(args: argparse.Namespace) -> int:
     """Named values, as JSON, for a script that cannot ask the broker itself.
 
@@ -521,6 +621,9 @@ def cmd_get(args: argparse.Namespace) -> int:
     wanted = [key.strip() for key in args.keys if key.strip()]
     if not wanted:
         return _fail("Which keys?", "Usage: passbook get --json KEY [KEY …]")
+    blocked = _sealed_refusal(wanted)
+    if blocked:
+        return _fail(blocked, "Run what needs it instead:  passbook run -- <command>")
     granted = passbook.request(wanted, app=caller("passbook-get", args),
                                reason=args.reason or "read by a script")
     if args.json:
@@ -2977,6 +3080,23 @@ def machine_state(*, verify: bool = False) -> dict:
             "apps": policy["apps"],
             "sessions": passbook_access.sessions(),
         }
+        try:
+            import passbook_broker
+            import passbook_grant
+
+            # Which keys are never printed, and whether this machine returns
+            # values to callers it did not start. The window needs both to say
+            # why an eye icon is missing — "no reason given" is what makes
+            # somebody go looking for the store file instead.
+            state["access"]["reads"] = passbook_broker.reads_mode(policy)
+            state["access"]["guarded"] = {
+                name: {"commands": passbook_grant.commands_for(name, policy),
+                       "destinations": passbook_grant.destinations_for(name, policy)}
+                for name in passbook_grant.guarded(policy)
+            }
+        except ImportError:
+            state["access"]["reads"] = "open"
+            state["access"]["guarded"] = {}
     except ImportError:
         state["access"] = {"available": False, "detail": "Access modes are not installed."}
 
@@ -3174,6 +3294,42 @@ def cmd_reveal(args: argparse.Namespace) -> int:
     stamped as a `reveal`, so looking at your own key is visible in the record
     rather than indistinguishable from an app consuming it.
     """
+    # `reveal` is the one command whose entire job is printing a secret, so it
+    # is the one an agent reaches for. What separates a person from an agent
+    # here is not a name — that is a claim — but whether anybody is actually
+    # sitting there: an agent captures stdout to read it, and a captured stream
+    # is not a terminal. Refusing that case costs a person nothing and costs an
+    # agent the whole command.
+    try:
+        import passbook_grant
+
+        forbidden = args.key in set(passbook_grant.guarded(_access().read_policy()))
+    except Exception:  # noqa: BLE001 — no policy is the common case
+        forbidden = False
+    if forbidden:
+        return _fail(f"{args.key} is guarded and is never printed.",
+                     "Use it instead:  passbook run --only "
+                     f"{args.key} -- <command>")
+    # `--confirm` carries a proof collected somewhere else — the app asks in its
+    # own window and passes what the person typed. It is a hurdle, not a
+    # boundary, and pretending otherwise would be the exact overstatement this
+    # project keeps refusing to make: a process that can run this command can
+    # pass this flag. What actually stops a determined caller is the guard check
+    # above, which no flag reaches.
+    if str(getattr(args, "confirm", "") or "") != args.key:
+        if not (sys.stdin.isatty() and sys.stdout.isatty()):
+            return _fail(
+                "reveal needs a terminal; this output is being captured.",
+                "If a program needs the value, give it the value rather than "
+                "the output:  passbook run -- <command>")
+        print(f"This prints {args.key} in the clear, and records that it happened.")
+        try:
+            if input("Type the key's name to continue: ").strip() != args.key:
+                return _fail("Not revealed.")
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return _fail("Not revealed.")
+
     value = passbook.reveal(args.key, app=caller("passbook-cli", args), reason=args.reason)
     if not value:
         # Three answers, not two — the same three `check` and `get` give. A key
@@ -3186,6 +3342,91 @@ def cmd_reveal(args: argparse.Namespace) -> int:
                          "Sign in to read it:  passbook signin")
         return _fail(f"{args.key} is not set.", "See what is:  passbook-list")
     print(value)
+    return 0
+
+
+def cmd_guard(args: argparse.Namespace) -> int:
+    """Bind a key to the commands that may hold it and the hosts it may reach.
+
+    The difference between "this key is not printed" and "this key cannot leave"
+    — the second needs somebody to say where it is allowed to go, because only
+    its owner knows.
+    """
+    module = _access()
+    if module is None:
+        return _fail("Access policy is not installed on this machine.", "Run:  passbook install")
+    import passbook_grant
+
+    policy = module.read_policy()
+    if not args.key:
+        bound = passbook_grant.guarded(policy)
+        if not bound:
+            print("No keys are guarded.")
+            print('Bind one with:  passbook guard KEY --to api.example.com')
+            print("                passbook guard KEY --into 'wrangler *'")
+            return 0
+        for name in bound:
+            commands = passbook_grant.commands_for(name, policy)
+            hosts = passbook_grant.destinations_for(name, policy)
+            print(name)
+            print(f"   commands: {', '.join(commands) if commands else 'any'}")
+            print(f"   hosts:    {', '.join(hosts) if hosts else 'none — cannot be proxied'}")
+        return 0
+
+    if args.key not in set(passbook.key_names()):
+        return _fail(f"{args.key} is not in this store.", "See what is:  passbook list")
+
+    if args.clear:
+        if not module.clear_guard(args.key, policy):
+            print(f"{args.key} was not guarded.")
+            return 0
+        module.write_policy(policy)
+        print(f"{args.key} is no longer guarded.")
+        return 0
+
+    if not args.to and not args.into:
+        return _fail("Guard it how?",
+                     f"passbook guard {args.key} --to api.example.com   (may be sent there)\n"
+                     f"passbook guard {args.key} --into 'wrangler *'    (may be injected into that)")
+
+    rule = module.set_guard(args.key, policy, commands=args.into or None,
+                            destinations=args.to or None, replace=args.replace)
+    module.write_policy(policy)
+    print(f"{args.key} is guarded.")
+    if rule.get("commands"):
+        print(f"   may be injected into: {', '.join(rule['commands'])}")
+    if rule.get("destinations"):
+        print(f"   may be sent to:       {', '.join(rule['destinations'])}")
+    print("   it is never printed, by get, by reveal, or to an agent.")
+    return 0
+
+
+def cmd_grants(args: argparse.Namespace) -> int:
+    """What is holding credentials right now, and how this machine answers reads."""
+    try:
+        import passbook_broker
+    except ImportError:
+        return _fail("The broker is not installed on this machine.")
+    if not passbook_broker.running():
+        return _fail("No broker is running, so nothing holds a grant.",
+                     "Start one:  passbook broker start")
+    answer = passbook_broker._ask({"op": "grants"}) or {}
+    if args.json:
+        print(json.dumps(answer, indent=2))
+        return 0
+    mode = answer.get("reads", "open")
+    print(f"reads: {mode}" + ("  — values go only into processes the broker started"
+                              if mode == "sealed" else
+                              "  — callers may still read values directly"))
+    grants = answer.get("grants") or []
+    if not grants:
+        print("Nothing is holding credentials right now.")
+        return 0
+    for row in grants:
+        age = row.get("age_seconds", 0)
+        print(f"{row.get('app', '?')}  pid {row.get('pid') or '—'}  {age:.0f}s ago")
+        print(f"   {' '.join(row.get('command') or []) [:80]}")
+        print(f"   holding: {', '.join(row.get('keys') or []) or 'nothing'}")
     return 0
 
 
@@ -3299,6 +3540,21 @@ def cmd_policy(args: argparse.Namespace) -> int:
         args = argparse.Namespace(**{**vars(args), "mode": "", "learn": False})
 
     policy = module.read_policy()
+
+    if getattr(args, "reads", ""):
+        # The machine-wide switch: whether a caller this broker did not start
+        # may receive a value at all. Written here rather than as its own
+        # command because it is a policy, and somebody looking for it will look
+        # where the other answers live.
+        policy["reads"] = args.reads
+        module.write_policy(policy)
+        if args.reads == "sealed":
+            print("Reads are sealed. Values now go only into processes the broker starts.")
+            print("Anything that needs a credential runs through:  passbook run -- <command>")
+            print("\nCheck nothing broke:  passbook grants")
+        else:
+            print("Reads are open. Callers may read values directly again.")
+        return 0
 
     if args.mode:
         entry = policy["apps"].setdefault(args.app or "*", {})
@@ -3711,6 +3967,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     run = subs.add_parser("run", help="run a command with the store loaded as a base")
     run.add_argument("--app", default="", help="who is asking; recorded")
+    run.add_argument("--only", action="append", metavar="KEY", default=[],
+                     help="hand the child only these keys; repeatable")
     run.add_argument("command", nargs=argparse.REMAINDER)
     run.set_defaults(func=cmd_run)
 
@@ -4162,7 +4420,25 @@ def build_parser() -> argparse.ArgumentParser:
     reveal_cmd.add_argument("key")
     reveal_cmd.add_argument("--app", default="", help="who is asking; recorded")
     reveal_cmd.add_argument("--reason", default="", help="recorded alongside the reveal")
+    reveal_cmd.add_argument("--confirm", default="",
+                            help="the key's own name, typed by a person somewhere "
+                                 "that is not a terminal (the app's own window)")
     reveal_cmd.set_defaults(func=cmd_reveal)
+
+    guard_cmd = subs.add_parser("guard", help="bind a key to where it may go; it is never printed")
+    guard_cmd.add_argument("key", nargs="?", default="", metavar="KEY")
+    guard_cmd.add_argument("--to", action="append", default=[], metavar="HOST",
+                           help="a host this key may be sent to; .example.com covers subdomains")
+    guard_cmd.add_argument("--into", action="append", default=[], metavar="PATTERN",
+                           help="a command this key may be injected into, e.g. 'wrangler *'")
+    guard_cmd.add_argument("--replace", action="store_true",
+                           help="replace what is bound rather than adding to it")
+    guard_cmd.add_argument("--clear", action="store_true", help="unguard this key")
+    guard_cmd.set_defaults(func=cmd_guard)
+
+    grants_cmd = subs.add_parser("grants", help="what is holding credentials right now")
+    grants_cmd.add_argument("--json", action="store_true")
+    grants_cmd.set_defaults(func=cmd_grants)
 
     state_cmd = subs.add_parser("state", help="everything a management surface needs, as JSON")
     state_cmd.add_argument("--pretty", action="store_true")
@@ -4197,6 +4473,8 @@ def build_parser() -> argparse.ArgumentParser:
     policy_cmd.add_argument("--from", dest="window_from", default="", metavar="HH:MM")
     policy_cmd.add_argument("--to", dest="window_to", default="", metavar="HH:MM")
     policy_cmd.add_argument("--days", nargs="+", default=[], metavar="DAY", help="mon tue wed …")
+    policy_cmd.add_argument("--reads", choices=["open", "sealed"], default="",
+                            help="whether callers the broker did not start may receive values")
     policy_cmd.add_argument("--learn", action="store_true",
                             help="derive a starting policy from what the record shows apps have asked for")
     policy_cmd.set_defaults(func=cmd_policy)

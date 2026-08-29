@@ -491,6 +491,20 @@ def request(
     # `stores` means the caller named its own files — a test, a sandbox, a second
     # instance — and reaching a real broker from there would be exactly the leak
     # that parameter exists to prevent.
+    # A process the broker started is already holding exactly what it was given.
+    # Asking again would be a round trip to be told what is in this very
+    # environment — and worse, it would fail the moment the broker restarted and
+    # forgot the grant, taking a long-running service down with it. Being born
+    # with the keys is the strongest claim there is; nothing further to check.
+    if source.get("PASSBOOK_GRANT"):
+        granted = {key: source[key] for key in wanted if source.get(key)}
+        if record is None:
+            record = _RECORDER
+        if record is not None:
+            record(op="read", keys=wanted, granted=len(granted) == len(wanted),
+                   reason=reason or "served from a grant")
+        return granted
+
     if stores is None and not source.get("HIVE_ENV_FILES"):
         # Send which workspace is asking. A key can be scoped to the workspace
         # it came from, and that has to be judged by the caller's workspace —

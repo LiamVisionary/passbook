@@ -8,6 +8,8 @@ import os
 import stat as stat_module
 from pathlib import Path
 
+import pytest
+
 WINDOWS = os.name == "nt"
 
 
@@ -70,3 +72,11 @@ def command_file(prefix, name: str) -> Path:
     they were about.
     """
     return Path(prefix) / (f"{name}.cmd" if WINDOWS else name)
+
+
+# `install.sh`, the command shims, and any test that runs `sh -c` need a POSIX
+# shell. Windows cannot execute them at all — it answers "%1 is not a valid
+# Win32 application" — so the tests that need one say so here, once, rather
+# than each rediscovering it on a red Windows job.
+needs_a_posix_shell = pytest.mark.skipif(
+    os.name == "nt", reason="this needs a POSIX shell")

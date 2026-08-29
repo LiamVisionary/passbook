@@ -818,6 +818,64 @@ def umbrella_conflicts(umbrella: str, policy: Mapping[str, Any], *,
     return found
 
 
+# ── guards ─────────────────────────────────────────────────────────────────
+#
+# Every bound above answers "may this caller HOLD this key". A guard answers a
+# later question: given that something may use it, where may it go? Two lists,
+# because there are exactly two ways a value leaves the broker — a command it is
+# injected into, and a host it is sent to.
+#
+# These are read at use time by `passbook_grant`, which owns the matching. This
+# section owns storage, so that every section of the policy file is written in
+# one place and `write_policy` stays the only thing that knows the shape.
+
+
+def read_guards(policy: Mapping[str, Any]) -> dict[str, Any]:
+    guards = policy.get("guards")
+    return dict(guards) if isinstance(guards, Mapping) else {}
+
+
+def set_guard(key: str, policy: MutableMapping[str, Any], *,
+              commands: Iterable[str] | None = None,
+              destinations: Iterable[str] | None = None,
+              replace: bool = False) -> dict[str, Any]:
+    """Bind a key to the commands that may receive it and the hosts it may reach.
+
+    Additive by default. A guard is written one line at a time — `--to` today,
+    another host next week — and a call that quietly dropped what came before
+    would turn every addition into a silent narrowing that only shows up when
+    something stops working.
+    """
+    name = str(key).strip()
+    if not name:
+        raise ValueError("which key?")
+    guards = read_guards(policy)
+    rule = dict(guards.get(name) or {}) if not replace else {}
+
+    if commands is not None:
+        existing = [] if replace else list(rule.get("commands") or [])
+        rule["commands"] = sorted({*existing, *(str(c).strip() for c in commands if str(c).strip())})
+    if destinations is not None:
+        existing = [] if replace else list(rule.get("destinations") or [])
+        rule["destinations"] = sorted({
+            *existing,
+            *(str(d).strip().lower().lstrip("*") for d in destinations if str(d).strip())})
+
+    guards[name] = rule
+    policy["guards"] = guards
+    return rule
+
+
+def clear_guard(key: str, policy: MutableMapping[str, Any]) -> bool:
+    """Unbind a key entirely. Returns whether there was anything to remove."""
+    guards = read_guards(policy)
+    if str(key).strip() not in guards:
+        return False
+    guards.pop(str(key).strip())
+    policy["guards"] = guards
+    return True
+
+
 # ── projects ───────────────────────────────────────────────────────────────
 #
 # A third bound, beside scope (which workspaces) and audience (which agents):

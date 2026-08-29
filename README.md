@@ -886,6 +886,17 @@ from reading a key. Nothing that hands values to your own processes can.
 boundary and a blast radius limiter. Calling it an access control would be a lie
 that someone eventually relies on.
 
+**Using without reading keeps a value out of your output, not off the machine.**
+A guarded key goes into the process that needs it and comes back redacted from
+everything that process printed, so it never lands in an agent's transcript.
+But the command still holds the real value, and a command that can reach the
+network can send it wherever it likes — only binding the key to specific hosts
+constrains that. And because the broker runs as you, a caller willing to write
+custom code can read the value out of the memory of the broker or the child it
+spawned. The honest summary is that this raises the cost of reading a credential
+from typing one command to writing a debugger harness against a process that is
+recording you.
+
 **The record is tamper evident, not tamper proof.** It does not prevent an
 access, it makes one impossible to hide.
 

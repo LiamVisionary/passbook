@@ -106,6 +106,18 @@ eventually — but that path must be:
 An implementation that instead adds values to its status output has not gained
 a feature, it has lost the property that made the rest of the surface safe.
 
+There is one exception to (3), and it is narrow. Where an owner has explicitly
+bound a key so that it is used and never printed, reveal may refuse it. That is
+not the theatre (3) rules out, for two reasons: the owner asked for it by name,
+and the owner can lift it by name — so what the refusal costs is a deliberate
+second act, not access. It also stops being theatre in fact rather than only in
+intent, because on a store where values are sealed and resolved through a
+broker, "they can read the file" is no longer true; the file is ciphertext.
+
+An implementation must not extend this to keys the owner has not bound. A blanket
+refusal to show an owner their own credentials is the theatre, and it is also how
+a person ends up copying values somewhere less careful.
+
 ## Participation
 
 `apps.json` records which apps use the store:
@@ -187,10 +199,54 @@ control against a determined attacker, and must not be described as one.
 
 Reference implementation: `passbook_broker.py`.
 
+## Using without reading (optional)
+
+Not required for conformance. Reading a credential and *using* one are different
+acts, and an implementation may offer the second without the first. This matters
+for one caller in particular: an agent writes everything it observes into a
+transcript that is stored and sent onward, so a value an agent reads has been
+copied out of the machine whatever it intended. Approving that read does not
+change where the value went — it only makes the copy authorised.
+
+An implementation that offers this must hold to all of:
+
+1. the value is resolved by the broker and placed into a process the **broker**
+   started; it is never returned to the caller that asked
+2. output returned to the caller has every injected value removed from it, in
+   each encoding the value could plausibly appear in — the caller chooses the
+   command, so a caller that chooses `printenv` is the case this is *for*, not
+   an abuse of it
+3. redaction that cannot cover a value reports that it could not, rather than
+   implying coverage it does not have
+4. a process the broker started may serve itself from the environment it was
+   given, and may not obtain anything beyond the key set it was started with
+5. a key may be bound to the commands it may enter and the hosts it may be sent
+   to; where no host is bound, sending it to one is refused rather than allowed,
+   because an unbound outbound path is an exfiltration primitive
+6. using a key is recorded distinctly from reading one — a record that said
+   `read` would assert the single thing that did not happen
+7. neither the record nor any status surface may echo a value back, including
+   one the caller wrote into its own command line
+
+The limits, again stated rather than implied. This does not confine what a
+command does with what it was given: a command free to make network calls can
+send its credential anywhere, and only the bindings in (5) constrain that. And
+because the broker and the caller run as the same user, a caller willing to
+write custom code can read a value out of the memory of the broker or of the
+child it spawned. Closing that needs a privilege boundary — a separate service
+account, an OS keychain ACL naming signed callers — which is a property of an
+installation, not of this standard.
+
+What it does buy is that the ordinary path stops leaking: the value is not in
+the caller's output, not in its transcript, and not in the record.
+
+Reference implementation: `passbook_grant.py`.
+
 ## Nothing else may become required
 
 Every optional part of this standard — stamping, sealing, linking, brokering,
-access modes — must leave a bare implementation working on its own. Concretely:
+access modes, using without reading — must leave a bare implementation working
+on its own. Concretely:
 
 1. an app that vendors only the store implementation resolves credentials with
    no daemon, no companion module and no other application installed

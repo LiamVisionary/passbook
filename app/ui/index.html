@@ -336,6 +336,10 @@
     color: var(--warn); background: var(--warn-soft);
     border-radius: 5px; padding: 2px 7px;
   }
+  /* Guarded is the good state and must not wear the warning colour `bare`
+     uses — they sit on the same row, and amber beside amber would read as two
+     problems rather than one problem and one protection. */
+  .bare.guarded { color: var(--ink2); background: var(--chip); }
   .masked {
     font: 10.5px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .1em;
     color: var(--ink3); background: var(--chip); border-radius: 5px;
@@ -1356,6 +1360,28 @@
   // Mirrors the HivemindOS agent-env card: name and actions on one line, the
   // value on its own line underneath — masked until revealed, editable in
   // place, saved on blur.
+  /** Is this key one the machine never prints?
+   *
+   *  A guarded key has no eye icon, and the missing icon has to explain itself
+   *  — an affordance that silently disappears reads as a bug, and somebody
+   *  chasing a bug goes looking for the store file, which is the one outcome
+   *  this whole feature exists to prevent.
+   */
+  function isGuarded(k) {
+    return !!(state?.access?.guarded && state.access.guarded[k]);
+  }
+
+  function guardedWhy(k) {
+    const rule = state?.access?.guarded?.[k];
+    if (!rule) return "";
+    const into = (rule.commands || []).join(", ");
+    const to = (rule.destinations || []).join(", ");
+    return "Guarded: used, never shown."
+      + (into ? ` May be injected into: ${into}.` : "")
+      + (to ? ` May be sent to: ${to}.` : "")
+      + " Run what needs it with passbook run.";
+  }
+
   /** Keys sitting in the clear, as a set the rows can ask cheaply.
    *
    *  Read from the vault where it answers, else the state's own sealing block.
@@ -1396,10 +1422,14 @@
           ${picked[k] ? "checked" : ""} aria-label="Select ${esc(k)}" />` : ""}
         <span class="named" data-open="${esc(k)}"><span class="mono">${esc(k)}</span>
           ${shown ? "" : `<span class="masked" title="Hidden">••••••••••</span>`}
-          ${bare ? `<span class="bare" title="This value is not encrypted. Anything running as you can read it, signed in or not.">${icon("unlock", "tinyicon")} readable</span>` : ""}</span>
-        <button class="iconbtn ${shown ? "on" : ""}" data-reveal="${esc(k)}"
+          ${bare ? `<span class="bare" title="This value is not encrypted. Anything running as you can read it, signed in or not.">${icon("unlock", "tinyicon")} readable</span>` : ""}
+          ${isGuarded(k) ? `<span class="bare guarded" title="${esc(guardedWhy(k))}">${icon("lock", "tinyicon")} guarded</span>` : ""}</span>
+        ${isGuarded(k)
+          ? `<button class="iconbtn" disabled title="${esc(guardedWhy(k))}"
+               aria-label="Guarded: never shown">${icon("lock")}</button>`
+          : `<button class="iconbtn ${shown ? "on" : ""}" data-reveal="${esc(k)}"
           title="${shown ? "Hide value" : "Reveal value"}"
-          aria-label="${shown ? "Hide value" : "Reveal value"}">${icon(shown ? "eyeOff" : "eye")}</button>
+          aria-label="${shown ? "Hide value" : "Reveal value"}">${icon(shown ? "eyeOff" : "eye")}</button>`}
         <button class="iconbtn ${copied[k] ? "done" : ""}" data-copy="${esc(k)}"
           title="${copied[k] ? "Copied" : "Copy value"}"
           aria-label="${copied[k] ? "Copied" : "Copy value"}">${icon(copied[k] ? "check" : "copy")}</button>
@@ -1908,6 +1938,37 @@
       </div>`;
   }
 
+  /** Whether values are handed to callers the broker did not start.
+   *
+   *  Its own block rather than a line in the sealing card, because it answers a
+   *  different question. Sealing is about the disk; this is about what a
+   *  process running as you can obtain while the vault is wide open — which is
+   *  the gap people assume encryption already closed, and it does not.
+   */
+  function readsBlock() {
+    const mode = state?.access?.reads || "open";
+    const guarded = Object.keys(state?.access?.guarded || {});
+    const sealed = mode === "sealed";
+    return `
+      <div class="group">
+        <div class="row"><span class="statustile ${sealed ? "good" : "warn"}">${
+          icon(sealed ? "lock" : "unlock")}</span>
+        <div class="grow"><strong>${sealed ? "Values are never handed out" : "Values can be read"}</strong> —
+          ${sealed
+            ? `credentials go only into processes PassBook starts, so an agent can
+               use them and cannot read them.`
+            : `anything running as you can ask for a value and receive it.
+               <code>passbook policy --reads sealed</code> closes that.`}
+          ${guarded.length
+            ? `<div class="sub">${guarded.length} key${guarded.length === 1 ? " is" : "s are"}
+               guarded and never printed whatever this is set to:
+               ${guarded.map(esc).join(", ")}.</div>`
+            : `<div class="sub">No keys are individually guarded.
+               <code>passbook guard NAME --to host</code> binds one.</div>`}
+        </div></div>
+      </div>`;
+  }
+
   function vaultPage() {
     const v = vault;
     if (!v) return settingsBack("Security") + `<p class="lede">Reading…</p>`;
@@ -2009,6 +2070,7 @@
 
     return settingsBack("Security") + `
       <div class="group">${openState}</div>
+      ${readsBlock()}
       ${signIn}${encryption}${profiles}${recoveryPanel()}${backupPanel()}`;
   }
 
@@ -2512,6 +2574,10 @@ passbook oauth connect google:work</pre>
   const OP_WORD = {
     read:      { did: "read", didnt: "read", partial: "some were not there" },
     reveal:    { did: "revealed", didnt: "could not reveal" },
+    // "used", never "read": the whole point of a grant is that the caller
+    // caused the key to work without ever holding it, and a row saying "read"
+    // would claim the one thing that did not happen.
+    use:       { did: "used", didnt: "could not use" },
     write:     { did: "changed", didnt: "could not change" },
     denied:    { did: "was refused", didnt: "was refused" },
     ask:       { did: "asked to use", didnt: "asked to use" },
@@ -2537,6 +2603,7 @@ passbook oauth connect google:work</pre>
     approve: "check", unlock: "unlock", lock: "lock", refresh: "history",
     export: "out", import: "into", link: "link", unlink: "cross",
     provision: "plus", signin: "unlock", signout: "lock", seal: "lock",
+    use: "unlock",
     unseal: "unlock", recovery: "shield",
   };
 

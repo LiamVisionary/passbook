@@ -136,18 +136,25 @@ This machine keeps ONE credential store, shared by every app that opts in:
 `$HIVE_HOME`, else `~/.hivemindos/.env`. PassBook owns it. `hive-env-check` and
 `hive-env-run` still work and are the same store seen through older commands.
 
-Never print, echo, log or paste a secret value. Refer to credentials by NAME and
-by set/missing status. `passbook list` and `passbook check` are safe to show;
-`passbook get` returns a value and its output is not.
+**Use a credential; do not read one.** Everything you output is written to a
+transcript, so a value you read has been logged whatever you intended. Run the
+thing that needs the key instead — it receives the real value and you receive
+output with the value removed.
 
 ```bash
-passbook check OPENAI_API_KEY     # is it here, and can I read it
-passbook list                     # every name, no values
-passbook run -- <command>         # run something with the store loaded
-passbook get OPENAI_API_KEY       # the value, recorded against your app name
+passbook check OPENAI_API_KEY          # is it here, and can I use it
+passbook list                          # every name, no values
+passbook run --only NAME -- <command>  # <-- the one to reach for
+passbook grants                        # what holds credentials right now
 ```
 
-**A key you cannot read is not necessarily missing.** There are three states and
+Never print, echo, log or paste a secret value, and never work around a refusal
+by reading the store file directly. `passbook list`, `passbook check` and
+`passbook grants` are safe to show. `passbook get` prints a value and its output
+is not; on many machines it is refused outright, and that refusal is the policy
+working rather than a fault to route around.
+
+**A key you cannot read is not necessarily missing.** There are four states and
 they have different repairs, so do not treat them alike:
 
 - **absent** — genuinely not in the store. `passbook add NAME` is the fix.
@@ -157,12 +164,17 @@ they have different repairs, so do not treat them alike:
 - **refused** — present and readable, but this project or app is not allowed it.
   The refusal names the reason. `passbook umbrella` and `passbook projects` show
   what governs it. Adding it again fixes nothing.
+- **guarded, or reads sealed** — present and usable, never printed. Nothing is
+  wrong and there is nothing to repair: run the command that needs it. Telling
+  the owner this key is "missing" or "broken" is the specific mistake here.
 
-Reporting a sealed or refused key as missing is the specific mistake this note
-exists to prevent.
+Reporting a sealed, refused or guarded key as missing is what this note exists
+to prevent.
 
-An agent that speaks MCP can use the server instead: `passbook mcp` on stdio
-lists names and groups, and returns exactly one value per approved request."""
+An agent that speaks MCP should use the server: `passbook mcp` on stdio.
+`list_credentials` gives names, `run_with_credentials` runs a command holding
+them, and `proxy_request` makes an HTTPS call with `{{KEY_NAME}}` filled in at
+send time. The last two return results, never values — prefer them."""
 
 
 def _rewrite(text: str, body: str) -> str:

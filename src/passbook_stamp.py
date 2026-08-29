@@ -69,6 +69,12 @@ SPEC_VERSION = 1
 OPERATIONS = frozenset({
     "read", "write", "link", "unlink", "provision", "denied",
     "ask", "approve", "unlock", "lock", "reveal",
+    # A key that was USED without being handed over — injected into a command
+    # the broker spawned, or filled into a request the broker made. Deliberately
+    # not folded into `read`: the whole point of a grant is that the caller
+    # never received the value, and a row claiming otherwise would misreport the
+    # one fact anybody auditing this is trying to establish.
+    "use",
     # Opening and closing the vault. A refused sign-in is the row an intrusion
     # would show up in first, so it matters more than most of the ones above.
     "signin", "signout",

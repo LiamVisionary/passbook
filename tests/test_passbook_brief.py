@@ -383,3 +383,74 @@ def test_status_says_whether_the_tools_are_there_too(configured):
     brief.register(_runtimes("claude"), root=configured)
     after = {e["id"]: e for e in brief.status(configured)}
     assert after["claude"]["mcp"] is True
+
+
+# ── every way PassBook arrives ──────────────────────────────────────────────
+#
+# "Installed" means several different things here, and only some of them run
+# code. `uv tool install` puts 46 commands on PATH and executes none of them.
+
+
+def test_the_shell_installer_briefs(tmp_path):
+    """install.sh hands over to `passbook install`, so it inherits this."""
+    fake_home = tmp_path / "home"
+    (fake_home / ".claude").mkdir(parents=True)
+    done = subprocess.run(
+        ["/bin/sh", str(REPO / "install.sh"), "--prefix", str(tmp_path / "bin"), "--no-runtime"],
+        capture_output=True, text=True,
+        env={**os.environ, "HIVE_HOME": str(tmp_path / "hive"), "HOME": str(fake_home),
+             "USERPROFILE": str(fake_home), "PASSBOOK_PYTHON": sys.executable},
+    )
+    assert done.returncode == 0, done.stderr
+    assert brief.BEGIN in (fake_home / ".claude/CLAUDE.md").read_text(encoding="utf-8")
+
+
+def test_status_says_when_agents_have_not_been_briefed(tmp_path):
+    """The path nothing can hook: `uv tool install` runs no code, so the first
+    command a person types is the earliest honest moment to mention it."""
+    fake_home = tmp_path / "home"
+    (fake_home / ".claude").mkdir(parents=True)
+    done = subprocess.run(
+        [sys.executable, "-m", "passbook_cli", "status"],
+        capture_output=True, text=True, cwd=str(REPO),
+        env={**os.environ, "HIVE_HOME": str(tmp_path / "hive"), "HOME": str(fake_home),
+             "USERPROFILE": str(fake_home), "PYTHONPATH": str(SRC)},
+    )
+    assert "not briefed" in done.stdout, done.stdout
+    assert "passbook brief install" in done.stdout
+
+
+def test_status_does_not_write_to_agent_files(tmp_path):
+    """It reports and does not repair. Writing into somebody's CLAUDE.md as a
+    side effect of asking for status is how a tool loses trust."""
+    fake_home = tmp_path / "home"
+    (fake_home / ".claude").mkdir(parents=True)
+    subprocess.run(
+        [sys.executable, "-m", "passbook_cli", "status"],
+        capture_output=True, text=True, cwd=str(REPO),
+        env={**os.environ, "HIVE_HOME": str(tmp_path / "hive"), "HOME": str(fake_home),
+             "USERPROFILE": str(fake_home), "PYTHONPATH": str(SRC)},
+    )
+    assert not (fake_home / ".claude/CLAUDE.md").exists()
+
+
+def test_status_is_quiet_once_everything_is_briefed(tmp_path):
+    fake_home = tmp_path / "home"
+    (fake_home / ".claude").mkdir(parents=True)
+    env = {**os.environ, "HIVE_HOME": str(tmp_path / "hive"), "HOME": str(fake_home),
+           "USERPROFILE": str(fake_home), "PYTHONPATH": str(SRC)}
+    subprocess.run([sys.executable, "-m", "passbook_cli", "brief", "install"],
+                   capture_output=True, text=True, cwd=str(REPO), env=env)
+    done = subprocess.run([sys.executable, "-m", "passbook_cli", "status"],
+                          capture_output=True, text=True, cwd=str(REPO), env=env)
+    assert "not briefed" not in done.stdout, done.stdout
+
+
+def test_the_app_briefs_on_launch():
+    """The desktop app never runs `passbook install`, so it does this itself in
+    its setup hook. Asserted against the source because the alternative is
+    building and launching a Tauri app in a unit test."""
+    source = (REPO / "app/src-tauri/src/main.rs").read_text(encoding="utf-8")
+    setup = source[source.index("fn main()"):]
+    assert '.arg("brief")' in setup and '.arg("install")' in setup
+    assert "std::thread::spawn" in setup, "must not delay the window"

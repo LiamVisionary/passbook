@@ -588,6 +588,24 @@ def cmd_status(args: argparse.Namespace) -> int:
     ready = _has_crypto(sys.executable)
     print(f"sealing and linking: {'ready' if ready else 'not set up — run `passbook install`'}")
 
+    # `uv tool install` and `pipx install` put the commands on PATH and run
+    # nothing, so an install that never went through `passbook install` or the
+    # app has told no agent that any of this exists. Said here rather than fixed
+    # here: writing into a person's ~/.claude/CLAUDE.md as a side effect of
+    # asking for status is the kind of thing that makes people stop trusting a
+    # tool, and this is the command they run to find out what is wrong.
+    brief = _brief()
+    if brief is not None:
+        try:
+            unbriefed = [entry for entry in brief.status() if not entry["current"]]
+        except Exception:  # noqa: BLE001 — a status line must not be able to fail
+            unbriefed = []
+        if unbriefed:
+            names = ", ".join(entry["label"] for entry in unbriefed[:4])
+            more = f" and {len(unbriefed) - 4} more" if len(unbriefed) > 4 else ""
+            print(f"agents:    {len(unbriefed)} not briefed ({names}{more})")
+            print("           they will report a sealed key as missing:  passbook brief install")
+
     # A duplicate makes two readers disagree about one key, so say so here —
     # with the fix, not just the complaint.
     duplicates = passbook.duplicate_keys()

@@ -1455,6 +1455,26 @@ fn main() {
             if let Ok(directory) = app.path().resource_dir() {
                 let _ = RESOURCES.set(directory);
             }
+            // Tell the coding agents on this machine that PassBook is here.
+            //
+            // The command line does this during `passbook install`, and most
+            // people never run it: they download the app, or they get the CLI
+            // through `uv tool install`, which installs a package and runs
+            // nothing. Either way the agents were never told, and an agent that
+            // has not been told reports a sealed key as missing.
+            //
+            // Idempotent and quiet. It rewrites a delimited block only when the
+            // text differs, so the ordinary case is a few file reads, and it
+            // runs off the main thread because none of it is worth delaying a
+            // window for.
+            std::thread::spawn(|| {
+                let _ = passbook_command()
+                    .arg("brief")
+                    .arg("install")
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status();
+            });
             let port = ui::serve()?;
             // `localhost`, not `127.0.0.1`: the name is what a passkey binds to,
             // and an address is refused as "an invalid domain".

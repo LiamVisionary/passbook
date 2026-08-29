@@ -255,7 +255,8 @@ def test_the_installer_honours_an_explicit_interpreter(machine):
     done = subprocess.run(
         ["/bin/sh", str(INSTALLER), "--prefix", str(machine / "bin"), "--no-runtime"],
         capture_output=True, text=True,
-        env={**os.environ, "HIVE_HOME": str(machine / "hive"), "PASSBOOK_PYTHON": sys.executable},
+        env={**os.environ, "HIVE_HOME": str(machine / "hive"), "HOME": str(machine),
+             "USERPROFILE": str(machine), "PASSBOOK_PYTHON": sys.executable},
     )
 
     assert done.returncode == 0, done.stderr

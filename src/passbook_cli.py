@@ -1772,7 +1772,9 @@ def cmd_brief(args: argparse.Namespace) -> int:
         return 0
     for entry in found:
         mark = "current" if entry["current"] else ("out of date" if entry["briefed"] else "not briefed")
-        print(f"{entry['label']:<18} {mark:<12} {entry['path']}")
+        tools = "tools" if entry.get("mcp") else ("no tools" if entry.get("mcp_possible")
+                                                  else "brief only")
+        print(f"{entry['label']:<18} {mark:<12} {tools:<11} {entry['path']}")
     stale = [e for e in found if not e["current"]]
     if stale:
         print(f"\n{len(stale)} runtime(s) to brief:  passbook brief install")
@@ -1792,6 +1794,11 @@ def cmd_brief_install(args: argparse.Namespace) -> int:
         return 0
     for entry in brief.install(runtimes):
         print(f"  {entry['state']:<16} {entry['path']}")
+    if not getattr(args, "no_mcp", False):
+        print("\nMCP server:")
+        for entry in brief.register(runtimes):
+            where = entry["path"] or "—"
+            print(f"  {entry['state']:<20} {where}")
     print(f"\n{len(runtimes)} runtime(s). Agents read this at the start of a session, "
           f"so open a new one to pick it up.")
     return 0
@@ -1806,11 +1813,13 @@ def cmd_brief_remove(args: argparse.Namespace) -> int:
     except ValueError as error:
         return _fail(str(error))
     gone = brief.remove(runtimes)
-    if not gone:
-        print("Nothing to remove.")
-        return 0
     for entry in gone:
         print(f"  removed  {entry['path']}")
+    for entry in brief.register(runtimes, remove=True):
+        if entry["state"] == "unregistered":
+            print(f"  removed  {entry['path']} (MCP server)")
+    if not gone:
+        print("Brief removed where present.")
     return 0
 
 
@@ -3637,6 +3646,8 @@ def cmd_install(args: argparse.Namespace) -> int:
             runtimes = brief.detected()
             if runtimes:
                 written = brief.install(runtimes)
+                if not getattr(args, "no_mcp", False):
+                    brief.register(runtimes)
                 changed = [w for w in written if w["state"] in ("briefed", "updated")]
                 if changed:
                     print(f"\nagents:    briefed {len(changed)} runtime(s) — "
@@ -3859,6 +3870,8 @@ def build_parser() -> argparse.ArgumentParser:
         "install", help="write the brief into every runtime found here")
     brief_install.add_argument("--only", default="",
                                help="comma-separated runtime ids instead of every one found")
+    brief_install.add_argument("--no-mcp", action="store_true",
+                               help="write the brief but do not register the MCP server")
     brief_install.set_defaults(json=False, func=cmd_brief_install)
 
     brief_remove = brief_subs.add_parser("remove", help="take the brief back out")
@@ -4193,6 +4206,8 @@ def build_parser() -> argparse.ArgumentParser:
     install.add_argument("--prefix", default=default_prefix())
     install.add_argument("--no-agents", action="store_true",
                          help="do not write the brief into agent context files")
+    install.add_argument("--no-mcp", action="store_true",
+                         help="do not register the MCP server with the agents found here")
     install.add_argument("--no-runtime", action="store_true",
                          help="do not provision a private interpreter for sealing and linking")
     install.set_defaults(func=cmd_install)

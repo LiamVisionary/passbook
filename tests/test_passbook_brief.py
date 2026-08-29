@@ -251,3 +251,135 @@ def test_no_agents_leaves_every_context_file_alone(tmp_path):
              "PYTHONPATH": str(SRC)},
     )
     assert not (fake_home / ".claude/CLAUDE.md").exists()
+
+
+# ── MCP registration ────────────────────────────────────────────────────────
+#
+# These files belong to running tools and hold state far beyond MCP —
+# ~/.claude.json is 70KB of session history. Every test here is about not
+# damaging something.
+
+
+CLAUDE_JSON = """{
+  "userID": "abc",
+  "mcpServers": {
+    "hivemind": {"command": "node", "args": ["/somewhere/hivemind-mcp"]}
+  },
+  "seenNotifications": ["a", "b"]
+}
+"""
+
+CODEX_TOML = """model = "gpt-5.6-sol"
+
+[mcp_servers.hivemind]
+command = "node"
+args = ["/somewhere/hivemind-mcp"]
+
+[mcp_servers.other]
+command = "thing"
+args = []
+"""
+
+
+@pytest.fixture
+def configured(tmp_path):
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".codex").mkdir()
+    (tmp_path / ".claude.json").write_text(CLAUDE_JSON, encoding="utf-8")
+    (tmp_path / ".codex/config.toml").write_text(CODEX_TOML, encoding="utf-8")
+    return tmp_path
+
+
+def _runtimes(*ids):
+    return [r for r in brief.RUNTIMES if r.id in ids]
+
+
+def test_registering_keeps_every_other_server(configured):
+    brief.register(_runtimes("claude", "codex"), root=configured)
+    data = json.loads((configured / ".claude.json").read_text(encoding="utf-8"))
+    assert sorted(data["mcpServers"]) == ["hivemind", "passbook"]
+    assert data["mcpServers"]["hivemind"]["args"] == ["/somewhere/hivemind-mcp"]
+
+
+def test_registering_keeps_unrelated_json_keys(configured):
+    """`~/.claude.json` is mostly session state. Losing it would be losing the
+    user's history to add one server."""
+    brief.register(_runtimes("claude"), root=configured)
+    data = json.loads((configured / ".claude.json").read_text(encoding="utf-8"))
+    assert data["userID"] == "abc" and data["seenNotifications"] == ["a", "b"]
+
+
+def test_the_toml_still_parses_and_keeps_its_other_tables(configured):
+    tomllib = pytest.importorskip("tomllib")
+    brief.register(_runtimes("codex"), root=configured)
+    parsed = tomllib.loads((configured / ".codex/config.toml").read_text(encoding="utf-8"))
+    assert parsed["model"] == "gpt-5.6-sol"
+    assert sorted(parsed["mcp_servers"]) == ["hivemind", "other", "passbook"]
+    assert parsed["mcp_servers"]["hivemind"]["command"] == "node"
+
+
+def test_registering_twice_changes_nothing(configured):
+    brief.register(_runtimes("claude", "codex"), root=configured)
+    again = brief.register(_runtimes("claude", "codex"), root=configured)
+    assert {e["state"] for e in again} == {"already registered"}
+
+
+def test_a_backup_is_left_beside_the_file(configured):
+    """These are other tools' files. If this gets it wrong the original should
+    still be there to put back."""
+    brief.register(_runtimes("claude"), root=configured)
+    backup = configured / (".claude.json" + brief.BACKUP_SUFFIX)
+    assert backup.is_file()
+    assert json.loads(backup.read_text(encoding="utf-8"))["mcpServers"].keys() == {"hivemind"}
+
+
+def test_unregistering_leaves_the_file_as_it_was(configured):
+    tomllib = pytest.importorskip("tomllib")
+    before = tomllib.loads((configured / ".codex/config.toml").read_text(encoding="utf-8"))
+    brief.register(_runtimes("claude", "codex"), root=configured)
+    brief.register(_runtimes("claude", "codex"), root=configured, remove=True)
+
+    after = tomllib.loads((configured / ".codex/config.toml").read_text(encoding="utf-8"))
+    assert after == before
+    data = json.loads((configured / ".claude.json").read_text(encoding="utf-8"))
+    assert sorted(data["mcpServers"]) == ["hivemind"]
+    assert data["userID"] == "abc"
+
+
+def test_a_runtime_with_nowhere_to_put_it_is_reported_not_skipped(configured):
+    """Cline keeps servers in a VS Code extension's storage. Saying so beats
+    appearing to have done something."""
+    done = brief.register(_runtimes("cline"), root=configured)
+    assert done[0]["state"] == "no MCP config to edit"
+
+
+def test_a_damaged_config_is_left_alone(tmp_path):
+    """Half-written JSON is somebody's problem, and overwriting it would make it
+    this tool's problem too."""
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude.json").write_text("{not json", encoding="utf-8")
+    done = brief.register(_runtimes("claude"), root=tmp_path)
+    assert done[0]["state"].startswith("left alone")
+    assert (tmp_path / ".claude.json").read_text(encoding="utf-8") == "{not json"
+
+
+def test_the_server_command_is_absolute_when_it_can_be():
+    """Agents are launched by editors whose PATH is not a login shell's."""
+    entry = brief.server_entry()
+    assert entry["args"] == ["mcp"]
+    assert entry["command"].endswith("passbook")
+
+
+def test_a_missing_config_file_is_created(tmp_path):
+    (tmp_path / ".cursor").mkdir()
+    brief.register(_runtimes("cursor"), root=tmp_path)
+    data = json.loads((tmp_path / ".cursor/mcp.json").read_text(encoding="utf-8"))
+    assert "passbook" in data["mcpServers"]
+
+
+def test_status_says_whether_the_tools_are_there_too(configured):
+    before = {e["id"]: e for e in brief.status(configured)}
+    assert before["claude"]["mcp"] is False and before["claude"]["mcp_possible"] is True
+    brief.register(_runtimes("claude"), root=configured)
+    after = {e["id"]: e for e in brief.status(configured)}
+    assert after["claude"]["mcp"] is True

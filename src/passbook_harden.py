@@ -202,6 +202,17 @@ RUNTIME = Path("/usr/local/libexec/passbook")
 AGENT_PLIST = Path("/Library/LaunchAgents") / f"{LABEL}.plist"
 
 
+def _is_root() -> bool:
+    """Whether this process can write to root-owned paths.
+
+    `os.geteuid` does not exist on Windows, so asking for it there is an
+    AttributeError rather than a False — which is how `undo()` crashed on the
+    Windows runners instead of politely declining.
+    """
+    getter = getattr(os, "geteuid", None)
+    return getter is not None and getter() == 0
+
+
 def _writable_by_user(path: Path) -> bool:
     """Could this user modify it? The question integrity turns on."""
     try:
@@ -318,7 +329,7 @@ def install(*, runtime: Path | None = None, plist: Path | None = None,
 
     if sys.platform != "darwin":
         return {"ok": False, "why": "the LaunchAgent shape is macOS-only"}
-    if os.geteuid() != 0:
+    if not _is_root():
         return {"ok": False, "needs_root": True,
                 "why": "this writes to /usr/local/libexec and /Library/LaunchAgents"}
 
@@ -360,7 +371,9 @@ def undo(*, runtime: Path | None = None, plist: Path | None = None) -> dict[str,
     """Put the machine back. Every privileged installer owes one of these."""
     runtime = Path(runtime) if runtime else RUNTIME
     plist = Path(plist) if plist else AGENT_PLIST
-    if os.geteuid() != 0:
+    if sys.platform != "darwin":
+        return {"ok": False, "why": "the LaunchAgent shape is macOS-only"}
+    if not _is_root():
         return {"ok": False, "needs_root": True, "why": "this removes root-owned files"}
     removed = []
     if plist.exists():

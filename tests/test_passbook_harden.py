@@ -170,18 +170,31 @@ def test_the_plan_is_readable_before_it_is_run():
     assert any("chown" in step["what"] for step in steps)
 
 
-def test_it_refuses_to_install_without_root_rather_than_half_finishing():
-    if os.geteuid() == 0:  # pragma: no cover - the suite does not run as root
-        pytest.skip("this asserts the unprivileged path")
-    answer = harden.install()
-    assert answer["ok"] is False and answer["needs_root"] is True
+def _running_as_root() -> bool:
+    getter = getattr(os, "geteuid", None)
+    return getter is not None and getter() == 0
 
 
-def test_undo_exists_and_also_needs_root():
-    """Every privileged installer owes a way back."""
-    if os.geteuid() == 0:  # pragma: no cover
+@pytest.mark.parametrize("call", ["install", "undo"])
+def test_it_declines_rather_than_half_finishing_or_crashing(call):
+    """Both privileged calls must decline cleanly on every platform.
+
+    They did not: `undo` reached for `os.geteuid` before checking the platform
+    and raised AttributeError on Windows, and on Linux `install` answered
+    "macOS-only" — correct, but without the key this test first asserted. The
+    contract is that neither raises and both say why.
+    """
+    if _running_as_root():  # pragma: no cover - the suite does not run as root
         pytest.skip("this asserts the unprivileged path")
-    assert harden.undo()["needs_root"] is True
+    answer = getattr(harden, call)()
+    assert answer["ok"] is False
+    assert answer["why"]
+    if sys.platform == "darwin":
+        assert answer["needs_root"] is True
+    else:
+        # Elsewhere the LaunchAgent shape does not apply at all, and saying so
+        # beats asking for a root password to install something inapplicable.
+        assert "macOS" in answer["why"]
 
 
 def test_the_agent_runs_the_broker_and_comes_back_if_it_dies():

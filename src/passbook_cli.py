@@ -1733,6 +1733,87 @@ def cmd_update(args: argparse.Namespace) -> int:
     return 0
 
 
+def _brief():
+    try:
+        import passbook_brief
+        return passbook_brief
+    except ImportError:
+        return None
+
+
+def _chosen_runtimes(brief, only: str = ""):
+    found = brief.detected()
+    if not only:
+        return found
+    wanted = {w.strip().lower() for w in only.split(",") if w.strip()}
+    known = {r.id for r in brief.RUNTIMES}
+    unknown = wanted - known
+    if unknown:
+        raise ValueError(f"not a runtime this knows about: {', '.join(sorted(unknown))}\n"
+                         f"Known: {', '.join(sorted(known))}")
+    # Named explicitly means brief it whether or not it left a footprint —
+    # somebody naming a runtime knows better than the probe does.
+    return [r for r in brief.RUNTIMES if r.id in wanted]
+
+
+def cmd_brief(args: argparse.Namespace) -> int:
+    """Which agents on this machine have been told PassBook is here."""
+    brief = _brief()
+    if brief is None:
+        return _fail("Briefing is not installed on this machine.", "Run:  passbook install")
+    found = brief.status()
+    if getattr(args, "json", False):
+        print(json.dumps(found, indent=2))
+        return 0
+    if not found:
+        print("No agent runtimes found on this machine.")
+        print("Briefing writes into a runtime's own context file, so there is")
+        print("nothing to write into until one is installed.")
+        return 0
+    for entry in found:
+        mark = "current" if entry["current"] else ("out of date" if entry["briefed"] else "not briefed")
+        print(f"{entry['label']:<18} {mark:<12} {entry['path']}")
+    stale = [e for e in found if not e["current"]]
+    if stale:
+        print(f"\n{len(stale)} runtime(s) to brief:  passbook brief install")
+    return 0
+
+
+def cmd_brief_install(args: argparse.Namespace) -> int:
+    brief = _brief()
+    if brief is None:
+        return _fail("Briefing is not installed on this machine.", "Run:  passbook install")
+    try:
+        runtimes = _chosen_runtimes(brief, getattr(args, "only", "") or "")
+    except ValueError as error:
+        return _fail(str(error))
+    if not runtimes:
+        print("No agent runtimes found on this machine; nothing to brief.")
+        return 0
+    for entry in brief.install(runtimes):
+        print(f"  {entry['state']:<16} {entry['path']}")
+    print(f"\n{len(runtimes)} runtime(s). Agents read this at the start of a session, "
+          f"so open a new one to pick it up.")
+    return 0
+
+
+def cmd_brief_remove(args: argparse.Namespace) -> int:
+    brief = _brief()
+    if brief is None:
+        return 1
+    try:
+        runtimes = _chosen_runtimes(brief, getattr(args, "only", "") or "")
+    except ValueError as error:
+        return _fail(str(error))
+    gone = brief.remove(runtimes)
+    if not gone:
+        print("Nothing to remove.")
+        return 0
+    for entry in gone:
+        print(f"  removed  {entry['path']}")
+    return 0
+
+
 def cmd_agents(args: argparse.Namespace) -> int:
     """Who each key is for. The inverse of `policy`, which is per-app."""
     catalog = _catalog()
@@ -3545,6 +3626,22 @@ def cmd_install(args: argparse.Namespace) -> int:
             print(f'    export PATH="{target}:$PATH"')
     else:
         print("\nTry:  passbook-check OPENAI_API_KEY")
+
+    # The commands are on PATH now, and nothing on the machine knows it. An
+    # agent that has not been told about sealing reports a locked key as
+    # missing and offers to add it again, which is how a working credential
+    # gets a second copy written over the top of it.
+    if not getattr(args, "no_agents", False):
+        brief = _brief()
+        if brief is not None:
+            runtimes = brief.detected()
+            if runtimes:
+                written = brief.install(runtimes)
+                changed = [w for w in written if w["state"] in ("briefed", "updated")]
+                if changed:
+                    print(f"\nagents:    briefed {len(changed)} runtime(s) — "
+                          f"{', '.join(w['id'] for w in changed)}")
+                    print("           they read it at the start of a session")
     return 0
 
 
@@ -3751,6 +3848,22 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser.add_argument("--version", action="store_true",
                         help="print the installed version and exit")
+
+    brief_cmd = subs.add_parser(
+        "brief", help="tell the coding agents on this machine that PassBook is here")
+    brief_cmd.add_argument("--json", action="store_true")
+    brief_cmd.set_defaults(func=cmd_brief)
+    brief_subs = brief_cmd.add_subparsers(dest="brief_command")
+
+    brief_install = brief_subs.add_parser(
+        "install", help="write the brief into every runtime found here")
+    brief_install.add_argument("--only", default="",
+                               help="comma-separated runtime ids instead of every one found")
+    brief_install.set_defaults(json=False, func=cmd_brief_install)
+
+    brief_remove = brief_subs.add_parser("remove", help="take the brief back out")
+    brief_remove.add_argument("--only", default="")
+    brief_remove.set_defaults(json=False, func=cmd_brief_remove)
 
     update_cmd = subs.add_parser("update", help="move this copy to the newest release")
     update_cmd.add_argument("--check", action="store_true",
@@ -4078,6 +4191,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     install = subs.add_parser("install", help="set up PassBook: runtime, commands, and store")
     install.add_argument("--prefix", default=default_prefix())
+    install.add_argument("--no-agents", action="store_true",
+                         help="do not write the brief into agent context files")
     install.add_argument("--no-runtime", action="store_true",
                          help="do not provision a private interpreter for sealing and linking")
     install.set_defaults(func=cmd_install)

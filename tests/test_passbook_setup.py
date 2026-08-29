@@ -45,10 +45,20 @@ def machine(tmp_path, monkeypatch):
 
 
 def _install(prefix: Path, *extra: str, home: Path, env: dict | None = None):
+    """Run the real installer, entirely inside a temporary home.
+
+    HOME as well as HIVE_HOME, and this is not belt-and-braces. `install` briefs
+    the coding agents it finds on the machine, and it finds them by looking
+    under HOME — so a test that overrode only the store wrote PassBook's block
+    into the DEVELOPER's own ~/.claude/CLAUDE.md every time the suite ran. It
+    did exactly that once, which is why this docstring is longer than the
+    function.
+    """
     return subprocess.run(
         [sys.executable, "-m", "passbook_cli", "install", "--prefix", str(prefix), *extra],
         capture_output=True, text=True, cwd=str(REPO),
-        env={**os.environ, "HIVE_HOME": str(home), "PYTHONPATH": str(PACKAGE), **(env or {})},
+        env={**os.environ, "HIVE_HOME": str(home), "HOME": str(home),
+             "USERPROFILE": str(home), "PYTHONPATH": str(PACKAGE), **(env or {})},
     )
 
 
@@ -166,7 +176,8 @@ def test_setup_reports_honestly_when_the_runtime_is_missing(machine, crypto_free
         [str(crypto_free_python), "-m", "passbook_cli", "install",
          "--prefix", str(machine / "bin"), "--no-runtime"],
         capture_output=True, text=True, cwd=str(REPO),
-        env={**os.environ, "HIVE_HOME": str(machine / "hive"), "PYTHONPATH": str(PACKAGE)},
+        env={**os.environ, "HIVE_HOME": str(machine / "hive"), "HOME": str(machine),
+             "USERPROFILE": str(machine), "PYTHONPATH": str(PACKAGE)},
     )
 
     assert done.returncode == 0, done.stderr
@@ -180,7 +191,8 @@ def test_setup_provisions_a_runtime_when_the_interpreter_lacks_one(machine, cryp
     done = subprocess.run(
         [str(crypto_free_python), "-m", "passbook_cli", "install", "--prefix", str(machine / "bin")],
         capture_output=True, text=True, cwd=str(REPO),
-        env={**os.environ, "HIVE_HOME": str(machine / "hive"), "PYTHONPATH": str(PACKAGE)},
+        env={**os.environ, "HIVE_HOME": str(machine / "hive"), "HOME": str(machine),
+             "USERPROFILE": str(machine), "PYTHONPATH": str(PACKAGE)},
     )
 
     if "sealing and linking: ready" not in done.stdout:

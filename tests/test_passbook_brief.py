@@ -391,6 +391,7 @@ def test_status_says_whether_the_tools_are_there_too(configured):
 # code. `uv tool install` puts 46 commands on PATH and executes none of them.
 
 
+@pytest.mark.skipif(os.name == "nt", reason="install.sh is POSIX shell")
 def test_the_shell_installer_briefs(tmp_path):
     """install.sh hands over to `passbook install`, so it inherits this."""
     fake_home = tmp_path / "home"

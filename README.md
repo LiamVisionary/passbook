@@ -48,6 +48,7 @@ you see here, you can do from a terminal.
 - [Agents](#agents)
 - [The broker](#the-broker)
 - [Backup](#backup)
+- [On screen](#on-screen)
 - [What it does not claim](#what-it-does-not-claim)
 - [Reference](#reference)
 
@@ -876,6 +877,51 @@ kept.
 
 ---
 
+## On screen
+
+Everything above is about which *processes* may have a credential. This is about
+somebody — or something — watching the window.
+
+An agent with computer use does not need a policy hole to read a key off your
+screen. It takes a screenshot, or it reads the accessibility tree, which is
+cheaper and needs no screenshot at all. A revealed value in an ordinary text
+field is available to both, and to anyone you are screen sharing with.
+
+So a revealed value is not text. PassBook draws it, in the app, and hands the
+window a picture and a token.
+
+- **There is no text to read.** Not in the page, not in the accessibility tree,
+  not for `AXUIElementCopyAttributeValue` or UI Automation. A screen reader
+  cannot read a credential here either — that is the same door, and it does not
+  have two sides. Copy is the way through: it needs no eyes, and the value never
+  passes through the window.
+- **There is no string to scrape.** A JavaScript string cannot be erased —
+  `delete` drops a reference and the bytes stay in the heap — and one reveal was
+  never one copy: escaping, the row template and `innerHTML` each made another,
+  so a value left on screen while you typed in the search box minted a fresh set
+  every repaint. The value now stays in the app, in memory that is overwritten
+  when the hold ends.
+- **The window is excluded from capture.** The same `NSWindowSharingType::None`
+  and `WDA_EXCLUDEFROMCAPTURE` a video player uses. Screenshots, screen
+  recordings and screen shares do not contain it. **Linux has no equivalent and
+  gets nothing here** — the drawing still applies, the capture exclusion does
+  not. The app's Security page says which of the two you have rather than
+  claiming both.
+- **A revealed value hides itself after 30 seconds**, and the app overwrites its
+  copy when it does.
+
+Drawing and capture exclusion are worth little apart. A drawn value in a
+capturable window is one an agent screenshots and reads with OCR; a protected
+window full of ordinary text is one it reads out of the accessibility tree
+without taking a screenshot at all. Together there is neither text nor pixels to
+take.
+
+Copying happens in the app, not the window: `navigator.clipboard.writeText`
+takes a string, so leaving copy in the page would have re-materialised on the
+row's most-used button exactly what the rest of this avoids.
+
+---
+
 ## What it does not claim
 
 **Encryption protects the store at rest.** A stolen laptop, a backup, a synced
@@ -906,6 +952,22 @@ tree where it already is and starts the broker from a root-owned LaunchAgent.
 Updating needs root afterwards, which for the code holding your credentials is
 the point rather than the cost. `passbook harden` reports what is true right now
 rather than assuming.
+
+**Drawing a value protects the screen, not the machine.** It removes the text an
+agent reads and the copies the window could not erase. It does not stop code
+running as you from asking the store for the same key without opening the window
+at all — that is what `reads: sealed` and the broker are for, and no amount of
+work on the screen substitutes for them. The plaintext is also in the app for as
+long as the hold lasts, and same-uid means a caller willing to write custom code
+can read it out of there.
+
+**Capture exclusion is the compositor cooperating, not hardware.** It is the
+weaker of the two things a video player does; the strong one — decoded frames in
+memory the compositor cannot read back — exists only for video going through a
+hardware decoder and cannot render a user interface. A privileged capture driver,
+a virtual display, or a phone camera all defeat it. It also means a screenshot of
+the PassBook window for a bug report comes out empty, which is the correct trade
+for this window and is not a bug.
 
 **The record is tamper evident, not tamper proof.** It does not prevent an
 access, it makes one impossible to hide.

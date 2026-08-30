@@ -326,6 +326,20 @@
     background: var(--card); color: var(--ink1);
     box-shadow: 0 0 0 3px var(--accent-soft);
   }
+  /* A revealed value is a picture, and the box around it is the old field's box
+     so the row does not jump when one appears. The image is drawn at `12 * dpr`
+     so it is crisp on a Retina panel and then displayed at a width of
+     `naturalWidth / dpr`, which is set on load rather than in CSS: only the
+     image knows how tall the font made it, and guessing here would scale the
+     glyphs by whatever the guess was wrong by. The height below is what it
+     occupies until that lands, so the row does not jump either. */
+  .keyrow .val.picture {
+    display: flex; align-items: center; min-height: 26px; overflow-x: auto;
+    cursor: text;
+  }
+  .keyrow .val.picture img { display: block; height: 16px; width: auto; max-width: none; }
+  .keyrow .val.picture img.measured { height: auto; }
+  .keyrow .val.empty { color: var(--ink3); font-style: italic; }
   /* A hidden value is a chip beside its name, not a field of its own: a row of
      empty grey per key is most of what you see on a store of any size. */
   /* Not decoration: this is the one place a person looking at a key can learn
@@ -921,6 +935,73 @@
   const drop = document.getElementById("drop");
   const esc = (v) => String(v ?? "").replace(/[&<>"]/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
 
+  /** How long a revealed value stays on screen before it hides itself.
+   *
+   *  Shorter than the hold on the other side (45s in veil.rs) on purpose. The
+   *  two clocks race on every reveal and this one has to win: a token that
+   *  expired first would leave a broken image under a row still claiming to
+   *  show you something, which reads as a bug rather than as a hold ending.
+   */
+  const HIDE_AFTER = 30000;
+
+  /** The ink the picture should be drawn in.
+   *
+   *  Read from the page rather than decided on the Rust side, so the drawing
+   *  follows the theme the person is actually looking at — `--ink1` is a plain
+   *  hex in both, and `getComputedStyle` has already resolved which one
+   *  `prefers-color-scheme` picked.
+   */
+  function inkHex() {
+    const raw = getComputedStyle(document.documentElement)
+      .getPropertyValue("--ink1").trim().replace("#", "");
+    return /^[0-9a-fA-F]{6}$/.test(raw) ? raw : "16171a";
+  }
+
+  /** A revealed value, as an image fetched from the app's own loopback server.
+   *
+   *  The `alt` is empty and the label describes the picture rather than reading
+   *  it out, because putting the value in either would hand it straight back to
+   *  the accessibility tree this exists to keep it out of. That does mean a
+   *  screen reader cannot read a credential here — so the label points at the
+   *  copy button, which needs no eyes, holds the value on the Rust side, and is
+   *  what somebody wanted a credential for anyway.
+   */
+  function valuePicture(k) {
+    const held = revealed[k];
+    if (!held) return "";
+    if (!held.length) return `<div class="val empty">empty</div>`;
+    // Just the token. Size and colour were settled when the value was revealed,
+    // because that is the only moment the plaintext existed to be drawn from.
+    const src = `/veil?t=${encodeURIComponent(held.token)}`;
+    return `<div class="val picture" data-picture="${esc(k)}" role="img"
+      aria-label="${esc(k)} is shown as a picture so it cannot be read as text. \
+Use the copy button to put it on the clipboard."
+      title="Click to replace this value">
+      <img src="${esc(src)}" alt="" draggable="false" data-dpr="${held.dpr}" />
+    </div>`;
+  }
+
+  /** Stop showing a value, and tell the other side to overwrite it now.
+   *
+   *  The hold in veil.rs expires on its own, so none of this is load-bearing —
+   *  but a value that was on screen for four seconds should not sit in the app
+   *  for forty-five.
+   */
+  function hideValue(k) {
+    const held = revealed[k];
+    delete revealed[k];
+    delete replacing[k];
+    clearTimeout(hideTimers[k]);
+    delete hideTimers[k];
+    if (held?.token && invoke) invoke("forget_reveal", { token: held.token }).catch(() => {});
+  }
+
+  /** Start this key's clock, replacing any clock it already had. */
+  function holdFor(k) {
+    clearTimeout(hideTimers[k]);
+    hideTimers[k] = setTimeout(() => { hideValue(k); paint(); }, HIDE_AFTER);
+  }
+
   /** The icon set.
    *
    *  Drawn here rather than pulled from a library: it is a dozen glyphs, an
@@ -1060,8 +1141,29 @@
   let expanded = {};    // key -> true while its settings are open
   let selectMode = false;   // whether rows show a checkbox
   let adding = false;       // whether the add-a-key fields are on screen
-  let revealed = {};    // key -> true once its value has been fetched and shown
-  let values = {};      // key -> value, held only while revealed
+  // key -> { token, length, hold_ms } once its value has been drawn. Not the
+  // value: a revealed credential is now a picture fetched from /veil, and this
+  // side never holds the string at all.
+  //
+  // That is not fussiness. A JavaScript string cannot be erased — `delete`
+  // drops a reference and the bytes stay in the heap — and one reveal was never
+  // one copy: esc(), the row template, the page concatenation and innerHTML
+  // each made another, so leaving a value on screen and typing one letter in
+  // the search box minted a fresh set every repaint. On top of that, text in
+  // this window is published to the platform accessibility tree, where an agent
+  // reads it without taking a screenshot. Neither problem has a fix on this
+  // side of the boundary, so the value stopped crossing it.
+  let revealed = {};
+  // key -> the timer that will hide it again.
+  let hideTimers = {};
+  // key -> true while the row is showing an empty box to type a new value into.
+  // Replacing rather than editing is deliberate: the old value is never put in
+  // an input, so there is nothing to pre-fill and nothing to erase afterwards.
+  let replacing = {};
+  // Whether this platform gave the window the protections it claims. Asked
+  // rather than assumed — capture exclusion does not exist on Linux, and
+  // drawing needs a font the machine might not have.
+  let guards = { capture: false, drawing: true };
   let confirming = null;
   let query = "";
   let history = {};   // key -> rows, fetched only when someone opens it
@@ -1440,8 +1542,10 @@
           aria-expanded="${open}"
           aria-label="Settings for ${esc(k)}">${icon("chevron")}</button>
       </div>
-      ${shown ? `<input class="val" data-val="${esc(k)}" value="${esc(values[k] ?? "")}"
-        spellcheck="false" autocapitalize="off" placeholder="empty" />` : ""}
+      ${replacing[k] ? `<input class="val" data-replace="${esc(k)}" value=""
+        spellcheck="false" autocapitalize="off" autocomplete="off"
+        placeholder="Type a new value for ${esc(k)}, or press Escape" />`
+       : shown ? valuePicture(k) : ""}
       ${pending ? `<div class="confirmstrip">
         <span class="grow">Remove it? Another app may be using it, and the value is
           not recoverable from here.</span>
@@ -1804,6 +1908,51 @@
           for.</p>${sealed ? `<p>Turning it off puts every value back in the clear on
           disk. The way out is here on purpose \u2014 an encryption you cannot reverse is
           one nobody turns on.</p>` : ""}`)}
+      </div>
+      ${veilGroup()}`;
+  }
+
+  /** What this window does about somebody watching the screen.
+   *
+   *  Stated rather than assumed, and stated per platform, because two of the
+   *  three are conditional and a panel that claimed them everywhere would be
+   *  wrong on exactly the machines where the difference matters. It also says
+   *  what none of it covers, which is the part a page like this usually leaves
+   *  out: anything running as you can still read the store through the CLI, and
+   *  that is a question for Permissions, not for the screen.
+   */
+  function veilGroup() {
+    const rows = [
+      [true, "Values are drawn, not written",
+       "A revealed credential is an image. There is no text for a screen reader, "
+       + "for the accessibility APIs, or for an agent reading this window, and no "
+       + "string left in the page afterwards."],
+      [guards.capture, "Hidden from screenshots and screen sharing",
+       guards.capture
+         ? "This window is excluded from screen capture the same way a video player is."
+         : "This platform has no way to exclude a window from capture, so a screenshot "
+           + "of this window shows what is on it. The drawing above still applies."],
+      [true, `Revealed values hide themselves after ${HIDE_AFTER / 1000} seconds`,
+       "And the app overwrites its copy when they do."],
+    ];
+    if (!guards.drawing) {
+      rows[0] = [false, "Values cannot be shown on this machine",
+        "PassBook draws credentials rather than writing them, and found no monospace "
+        + "font here to draw with. Reveal and copy are refused rather than falling "
+        + "back. Use a key instead of reading it:  passbook run -- <command>"];
+    }
+    return `
+      <div class="group">
+        <h3>On screen</h3>
+        ${rows.map(([on, title, why]) => `<div class="row">
+          <div class="grow"><strong>${esc(title)}</strong>
+            <div class="sub">${esc(why)}</div></div>
+          <span class="tag ${on ? "on" : "off"}">${on ? "On" : "No"}</span>
+        </div>`).join("")}
+        ${aside(`<p>This is about somebody \u2014 or something \u2014 watching the
+          screen. It does not cover code running as you, which can ask the store for a
+          key without opening this window at all: that is what Permissions and
+          <code>passbook policy --reads sealed</code> are for.</p>`)}
       </div>`;
   }
 
@@ -2827,7 +2976,13 @@ passbook oauth connect google:work</pre>
       notice = "Locked. This window could not claim its usual port, so quitting the app "
              + "will clear the lock until it can.";
     }
-    revealed = {}; values = {}; history = {}; picked = {}; expanded = {};
+    // Every revealed value goes, and the app is told to overwrite each one
+    // rather than waiting out its hold. A lock that leaves a readable value
+    // behind it is a mistake this window has already made once, in the other
+    // direction: the sidebar said "Vault locked" while the eye beside every key
+    // still worked.
+    Object.keys(revealed).forEach(hideValue);
+    revealed = {}; history = {}; picked = {}; expanded = {}; replacing = {};
     gateView = { mode: "pick", chosen: null, error: "", busy: false, hint: "" };
     paintGate();
   }
@@ -4280,9 +4435,20 @@ passbook oauth connect google:work</pre>
       call("forget_machine", { host: b.dataset.forget }));
     main.querySelectorAll("[data-reveal]").forEach((b) => b.onclick = async () => {
       const k = b.dataset.reveal;
-      if (revealed[k]) { delete revealed[k]; delete values[k]; paint(); return; }
-      try { values[k] = await invoke("reveal_key", { name: k }); revealed[k] = true; notice = ""; }
-      catch (e) { notice = String(e); }
+      if (revealed[k]) { hideValue(k); paint(); return; }
+      // The drawing happens on the other side, at the moment the plaintext
+      // exists, so the size and colour have to travel with the request rather
+      // than with the fetch. What comes back is a token and a length, never the
+      // value; the picture is fetched by the <img> the next paint puts on the
+      // row. A theme change while a value is showing therefore leaves the old
+      // ink on it until it hides, which is a fair price for the plaintext
+      // living for microseconds instead of half a minute.
+      const dpr = Math.min(Math.max(window.devicePixelRatio || 1, 1), 3);
+      try {
+        revealed[k] = { dpr, ...await invoke("reveal_key",
+          { name: k, px: 12, scale: dpr, ink: inkHex() }) };
+        notice = ""; holdFor(k);
+      } catch (e) { notice = String(e); }
       paint();
     });
     main.querySelectorAll("[data-hist]").forEach((b) => b.onclick = async () => {
@@ -4300,9 +4466,12 @@ passbook oauth connect google:work</pre>
     });
     main.querySelectorAll("[data-copy]").forEach((b) => b.onclick = async () => {
       const k = b.dataset.copy;
+      // `navigator.clipboard.writeText` takes a string, which is why this no
+      // longer happens here: it was the one path that put the value back in
+      // this heap, on the row's most-used button. On a machine that seals reads
+      // it is refused outright, and the refusal says so.
       try {
-        const v = values[k] ?? await invoke("reveal_key", { name: k });
-        await navigator.clipboard.writeText(v);
+        await invoke("copy_key", { name: k });
         markCopied(k);
         notice = "";
       } catch (e) { notice = String(e); }
@@ -4316,23 +4485,53 @@ passbook oauth connect google:work</pre>
     });
     main.querySelectorAll("[data-rmgo]").forEach((b) => b.onclick = async () => {
       const k = b.dataset.rmgo;
-      confirming = null; delete revealed[k]; delete values[k];
+      confirming = null; hideValue(k);
       await call("remove_key", { name: k });
     });
-    // Saving on blur is how the HivemindOS card behaves; Escape reverts.
-    main.querySelectorAll("[data-val]").forEach((input) => {
-      const k = input.dataset.val;
-      if (!revealed[k]) return;
+    // Clicking the picture asks to replace the value.
+    //
+    // Replace rather than edit, and the box opens empty rather than filled in.
+    // Editing in place would have meant putting the old value back into an
+    // input — the exact string in the exact element this whole change exists to
+    // avoid — and it was never much of an edit anyway: nobody amends the
+    // fourteenth character of an API key, they paste a new one.
+    main.querySelectorAll("[data-picture]").forEach((el) => el.onclick = () => {
+      replacing[el.dataset.picture] = true;
+      paint();
+    });
+    // A picture drawn at `12 * dpr` belongs on screen at a dpr-th of its own
+    // size. Done from the loaded image rather than in CSS because the height a
+    // font gives a line is not something this side can know, and a guess would
+    // scale every glyph by however wrong it was.
+    main.querySelectorAll("[data-picture] img").forEach((img) => {
+      const fit = () => {
+        const dpr = Number(img.dataset.dpr) || 1;
+        if (!img.naturalWidth) return;
+        img.style.width = `${img.naturalWidth / dpr}px`;
+        img.classList.add("measured");
+      };
+      if (img.complete) fit(); else img.onload = fit;
+    });
+    // Saving on blur is how the HivemindOS card behaves; Escape abandons it.
+    main.querySelectorAll("[data-replace]").forEach((input) => {
+      const k = input.dataset.replace;
       input.onkeydown = (e) => {
         if (e.key === "Enter") input.blur();
-        if (e.key === "Escape") { input.value = values[k] ?? ""; input.blur(); }
+        if (e.key === "Escape") { input.value = ""; input.blur(); }
       };
       input.onblur = async () => {
         const next = input.value;
-        if (next === (values[k] ?? "") || !next.trim()) return;
-        values[k] = next;
+        input.value = "";
+        delete replacing[k];
+        if (!next.trim()) { paint(); return; }
+        // Somebody typed this, so for these few seconds the window does hold a
+        // value — unavoidably, since the typing happened here. Hiding the row
+        // ends that as soon as the store has it, rather than leaving it sitting
+        // in a field behind whatever the person does next.
+        hideValue(k);
         await call("add_key", { name: k, value: next, replace: true });
       };
+      input.focus();
     });
     // innerHTML is replaced on every paint, so typing would lose focus after
     // each keystroke without restoring it here.
@@ -4406,6 +4605,9 @@ passbook oauth connect google:work</pre>
       paintGate();
       await readyNotifications();
       try { biometry = await invoke("biometric_status") || biometry; } catch { /* older build */ }
+      // Two of the three protections are conditional, so the window asks rather
+      // than claiming them. See `capture_protection` in main.rs.
+      try { guards = await invoke("capture_protection") || guards; } catch { /* older build */ }
       if (biometry.available) { paintGate(); paint(); }
       announce(state?.broker?.pending);
       // A link that launched this window fired its event before there was a

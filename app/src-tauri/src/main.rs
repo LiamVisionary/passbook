@@ -28,6 +28,8 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+use zeroize::Zeroizing;
 use std::sync::OnceLock;
 
 use tauri::{Emitter, Manager};
@@ -192,6 +194,35 @@ fn run(args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
+/// `run`, for the calls whose output is a credential.
+///
+/// The difference is the whole reason it exists: `run` leaves the value in a
+/// `Vec<u8>` from `Command::output`, then in a `String::from_utf8_lossy` copy,
+/// then in the `to_string` after it, and none of the three are overwritten when
+/// they drop. That was invisible while the value was on its way to the webview
+/// — which could not erase anything either — and became worth fixing the moment
+/// this side started being the only side that holds it.
+///
+/// Both intermediates are wrapped, so the bytes are overwritten on the way out
+/// whatever this returns.
+fn run_secret(args: &[&str]) -> Result<Zeroizing<String>, String> {
+    let output = passbook_command()
+        .args(args)
+        .output()
+        .map_err(|error| format!("Could not run PassBook: {error}"))?;
+    let stdout = Zeroizing::new(output.stdout);
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr);
+        let detail = detail.trim();
+        return Err(if detail.is_empty() {
+            format!("PassBook exited with status {}", output.status)
+        } else {
+            detail.to_string()
+        });
+    }
+    Ok(Zeroizing::new(String::from_utf8_lossy(&stdout).trim_end_matches('\n').to_string()))
+}
+
 fn run_json(args: &[&str]) -> Result<Value, String> {
     let raw = run(args)?;
     serde_json::from_str(&raw).map_err(|error| format!("PassBook returned something unreadable: {error}"))
@@ -225,6 +256,11 @@ fn unlock(duration: String, reason: String) -> Result<Value, String> {
 
 #[tauri::command]
 fn lock() -> Result<Value, String> {
+    // Whatever is on screen was decrypted before the lock and would outlive it
+    // by up to the hold. A lock that leaves a readable value behind it is the
+    // kind of thing this app has already been wrong about once: the sidebar
+    // said "Vault locked" while the eye icon beside every key still worked.
+    veil::forget_all();
     run(&["lock"])?;
     state()
 }
@@ -308,26 +344,243 @@ fn remove_key(name: String) -> Result<Value, String> {
     state()
 }
 
-/// Show one value.
+/// Show one value — as a picture, and never as a string in the window.
 ///
-/// The only command here that returns a secret, and it is deliberately narrow:
-/// one key, by name, recorded as a `reveal`. A credential manager that cannot
-/// show you your own credential is not one — you keep keys in order to paste
-/// them somewhere eventually — but every other call in this file stays free of
-/// values so that "can this leak?" is answerable by reading the signature.
+/// A credential manager that cannot show you your own credential is not one:
+/// you keep keys in order to paste them somewhere eventually. What changed is
+/// where "show" happens. This used to return the value, and the window put it
+/// in an `<input>`, which meant two things nobody could undo afterwards — the
+/// string could not be erased from the JavaScript heap, and its text was
+/// published to the platform accessibility tree, where an agent reads it with
+/// no screenshot involved. src/veil.rs is the long version.
+///
+/// So the value stops here. It goes behind a token, the token goes to the
+/// window, and the window fetches a PNG of it from the loopback server. The
+/// return type is the guarantee, and it is checkable by reading the signature:
+/// there is no longer any command in this file that hands a credential to the
+/// webview.
+///
 /// `--confirm` carries the answer to the CLI's own question. `reveal` refuses a
 /// caller whose output is being captured — which is what an agent shelling out
 /// looks like, and also what this is — so the window has to say that a person
 /// asked. It is a hurdle rather than a boundary, exactly as the CLI documents:
 /// what actually cannot be revealed is a guarded key, and no flag reaches that.
+#[derive(serde::Serialize)]
+struct Veiled {
+    token: String,
+    /// So the window can size the row before the picture arrives, and so a
+    /// value that is empty can be said to be empty rather than drawn as
+    /// nothing. Character count, not the value.
+    length: usize,
+    /// How long the window has before the token stops answering.
+    hold_ms: u64,
+}
+
 #[tauri::command]
-fn reveal_key(name: String) -> Result<String, String> {
-    if name.trim().is_empty() {
+fn reveal_key(name: String, px: f32, scale: f32, ink: String) -> Result<Veiled, String> {
+    let name = name.trim();
+    if name.is_empty() {
         return Err("Which key?".into());
     }
-    Ok(run(&["reveal", name.trim(), "--confirm", name.trim()])?
-        .trim_end_matches('\n')
-        .to_string())
+    if !veil::can_draw() {
+        // Fails closed. The alternative — falling back to handing the string to
+        // the window — would quietly undo the entire point on exactly the
+        // machines least able to notice.
+        return Err("This machine has no monospace font PassBook can draw with, \
+                    so a value cannot be shown here. Use it instead:  \
+                    passbook run -- <command>".into());
+    }
+    let ask = veil::Ask { px, scale, ink: veil::hex_ink(&ink).unwrap_or([0x16, 0x17, 0x1a]) };
+
+    // Where the drawing happens depends on what this machine promises.
+    //
+    // A machine that seals reads has said values go only into processes the
+    // broker started. This one was not, so it must not hold the plaintext even
+    // for a moment — the drawing is done by a child the broker spawns, and what
+    // comes back here is pixels. On a machine that has not sealed reads there
+    // is nothing to honour and the extra process would only be ceremony, so the
+    // value is read and drawn here and dropped on the next line.
+    let (picture, length) = if sealed_reads() {
+        draw_through_broker(name, &ask)?
+    } else {
+        let value = run_secret(&["reveal", name, "--confirm", name])?;
+        (veil::draw(&value, &ask)?, value.chars().count())
+    };
+
+    Ok(Veiled {
+        token: veil::hold(picture),
+        length,
+        hold_ms: veil::HOLD.as_millis() as u64,
+    })
+}
+
+/// Whether this machine hands values to callers the broker did not start.
+///
+/// Asked of the CLI rather than cached, because it is a policy someone can
+/// change while the window is open and the answer decides whether the next
+/// reveal is allowed to happen in this process.
+fn sealed_reads() -> bool {
+    run(&["grants"]).map(|out| out.contains("reads: sealed")).unwrap_or(false)
+}
+
+/// Draw a credential in a process the broker started, and read back the picture.
+///
+/// The child is this same binary in `--draw` mode. It is given the value the way
+/// every other brokered child is — in its environment, by `passbook run` — and
+/// it writes a PNG to a path this side chose. Nothing is written to its stdout,
+/// deliberately: `passbook run` pumps a child's output through a redactor that
+/// decodes it as UTF-8 with replacement, so a PNG sent that way would arrive
+/// with every non-UTF-8 byte replaced. The file is the only clean channel, and
+/// it holds pixels rather than a credential.
+fn draw_through_broker(name: &str, ask: &veil::Ask) -> Result<(Vec<u8>, usize), String> {
+    let out = veil::scratch_path(name)?;
+    let me = std::env::current_exe()
+        .map_err(|error| format!("PassBook could not find its own binary: {error}"))?;
+    let ink = ask.ink.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+
+    let status = passbook_command()
+        .args(["run", "--only", name, "--app", "passbook-app", "--"])
+        .arg(&me)
+        .arg("--draw")
+        .args([name, &out.to_string_lossy(), &ask.px.to_string(), &ask.scale.to_string(), &ink])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|error| format!("Could not run PassBook: {error}"))?;
+
+    let picture = std::fs::read(&out);
+    // Gone before this returns, whether or not it was readable. A picture of a
+    // credential is not something to leave lying in a temp directory because an
+    // error path forgot about it.
+    let _ = std::fs::remove_file(&out);
+
+    let picture = picture.map_err(|_| {
+        let detail = String::from_utf8_lossy(&status.stderr);
+        let detail = detail.trim();
+        if detail.is_empty() {
+            "PassBook could not draw that value.".to_string()
+        } else {
+            detail.to_string()
+        }
+    })?;
+    // The length is not knowable on this side any more, and inventing one would
+    // be worse than saying so: the window uses it only to tell an empty value
+    // from a drawn one, and an empty value draws an empty file.
+    let length = if picture.is_empty() { 0 } else { 1 };
+    if picture.is_empty() {
+        return Err("That value is empty.".into());
+    }
+    Ok((picture, length))
+}
+
+/// `--draw KEY OUT PX SCALE INK` — this binary, as the child of a broker.
+///
+/// Reads the value out of the environment the broker put it there, draws it,
+/// writes the PNG, and prints nothing. It never opens a window and never talks
+/// to the store: everything it is allowed to have already arrived in its env.
+///
+/// Returns whether this was a draw run, so `main` can leave before Tauri starts.
+fn drew() -> bool {
+    let argv: Vec<String> = std::env::args().collect();
+    let Some(at) = argv.iter().position(|a| a == "--draw") else { return false };
+    let rest = &argv[at + 1..];
+    if rest.len() < 5 {
+        eprintln!("--draw needs KEY OUT PX SCALE INK");
+        std::process::exit(2);
+    }
+    let (key, out) = (&rest[0], &rest[1]);
+    let ask = veil::Ask {
+        px: rest[2].parse().unwrap_or(12.0),
+        scale: rest[3].parse().unwrap_or(1.0),
+        ink: veil::hex_ink(&rest[4]).unwrap_or([0x16, 0x17, 0x1a]),
+    };
+    let value = Zeroizing::new(std::env::var(key).unwrap_or_default());
+    if value.is_empty() {
+        // An empty file is how the parent is told the value was empty. Exiting
+        // non-zero here would be reported to the person as a failure to draw.
+        let _ = std::fs::write(out, b"");
+        std::process::exit(0);
+    }
+    match veil::draw(&value, &ask) {
+        Ok(png) => {
+            if let Err(error) = veil::write_private(out, &png) {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+            std::process::exit(0);
+        }
+        Err(why) => {
+            eprintln!("{why}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// What this platform actually gave the window, for the window to say so.
+///
+/// Two of the three protections are conditional — capture exclusion does not
+/// exist on Linux, and drawing needs a font this machine might not have — and
+/// a UI that claimed them unconditionally would be lying on exactly the
+/// machines where it mattered. So the window asks rather than assumes.
+#[derive(serde::Serialize)]
+struct Protection {
+    /// `NSWindowSharingType::None` / `WDA_EXCLUDEFROMCAPTURE`. Compile-time:
+    /// tao implements this on macOS and Windows and compiles it out elsewhere.
+    capture: bool,
+    /// Whether a value can be drawn at all on this machine.
+    drawing: bool,
+}
+
+#[tauri::command]
+fn capture_protection() -> Protection {
+    Protection {
+        capture: cfg!(any(target_os = "macos", target_os = "windows")),
+        drawing: veil::can_draw(),
+    }
+}
+
+/// Forget a revealed value now, rather than when its hold runs out.
+///
+/// The window calls this when the eye is clicked again, when its own auto-hide
+/// fires, and when the row goes away. None of those are load-bearing — the hold
+/// in veil.rs expires regardless — but a value that is on screen for four
+/// seconds should not sit in this process for forty-five.
+#[tauri::command]
+fn forget_reveal(token: String) -> bool {
+    veil::forget(&token)
+}
+
+/// Put one value on the clipboard, without it passing through the window.
+///
+/// `navigator.clipboard.writeText` takes a string, so copy was the one path
+/// that re-materialised in JavaScript everything the veil avoids — and it did
+/// it on the row's most-used button. The value goes from the CLI to the
+/// platform clipboard inside this process.
+///
+/// The clipboard itself is still the clipboard: every process on this machine
+/// can read it, and on macOS it goes to the user's other devices. Nothing here
+/// changes that, and it would be dishonest to imply otherwise. What changes is
+/// that pressing copy no longer also leaves an unerasable copy in the webview.
+#[tauri::command]
+fn copy_key(app: tauri::AppHandle, name: String) -> Result<(), String> {
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("Which key?".into());
+    }
+    // A sealed machine does not put a credential on the clipboard, and saying
+    // so is more honest than the alternative. The clipboard is readable by
+    // every process on this machine and, on macOS, by this person's other
+    // devices — so "values go only into processes the broker started" and "here
+    // it is on the pasteboard" cannot both be true.
+    if sealed_reads() {
+        return Err("This machine does not copy credential values. \
+                    Run what needs it instead:  passbook run -- <command>".into());
+    }
+    let value = run_secret(&["reveal", name, "--confirm", name])?;
+    app.clipboard()
+        .write_text(value.as_str())
+        .map_err(|error| format!("Could not reach the clipboard: {error}"))
 }
 
 // ── sign-ins ───────────────────────────────────────────────────────────────
@@ -757,6 +1010,7 @@ fn vault_create_workspace(name: String, password: String) -> Result<Value, Strin
 /// lock anything.
 #[tauri::command]
 fn vault_signout(workspace: String, everything: bool) -> Result<Value, String> {
+    veil::forget_all();
     let mut args = vec!["signout"];
     if everything {
         args.push("--all");
@@ -1022,6 +1276,7 @@ fn key_history(name: String) -> Result<Value, String> {
 /// and only to a request that asked for this host. They contain no credential:
 /// the store is read over IPC by the process that needs it, never over this.
 mod ask;
+mod veil;
 
 mod ui {
     use std::io::{Read, Write};
@@ -1112,7 +1367,8 @@ mod ui {
         let start = request.split("\r\n").next().unwrap_or("");
         let mut parts = start.split(' ');
         let method = parts.next().unwrap_or("");
-        let path = parts.next().unwrap_or("/").split('?').next().unwrap_or("/");
+        let target = parts.next().unwrap_or("/");
+        let (path, query) = target.split_once('?').unwrap_or((target, ""));
 
         // A page fetched under some other name is not this window's page, and
         // the Host is what decides the origin a passkey would be bound to.
@@ -1170,6 +1426,41 @@ mod ui {
         if method != "GET" && method != "HEAD" {
             return send(&mut stream, "400 Bad Request", "text/plain", b"no", false);
         }
+
+        // A revealed credential, as a picture. The token is the whole of the
+        // authorisation: 256 bits from the OS, held for `veil::HOLD`, and known
+        // only to the window that asked for it.
+        //
+        // This route is the one thing on this server that answers with
+        // something derived from a secret, so unlike `/ask` it is deliberately
+        // *not* reachable cross-origin. `send` sets no CORS headers, which
+        // stops a page in the browser reading the bytes back; the check below
+        // stops it loading them at all where the engine says where it came
+        // from. Neither is load-bearing on its own — a page that cannot guess
+        // the token has nothing to ask for — and both are here because the cost
+        // is two lines.
+        if path == "/veil" {
+            let cross = header(&request, "sec-fetch-site")
+                .is_some_and(|site| site.trim().eq_ignore_ascii_case("cross-site"));
+            if cross {
+                return send(&mut stream, "403 Forbidden", "text/plain", b"no", false);
+            }
+            let token = query.split('&').find_map(|pair| {
+                let (key, value) = pair.split_once('=')?;
+                (key == "t").then(|| value.to_string())
+            }).unwrap_or_default();
+            // Size and colour were settled when the value was revealed, because
+            // that is the moment the plaintext existed. This only hands back
+            // what was drawn then.
+            return match crate::veil::picture(&token) {
+                Some(png) => send(&mut stream, "200 OK", "image/png", &png, method == "HEAD"),
+                // The hold ended, or that token was never real. The window
+                // treats both the same way — it stops showing the row as
+                // revealed — so they answer the same way here.
+                None => send(&mut stream, "404 Not Found", "text/plain", b"not here", false),
+            };
+        }
+
         let (status, kind, body): (&str, &str, &[u8]) = match path {
             "/" | "/index.html" => ("200 OK", "text/html; charset=utf-8", INDEX),
             "/mark.png" => ("200 OK", "image/png", MARK),
@@ -1216,6 +1507,140 @@ mod ui {
             stream.write_all(body)?;
         }
         stream.flush()
+    }
+
+    /// The wire, not the drawing.
+    ///
+    /// veil.rs proves the rasteriser; these prove the path a real window takes
+    /// to reach it — the query the old code threw away, the token check, the
+    /// cross-origin refusal, and the one thing that would make the whole change
+    /// pointless if it were ever wrong: that what goes out over the socket does
+    /// not contain the credential.
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::veil;
+
+        const VALUE: &str = "sk-veil-test-0123456789abcdef";
+
+        /// What a real reveal puts behind a token: the drawn value, not the value.
+        fn drawn() -> Vec<u8> {
+            veil::draw(VALUE, &veil::Ask { px: 12.0, scale: 2.0, ink: [0xf2, 0xf3, 0xf5] })
+                .expect("drawn")
+        }
+
+        fn ask(port: u16, request: &str) -> Vec<u8> {
+            let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+            stream.write_all(request.as_bytes()).expect("write");
+            stream.flush().expect("flush");
+            let mut out = Vec::new();
+            let _ = stream.read_to_end(&mut out);
+            out
+        }
+
+        fn get(port: u16, target: &str, extra: &str) -> Vec<u8> {
+            ask(port, &format!(
+                "GET {target} HTTP/1.1\r\nHost: localhost\r\n{extra}Connection: close\r\n\r\n"))
+        }
+
+        fn status(response: &[u8]) -> String {
+            String::from_utf8_lossy(response).lines().next().unwrap_or("").to_string()
+        }
+
+        fn body(response: &[u8]) -> Vec<u8> {
+            response.windows(4).position(|w| w == b"\r\n\r\n")
+                .map(|at| response[at + 4..].to_vec()).unwrap_or_default()
+        }
+
+        #[test]
+        fn the_veil_serves_a_picture_and_never_the_value() {
+            if !veil::can_draw() {
+                eprintln!("no system monospace font; skipping");
+                return;
+            }
+            let port = serve().expect("a port");
+            let token = veil::hold(drawn());
+
+            // The page's own request, as the <img> makes it.
+            let target = format!("/veil?t={token}&px=12&s=2&ink=f2f3f5");
+            let response = get(port, &target, "Sec-Fetch-Site: same-origin\r\n");
+            assert!(status(&response).contains("200 OK"), "{}", status(&response));
+            assert!(String::from_utf8_lossy(&response).contains("Content-Type: image/png"));
+
+            let png = body(&response);
+            assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n", "that is not a PNG");
+            // The whole point of the change, checked on the bytes that actually
+            // cross the socket rather than on the ones the drawing returned.
+            assert!(!response.windows(VALUE.len()).any(|w| w == VALUE.as_bytes()),
+                    "the credential went out over the wire");
+            assert!(!response.windows(7).any(|w| w == b"sk-veil"));
+
+            // A token that has been forgotten stops answering.
+            assert!(veil::forget(&token));
+            let after = get(port, &target, "");
+            assert!(status(&after).contains("404"), "{}", status(&after));
+        }
+
+        #[test]
+        fn a_made_up_token_gets_nothing() {
+            let port = serve().expect("a port");
+            let response = get(port, "/veil?t=deadbeef&px=12&s=1&ink=000000", "");
+            assert!(status(&response).contains("404"), "{}", status(&response));
+        }
+
+        #[test]
+        fn a_page_from_somewhere_else_is_refused() {
+            if !veil::can_draw() {
+                return;
+            }
+            let port = serve().expect("a port");
+            let token = veil::hold(drawn());
+            let target = format!("/veil?t={token}&px=12&s=1&ink=000000");
+            // Not load-bearing — a page that cannot guess the token has nothing
+            // to ask for — but the refusal should be there and should be the
+            // refusal, not a picture.
+            let response = get(port, &target, "Sec-Fetch-Site: cross-site\r\n");
+            assert!(status(&response).contains("403"), "{}", status(&response));
+            assert!(!response.windows(7).any(|w| w == b"sk-veil"));
+            veil::forget(&token);
+        }
+
+        #[test]
+        fn the_veil_answers_no_one_cross_origin_and_is_never_cached() {
+            if !veil::can_draw() {
+                return;
+            }
+            let port = serve().expect("a port");
+            let token = veil::hold(drawn());
+            let response = get(port, &format!("/veil?t={token}"), "");
+            let head = String::from_utf8_lossy(&response).to_lowercase();
+            // `/ask` is deliberately open to any origin. This must not be: a
+            // page that got hold of a token should still not be able to read
+            // the pixels back out of a fetch.
+            assert!(!head.contains("access-control-allow-origin"),
+                    "the veil answered cross-origin");
+            assert!(head.contains("cache-control: no-store"),
+                    "a picture of a credential must not be cached");
+            veil::forget(&token);
+        }
+
+        #[test]
+        fn the_page_and_the_mark_still_come_back() {
+            let port = serve().expect("a port");
+            assert!(status(&get(port, "/", "")).contains("200 OK"));
+            assert!(status(&get(port, "/mark.png", "")).contains("200 OK"));
+            assert!(status(&get(port, "/nothing", "")).contains("404"));
+        }
+
+        /// The bug this is here to stop coming back: the old handler read the
+        /// path with `.split('?').next()`, so every query was discarded. A
+        /// static route that stopped working the moment anything appended one
+        /// would be a strange way to find that out.
+        #[test]
+        fn a_query_on_a_static_path_still_finds_it() {
+            let port = serve().expect("a port");
+            assert!(status(&get(port, "/?steady=1", "")).contains("200 OK"));
+        }
     }
 }
 
@@ -1426,10 +1851,18 @@ fn import_env(
 }
 
 fn main() {
+    // Before anything else, and before Tauri: this binary is also the child a
+    // broker spawns to draw one credential. That run has no window, no store
+    // access and no argument beyond what it was told to draw.
+    if drew() {
+        return;
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
             // A link can arrive before the window exists (cold start) or long
             // after it (the app was already open), so both are wired: the
@@ -1495,7 +1928,31 @@ fn main() {
             .title("PassBook")
             .inner_size(1040.0, 760.0)
             .min_inner_size(860.0, 600.0)
-            .resizable(true);
+            .resizable(true)
+            // The veil's other half. Drawing the value instead of writing it
+            // takes it out of the accessibility tree; this takes it out of
+            // screenshots, screen recordings and screen shares — the same
+            // `NSWindowSharingType::None` and `WDA_EXCLUDEFROMCAPTURE` a video
+            // player uses, reached through tao.
+            //
+            // Neither is worth much alone. A drawn value with no capture
+            // protection is a value an agent screenshots and reads with OCR; a
+            // protected window full of DOM text is a value it reads out of the
+            // accessibility tree without taking a screenshot at all. Together
+            // there is neither text nor pixels to take.
+            //
+            // Always on rather than only while a value is showing: toggling it
+            // races a screenshot on a timer, and the cost of leaving it on —
+            // this window does not appear in a screen recording, so a support
+            // screenshot of it comes out empty — is the correct trade for a
+            // credential manager and is written down in the README.
+            //
+            // Linux gets nothing here. tao documents the call as unsupported
+            // there and compiles it out, so on Linux the drawn value is the
+            // whole of the protection. `capture_protection` in `state` is what
+            // tells the window which of those it is on, rather than letting it
+            // claim a guarantee this platform did not give.
+            .content_protected(true);
             // The overlay title bar is what lets the sidebar run to the top of
             // the window, and it exists only on macOS.
             #[cfg(target_os = "macos")]
@@ -1507,6 +1964,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             state, set_mode, unlock, lock, resolve, broker, revoke, add_key, remove_key, reveal_key,
+            forget_reveal, copy_key, capture_protection,
             key_history, vault_state, vault_signin, vault_signout, vault_create_profile,
             vault_use_profile, vault_seal, vault_unseal, vault_secure, set_key_group, set_key_audience, set_key_scope, set_keys_scope, remove_keys,
             access_matrix, oauth_state, oauth_refresh, oauth_disconnect, oauth_connect,

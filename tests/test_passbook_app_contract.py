@@ -776,3 +776,172 @@ def test_usage_carries_only_what_a_key_row_shows(machine):
     assert usage, "usage must still be summarised for the key rows"
     for entry in usage.values():
         assert set(entry) == {"count", "last", "last_app"}, f"extra fields: {sorted(entry)}"
+
+
+# ── the veil ────────────────────────────────────────────────────────────────
+#
+# A revealed credential is drawn by the app and the window is given a token, so
+# that there is no string in the JavaScript heap to scrape and no text in the
+# accessibility tree to read. None of that is enforced by a type: it holds only
+# as long as no command hands a value back to the webview and no handler puts
+# one in the DOM. Both are one careless line away, and neither would fail
+# anything — the window would work perfectly and the guarantee would be gone.
+#
+# So it is pinned here, on the source, the way the ACL test above is.
+
+RUST = REPO / "app/src-tauri/src/main.rs"
+
+
+def _commands() -> dict[str, str]:
+    """Every `#[tauri::command]` in the app, name -> return type."""
+    source = RUST.read_text(encoding="utf-8")
+    found = {}
+    for match in re.finditer(
+        r"#\[tauri::command\]\s*\n(?:pub\s+)?fn\s+(\w+)\s*\([^)]*\)\s*(?:->\s*([^{]+?))?\s*\{",
+        source, re.S,
+    ):
+        found[match.group(1)] = " ".join((match.group(2) or "()").split())
+    assert found, "no Tauri commands found — the parser has drifted from the source"
+    return found
+
+
+def test_no_command_hands_a_credential_to_the_window():
+    """The invariant the whole veil rests on, checked by signature.
+
+    `reveal_key` used to return `Result<String, String>` and the window put that
+    string in an `<input>`. Anything that returns a bare String again is either
+    a value on its way to the webview or a signature that needs saying so here.
+    """
+    # Only the success type matters: every command in here fails with a String,
+    # and an error message is not a credential.
+    def succeeds_with(returns: str) -> str:
+        inner = re.fullmatch(r"Result<(.*),\s*String>", returns)
+        return (inner.group(1) if inner else returns).strip()
+
+    allowed = {
+        # A yes/no about this platform, not about the store.
+        "capture_protection": "Protection",
+    }
+    for name, returns in _commands().items():
+        ok = succeeds_with(returns)
+        if allowed.get(name) == ok:
+            continue
+        assert ok != "String", (
+            f"{name} returns {returns} — a command that succeeds with a String "
+            f"is a value on its way to the webview. If it is not a credential, "
+            f"add it to `allowed` with its type and a reason."
+        )
+
+
+def test_reveal_returns_a_token_and_not_a_value():
+    """Specifically: the one command whose job is showing a credential."""
+    returns = _commands()["reveal_key"]
+    assert returns == "Result<Veiled, String>", (
+        f"reveal_key returns {returns}; the window must be given a token, not a value"
+    )
+    source = RUST.read_text(encoding="utf-8")
+    fields = re.search(r"struct Veiled \{(.*?)\n\}", source, re.S)
+    assert fields, "the Veiled struct moved"
+    names = set(re.findall(r"^\s*(?:pub\s+)?(\w+):", fields.group(1), re.M))
+    assert names == {"token", "length", "hold_ms"}, (
+        f"Veiled carries {sorted(names)} — a field that could hold a value is a "
+        f"value on its way to the webview"
+    )
+
+
+def test_the_window_never_writes_a_value_to_the_clipboard():
+    """`navigator.clipboard.writeText` takes a string, so a value copied there
+    is a value materialised in the heap the veil exists to keep empty. Copying
+    a credential happens in Rust now; the remaining uses are a recovery code and
+    a fingerprint, which are shown on screen as text anyway."""
+    page = UI.read_text(encoding="utf-8")
+    for match in re.finditer(r"clipboard\.writeText\(([^)]*)\)", page):
+        argument = match.group(1)
+        assert "copytext" in argument, (
+            f"clipboard.writeText({argument}) — a credential must go through "
+            f"the copy_key command instead"
+        )
+
+
+def test_a_revealed_value_hides_itself_before_the_app_forgets_it():
+    """The two clocks race on every reveal and the window's must win, or the
+    picture 404s under a row still claiming to show something."""
+    window = re.search(r"const HIDE_AFTER = (\d+);", UI.read_text(encoding="utf-8"))
+    app = re.search(
+        r"pub const HOLD: Duration = Duration::from_secs\((\d+)\);",
+        (REPO / "app/src-tauri/src/veil.rs").read_text(encoding="utf-8"),
+    )
+    assert window and app, "one of the two holds moved"
+    assert int(window.group(1)) / 1000 < int(app.group(1)), (
+        f"the window hides after {int(window.group(1)) / 1000}s but the app holds "
+        f"for {app.group(1)}s — the window must be the one that gives up first"
+    )
+
+
+# ── the app's reveal on a machine that seals reads ──────────────────────────
+#
+# A sealed machine has said values go only into processes the broker started.
+# The window is not one, so under a seal the app stops reading the value at all:
+# it asks the broker to spawn a child — itself, in `--draw` mode — which is given
+# the value the way every brokered child is, draws it, and writes a PNG the
+# parent reads back. The parent never holds the plaintext.
+#
+# Two things have to hold for that to work, and both are contracts of the CLI
+# rather than of the app, which is why they are pinned here.
+
+
+@pytest.mark.skipif(broker_marker() is None, reason="the broker needs a Unix socket")
+def test_reveal_is_refused_once_reads_are_sealed(machine):
+    """The gap this closes: `reveal --confirm` printed values straight past a
+    seal that says this machine does not print them. It is the one command an
+    agent reaches for, and `--confirm` skipped the terminal check that was the
+    only thing in its way."""
+    assert _cli("reveal", "DEMO_KEY", "--confirm", "DEMO_KEY",
+                home=machine).stdout.strip() == "a-value", "open reads still print"
+
+    assert _cli("policy", "--reads", "sealed", home=machine).returncode == 0
+    done = _cli("reveal", "DEMO_KEY", "--confirm", "DEMO_KEY", home=machine)
+
+    assert done.returncode != 0, "a sealed machine printed a value from `reveal`"
+    assert "a-value" not in done.stdout, "the value came back anyway"
+    # The refusal has to name the way through, or it is a dead end for the
+    # person whose credential it is.
+    assert "passbook run" in (done.stdout + done.stderr)
+    assert "app" in (done.stdout + done.stderr).lower(), (
+        "the refusal should say the owner can still see it in the window"
+    )
+
+
+@pytest.mark.skipif(broker_marker() is None, reason="the broker needs a Unix socket")
+def test_a_brokered_child_still_gets_the_value_under_a_seal(machine, tmp_path):
+    """What the app's drawing depends on: `run` delivers to the child under a
+    seal, and delivers the real value rather than the redaction marker.
+
+    The child here writes to a file for the same reason the app's does — `run`
+    pumps a child's stdout through a redactor that decodes it as UTF-8 with
+    replacement, so a PNG sent that way arrives with every non-UTF-8 byte
+    destroyed. Anything binary has to come back some other way.
+    """
+    assert _cli("policy", "--reads", "sealed", home=machine).returncode == 0
+    assert _cli("broker", "start", home=machine).returncode == 0
+    try:
+        out = tmp_path / "drawn.bin"
+        child = (
+            "import os,pathlib;"
+            f"pathlib.Path({str(out)!r}).write_bytes("
+            "b'\\x89PNG' + os.environ.get('DEMO_KEY','').encode())"
+        )
+        done = _cli("run", "--only", "DEMO_KEY", "--app", "passbook-app", "--",
+                    sys.executable, "-c", child, home=machine)
+
+        assert done.returncode == 0, done.stderr
+        assert out.exists(), "the brokered child produced nothing"
+        written = out.read_bytes()
+        assert written == b"\x89PNGa-value", (
+            f"the child got {written!r} — a redaction marker instead of the value "
+            f"means the app would draw the marker"
+        )
+        # And the value did not come back out through the stream.
+        assert "a-value" not in done.stdout
+    finally:
+        _cli("broker", "stop", home=machine)

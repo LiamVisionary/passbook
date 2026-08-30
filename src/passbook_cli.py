@@ -1070,6 +1070,55 @@ def cmd_profile_device(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_profile_untrust_device(args: argparse.Namespace) -> int:
+    """Take back the unattended-open capability.
+
+    `trust-device` could grant this and nothing could revoke it, which is the
+    wrong way round for the one factor whose own warning says it lets any
+    program running as you open the vault. `remove_factor` was already in the
+    vault module, exported, and never wired to anything — so the capability was
+    grantable and, short of destroying the profile and everything it sealed,
+    permanent.
+    """
+    module = _vault_or_fail()
+    if module is None:
+        return 1
+    vault = module.read_vault()
+    wanted = getattr(args, "profile", "") or module.active_profile_id()
+    profile = next((p for p in vault.get("profiles", []) if p.get("id") == wanted), None)
+    if profile is None:
+        return _fail(f"No such profile: {wanted}")
+
+    devices = [f for f in profile.get("factors", []) if f.get("kind") == "device"]
+    if not devices:
+        print(f"{profile.get('label', wanted)} has no device factor. "
+              "Opening the vault already needs a person.")
+        return 0
+
+    if not args.yes:
+        print(f"{profile.get('label', wanted)} can currently be opened by anything")
+        print("running as you, with no password — that is what a device factor is.")
+        print("\nRemoving it means:")
+        print("  · `passbook signin` needs your password or a passkey again")
+        print("  · a job that starts at boot cannot open the vault by itself")
+        print("  · restarting the broker locks the store until you sign in")
+        print("\nRe-run with --yes to remove it.")
+        return 1
+
+    removed = []
+    for factor in devices:
+        try:
+            module.remove_factor(profile["id"], factor["id"])
+            removed.append(factor.get("label") or factor["id"])
+        except module.VaultError as error:
+            return _fail(str(error))
+    print(f"Removed {len(removed)} device factor(s): {', '.join(removed)}.")
+    print("Opening this vault needs a person again.")
+    print("\nThe key it kept in the OS keystore has been forgotten too.")
+    print("Check:  passbook harden")
+    return 0
+
+
 def cmd_vault(args: argparse.Namespace) -> int:
     """Locked or open, which profiles exist, and what the store still exposes.
 
@@ -3338,16 +3387,17 @@ def cmd_reveal(args: argparse.Namespace) -> int:
     # sitting there: an agent captures stdout to read it, and a captured stream
     # is not a terminal. Refusing that case costs a person nothing and costs an
     # agent the whole command.
-    try:
-        import passbook_grant
-
-        forbidden = args.key in set(passbook_grant.guarded(_access().read_policy()))
-    except Exception:  # noqa: BLE001 — no policy is the common case
-        forbidden = False
-    if forbidden:
-        return _fail(f"{args.key} is guarded and is never printed.",
+    # `reveal` checked the guard list and nothing else, so a machine that had
+    # sealed reads still printed values from here — the one command an agent
+    # would reach for, past the seal that says it cannot happen. `_sealed_refusal`
+    # is the same check `get` makes, and covers both reasons.
+    blocked = _sealed_refusal([args.key])
+    if blocked:
+        return _fail(blocked,
                      "Use it instead:  passbook run --only "
-                     f"{args.key} -- <command>")
+                     f"{args.key} -- <command>\n"
+                     "Your own copy is still visible in the PassBook app, which "
+                     "draws it rather than printing it.")
     # `--confirm` carries a proof collected somewhere else — the app asks in its
     # own window and passes what the person typed. It is a hurdle, not a
     # boundary, and pretending otherwise would be the exact overstatement this
@@ -4331,6 +4381,13 @@ def build_parser() -> argparse.ArgumentParser:
     profile_device.add_argument("--password-stdin", dest="password_stdin",
         action="store_true", help="read the password from stdin instead of prompting")
     profile_device.set_defaults(json=False, func=cmd_profile_device)
+
+    profile_undevice = profile_subs.add_parser(
+        "untrust-device", help="take back unattended opening; a person is needed again")
+    profile_undevice.add_argument("--profile", default="")
+    profile_undevice.add_argument("--yes", action="store_true", help="accept the trade-off")
+    profile_undevice.set_defaults(json=False, func=cmd_profile_untrust_device)
+
 
     signin = subs.add_parser("signin", help="open the vault so apps can read credentials")
     signin.add_argument("--profile", default="", help="which profile; omit for the active one")

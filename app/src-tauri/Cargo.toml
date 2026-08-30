@@ -22,6 +22,19 @@ tauri-plugin-deep-link = "2"
 # "Choose a different file" in the import sheet. Drag and drop needs no
 # plugin, but a picker does, and both hand over a path rather than contents.
 tauri-plugin-dialog = "2"
+# The veil: a revealed credential is drawn here and the window is given
+# pixels, because a JS string cannot be erased and webview text is published to
+# the platform accessibility tree. See src/veil.rs for the whole argument.
+# `fontdue` rasterises; the face itself is the system's, read by path, so there
+# is no font file to ship, sign or carry a licence for.
+fontdue = "0.9"
+png = "0.18"
+# The one crate here that exists to overwrite memory rather than to use it.
+zeroize = { version = "1", features = ["alloc"] }
+# Copy happens on this side now. `navigator.clipboard.writeText` takes a string,
+# so leaving it in the window would re-materialise exactly what the veil avoids.
+tauri-plugin-clipboard-manager = "2"
+getrandom = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

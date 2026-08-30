@@ -2,6 +2,61 @@
 
 All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
+## [Unreleased]
+
+### A revealed credential is drawn, and the window it is drawn in cannot be captured
+
+1.3.0 stopped values reaching callers the broker did not start. It did not stop
+them reaching the one caller that is supposed to have them and then leaks anyway:
+the window. A revealed key sat in an `<input>`, which meant two things nobody
+could undo afterwards.
+
+**It was text, so it was published to the accessibility tree.** `AXUIElement` on
+macOS and UI Automation on Windows read it with no screenshot involved — the same
+path a screen reader uses, and the path an agent with computer use takes first,
+because it is cheaper and more reliable than OCR. Hiding the window from capture
+would have protected nothing here.
+
+**It was a JavaScript string, so it could not be erased.** `delete` drops a
+reference; the bytes go back to the allocator un-overwritten. And one reveal was
+never one copy — escaping, the row template, the page concatenation and
+`innerHTML` each made another, so a value left on screen while somebody typed one
+letter in the search box minted a fresh set every repaint, none of them erasable.
+
+Neither has a fix on the window's side of the boundary, so the value stopped
+crossing it.
+
+- **`reveal_key` returns a token, not a value.** The credential is held in the
+  app, rasterised there, and the window fetches a PNG of it from the loopback
+  server it already runs. No command in the app hands a credential to the webview
+  any more, which is checkable by reading the signatures — and is, by a test.
+- **The window is excluded from screen capture.** `NSWindowSharingType::None` on
+  macOS, `WDA_EXCLUDEFROMCAPTURE` on Windows, both through tao. Linux has no
+  equivalent and gets none; the app's Security page reports which protections
+  this platform actually gave it rather than claiming all of them.
+- **Copying happens in the app.** `navigator.clipboard.writeText` takes a string,
+  so copy was the one path that re-materialised in the window everything else
+  avoids — on the row's most-used button.
+- **A revealed value hides itself after 30 seconds**, and the app overwrites its
+  own copy then rather than at the end of the 45-second hold. The two clocks are
+  deliberately unequal and a test pins which one wins.
+- **Editing a value became replacing one.** The box opens empty. Pre-filling it
+  would have put the old value back into the exact element this change exists to
+  empty, and nobody amends the fourteenth character of an API key.
+- **`Zeroizing` on the app side.** The three unerased copies `Command::output`
+  used to leave behind are overwritten now. That was invisible while the value
+  was on its way to a webview that could not erase anything either.
+
+The font is the system's, found by path — nothing is bundled, for the same reason
+the icon set is drawn by hand. A machine with no monospace font PassBook can draw
+with refuses to reveal rather than falling back to text, which would have quietly
+undone all of this on exactly the machines least able to notice.
+
+**What it does not buy** is in the README under *What it does not claim*: the
+plaintext is in the app while the hold lasts, capture exclusion is the compositor
+cooperating rather than hardware, and none of it touches code running as you that
+asks the store directly without opening the window.
+
 ## [1.3.0] — 2026-08-30
 
 ### A credential can be used without ever being shown
@@ -114,6 +169,27 @@ path: `passbook run` resolves from the file and asks nobody. That was found by
 running it, not by reading it — an unapproved agent ran unattended against a
 perfectly correct policy — and the command now says **NOT ENFORCED** with the
 two ways to fix it.
+
+### A capability that could be granted and not taken back
+
+`passbook profile trust-device` stores a wrapping key in the OS keystore so a
+job can open the vault at boot with nobody there. Its own warning is blunt about
+the cost — "A device factor lets ANY program running as you open the vault
+without asking" — and it demands the vault password plus `--yes` before it will.
+
+There was no way to undo it. `remove_factor` had been in `passbook_vault` all
+along, exported, correct, and wired to nothing; the only route back was
+`passbook profile remove`, which destroys the profile and everything it sealed.
+So the one factor whose whole purpose is to remove a human from the loop was
+also the one that could not be revoked.
+
+- **`passbook profile untrust-device`** removes it, forgets the keystore item,
+  and states the three things that stop working before it will act.
+
+Found by restarting the broker on a machine that had one: the vault locked, and
+reopening it took `passbook signin --device` and no password at all. Nothing was
+broken — that is precisely what the factor does — but it is not a property
+anybody should rediscover by accident.
 
 ### The shortest way in was neither of those
 

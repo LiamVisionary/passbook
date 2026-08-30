@@ -2137,6 +2137,20 @@ Use the copy button to put it on the clipboard."
    *  process running as you can obtain while the vault is wide open — which is
    *  the gap people assume encryption already closed, and it does not.
    */
+  // Pins are reported here and set from the command line. A pin is taken from
+  // a command — `passbook pin studio -- node server.js` — and a panel offering
+  // a text box for that would be pretending it had checked something.
+  function pinnedLine() {
+    const pinned = state?.access?.pinned || {};
+    const on = Object.keys(pinned).filter((a) => pinned[a]?.mode === "pinned");
+    if (!on.length) {
+      return `<div class="sub">No app is pinned to the code it may run.
+        <code>passbook pin --what -- node server.js</code> shows what one would be.</div>`;
+    }
+    return `<div class="sub">${on.length} app${on.length === 1 ? " is" : "s are"} pinned
+      and can run only the code they were pinned to: ${on.map(esc).join(", ")}.</div>`;
+  }
+
   function readsBlock() {
     const mode = state?.access?.reads || "open";
     const guarded = Object.keys(state?.access?.guarded || {});
@@ -2157,6 +2171,7 @@ Use the copy button to put it on the clipboard."
                ${guarded.map(esc).join(", ")}.</div>`
             : `<div class="sub">No keys are individually guarded.
                <code>passbook guard NAME --to host</code> binds one.</div>`}
+          ${pinnedLine()}
         </div>
         <button class="act" data-reads="${sealed ? "open" : "sealed"}"
           ${busy ? "disabled" : ""}>${sealed ? "Allow reads" : "Seal reads"}</button></div>

@@ -57,6 +57,7 @@ passbook-install = "passbook_cli:main"
 passbook-link = "passbook_cli:main"
 passbook-mcp = "passbook_cli:main"
 passbook-oauth = "passbook_cli:main"
+passbook-pin = "passbook_cli:main"
 passbook-group = "passbook_cli:main"
 passbook-approved = "passbook_cli:main"
 passbook-apps = "passbook_cli:main"
@@ -123,6 +124,7 @@ py-modules = [
     "passbook_fleet",
     "passbook_grant",
     "passbook_harden",
+    "passbook_identity",
     "passbook_keystore",
     "passbook_link",
     "passbook_mcp",

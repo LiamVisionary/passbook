@@ -923,6 +923,17 @@ def _safe_command(command: Sequence[str], values: Mapping[str, str] | None) -> l
         return parts
 
 
+def _pinned_note(verdict: Mapping[str, Any]) -> str:
+    """The identity a spawn ran under, for the record. Empty when unpinned.
+
+    Worth writing down even though the pin already allowed it: the ledger is
+    where somebody looks after the fact to ask what actually held a key, and
+    "deploy-tool" is a name while `sha256:1f3a…` is the code.
+    """
+    identity = verdict.get("identity") or {}
+    return f" [{identity['program_id']}]" if identity.get("program_id") else ""
+
+
 def _remember_grant(token: str, *, app: str, keys: Iterable[str], command: Sequence[str],
                     pid: int | None, values: Mapping[str, str] | None = None) -> None:
     with _GRANT_LOCK:
@@ -1024,6 +1035,48 @@ def _decide_many(keys: Iterable[str], *, app: str, policy: Mapping[str, Any],
     return allowed, refused
 
 
+def _pin_reason(app: str, verdict: Mapping[str, Any]) -> str:
+    """What to write in the record when a pin refuses. Never argv.
+
+    The caller's message names the command, because the caller typed it and
+    needs to know which one was refused. The RECORD must not: a refusal happens
+    before any value is resolved, so there is nothing to redact against, and
+    `passbook run -- $SECRET` would write the secret into the ledger as a
+    program name. `_safe_command` exists because this has happened once already.
+
+    Identity strings are safe to keep — they are hashes of a file's contents and
+    signing identifiers, never anything the caller typed.
+    """
+    record = verdict.get("identity") or {}
+    status = record.get("status")
+    if status == "identified":
+        found = ", ".join(record.get("identities") or [])
+        return f"{app} is pinned; this is not the pinned code ({found})"[:200]
+    if status == "ambiguous":
+        return f"{app} is pinned; inline code has no identity to compare"
+    return f"{app} is pinned; the command could not be identified"
+
+
+def _pin_gate(app: str, command: Sequence[str], policy: Mapping[str, Any],
+              payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Is this the code the app was pinned to? Asked before anything is resolved.
+
+    The PATH handed over is the one the CHILD will get, because that is what
+    `subprocess` resolves a bare `node` against — resolving against the
+    broker's own PATH could identify one file and then run another, which is a
+    worse failure than not checking.
+    """
+    try:
+        import passbook_grant
+    except ImportError:
+        return {"allowed": True, "why": "grants are not installed", "identity": {}}
+    extra = payload.get("env") if isinstance(payload.get("env"), Mapping) else {}
+    return passbook_grant.identity_allowed(
+        app, command, policy,
+        cwd=str(payload.get("cwd") or ""),
+        path=str((extra or {}).get("PATH") or os.environ.get("PATH") or ""))
+
+
 def _spawn(payload: Mapping[str, Any], root: Path | None,
            caller: Mapping[str, Any] | None) -> dict[str, Any]:
     """Run a command holding credentials, and answer with output that has none.
@@ -1047,6 +1100,17 @@ def _spawn(payload: Mapping[str, Any], root: Path | None,
     reason = (str(payload.get("reason") or "")[:200] or f"ran {Path(command[0]).name}")
     reason = f"{reason} [{status} caller]"
     policy = read_policy(root)
+
+    # Before any key is decided: is this even the program that was approved?
+    # A refusal here fails the whole spawn rather than dropping keys from it —
+    # running the command anyway with nothing in its environment would look
+    # like a broken credential to everything downstream and hide the reason.
+    pinned = _pin_gate(app, command, policy, payload)
+    if not pinned["allowed"]:
+        _record("denied", sorted(wanted) or ["*"], app=app, granted=False,
+                reason=_pin_reason(app, pinned))
+        return {"ok": False, "error": pinned["why"], "denied": sorted(wanted),
+                "why": {key: pinned["why"] for key in sorted(wanted)}}
 
     allowed, refused = _decide_many(
         wanted, app=app, policy=policy, root=root,
@@ -1084,7 +1148,8 @@ def _spawn(payload: Mapping[str, Any], root: Path | None,
         # saying `read` would claim the caller received these, which is the one
         # thing that did not happen.
         _record("use", sorted(values) or ["*"], app=app, granted=True,
-                reason=f"{reason}: {' '.join(_safe_command(command, values))[:120]}")
+                reason=f"{reason}: {' '.join(_safe_command(command, values))[:120]}"
+                       + _pinned_note(pinned))
     if refused:
         _record("denied", [key for key, _ in refused], app=app, granted=False,
                 reason="; ".join(sorted({why for _, why in refused}))[:200])
@@ -1198,6 +1263,15 @@ def _spawn_streaming(payload: Mapping[str, Any], root: Path | None,
     reason = f"{str(payload.get('reason') or '')[:200] or 'ran ' + Path(command[0]).name} [{status} caller]"
     policy = read_policy(root)
 
+    pinned = _pin_gate(app, command, policy, payload)
+    if not pinned["allowed"]:
+        _record("denied", sorted(wanted) or ["*"], app=app, granted=False,
+                reason=_pin_reason(app, pinned))
+        send({"t": "end", "ok": False, "error": pinned["why"],
+              "denied": sorted(wanted),
+              "why": {key: pinned["why"] for key in sorted(wanted)}})
+        return
+
     allowed, refused = _decide_many(
         wanted, app=app, policy=policy, root=root,
         workspace=str(payload.get("workspace") or ""),
@@ -1244,7 +1318,8 @@ def _spawn_streaming(payload: Mapping[str, Any], root: Path | None,
         _remember_grant(token, app=app, keys=values, command=command, pid=None,
                         values=values)
         _record("use", sorted(values) or ["*"], app=app, granted=True,
-                reason=f"{reason}: {' '.join(_safe_command(command, values))[:120]}")
+                reason=f"{reason}: {' '.join(_safe_command(command, values))[:120]}"
+                       + _pinned_note(pinned))
     send({"t": "end", **answer})
 
 

@@ -591,6 +591,71 @@ def test_spawn_gives_the_child_the_value_and_the_caller_the_output(broker):
 
 
 @needs_a_posix_shell
+def test_spawn_refuses_a_program_that_is_not_the_code_that_was_pinned(broker, tmp_path):
+    """A pattern matches text, so `deploy-tool *` keeps matching after
+    `deploy-tool` has become different code. A pin compares what it IS."""
+    import passbook_identity
+
+    tool = tmp_path / "deploy-tool"
+    tool.write_text("#!/bin/sh\necho v1\n")
+    tool.chmod(0o755)
+
+    policy = passbook_broker.read_policy()
+    access.add_pin("some-agent", passbook_identity.identify([str(tool)])["identities"], policy)
+    passbook_broker.write_policy(policy)
+
+    allowed = passbook_broker._ask({
+        "op": "spawn", "app": "some-agent", "keys": ["ALPHA"], "command": [str(tool)],
+    }, timeout=30)
+    assert allowed["ok"], allowed
+
+    tool.write_text("#!/bin/sh\necho compromised\n")
+    refused = passbook_broker._ask({
+        "op": "spawn", "app": "some-agent", "keys": ["ALPHA"], "command": [str(tool)],
+    }, timeout=30)
+    assert not refused["ok"]
+    assert "not the code that was pinned" in refused["error"]
+    # And the key was never resolved, let alone injected.
+    assert refused["denied"] == ["ALPHA"]
+
+
+@needs_a_posix_shell
+def test_a_pinned_app_cannot_reach_inline_code_through_its_own_interpreter(broker, tmp_path):
+    """The bypass that makes signature checking pointless.
+
+    A signature check on `sh` proves an Apple-signed shell is calling and says
+    nothing about `-c`. A pin refuses it, because there is no file to compare.
+    """
+    script = tmp_path / "job.sh"
+    script.write_text("#!/bin/sh\necho ran\n")
+    script.chmod(0o755)
+
+    policy = passbook_broker.read_policy()
+    access.add_pin("some-agent",
+                   __import__("passbook_identity").identify(["sh", str(script)])["identities"],
+                   policy)
+    passbook_broker.write_policy(policy)
+
+    answer = passbook_broker._ask({
+        "op": "spawn", "app": "some-agent", "keys": ["ALPHA"],
+        "command": ["sh", "-c", "echo $ALPHA"],
+    }, timeout=30)
+    assert not answer["ok"]
+    assert "cannot be pinned" in answer["error"]
+
+
+@needs_a_posix_shell
+def test_an_unpinned_app_is_unaffected(broker):
+    """Off unless its owner turns it on. A feature that demanded a pin before
+    anything ran would be switched off wholesale within a week."""
+    answer = passbook_broker._ask({
+        "op": "spawn", "app": "never-pinned", "keys": ["ALPHA"],
+        "command": ["sh", "-c", "echo hi"],
+    }, timeout=30)
+    assert answer["ok"] and "hi" in answer["stdout"]
+
+
+@needs_a_posix_shell
 def test_spawn_honours_a_command_binding(broker):
     """A guarded key goes into the commands its owner named and no others.
     Without this, spawn is a prettier `get`: the caller picks `curl evil` and
@@ -642,6 +707,33 @@ def test_a_secret_written_into_the_command_is_not_echoed_back_by_grants(broker):
     shown = json.dumps(passbook_broker._ask({"op": "grants"}))
     assert "a-value" not in shown
     assert "[redacted:ALPHA]" in shown
+
+
+@needs_a_posix_shell
+def test_a_pin_refusal_does_not_write_the_command_into_the_ledger(broker, tmp_path):
+    """A refusal happens BEFORE any value is resolved, so there is nothing to
+    redact against — and `passbook run -- $SECRET` puts a value where a program
+    name goes. The caller's message names the command, because the caller typed
+    it; the record must not.
+    """
+    import passbook_identity
+    import passbook_stamp
+
+    tool = tmp_path / "tool"
+    tool.write_text("#!/bin/sh\ntrue\n")
+    tool.chmod(0o755)
+    policy = passbook_broker.read_policy()
+    access.add_pin("some-agent", passbook_identity.identify([str(tool)])["identities"], policy)
+    passbook_broker.write_policy(policy)
+
+    answer = passbook_broker._ask({
+        "op": "spawn", "app": "some-agent", "keys": ["ALPHA"],
+        "command": ["a-value-that-is-secret"]}, timeout=30)
+    assert not answer["ok"]
+
+    ledger = json.dumps(passbook_stamp.read_stamps())
+    assert "a-value-that-is-secret" not in ledger
+    assert "is pinned" in ledger
 
 
 # ── a broker that outlives its store ───────────────────────────────────────

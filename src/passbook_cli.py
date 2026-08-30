@@ -449,15 +449,38 @@ def _sealed_run(command: list[str], who: str, args: argparse.Namespace) -> int |
     guarded = set(passbook_grant.guarded(policy))
     wanted = list(args.only or []) or passbook.key_names()
     involved = guarded.intersection(wanted)
-    if not sealed and not involved:
+    # A pin is checked where the spawn happens, which is the broker — so an app
+    # with one has to go there, exactly as a guarded key does. Without this the
+    # pin holds for every caller except the command a person actually types:
+    # `run` would exec the child itself and consult nothing. It was written
+    # that way, tested green against the broker, and did nothing at all the
+    # first time it was tried from a shell.
+    pinned = passbook_grant.pin_for(who, policy).get("mode") == "pinned"
+    if not sealed and not involved and not pinned:
         return None
     if not passbook_broker.running():
         # Without a broker there is nobody to hold the values on our behalf, and
         # doing it here would mean this process reads them — which is the thing
         # sealed mode exists to stop. Saying so beats running the command with
         # no credentials and letting it fail as an auth error.
-        return _fail("This machine seals credential reads, but no broker is running.",
-                     "Start one:  passbook broker start")
+        if sealed or involved:
+            return _fail("This machine seals credential reads, but no broker is running.",
+                         "Start one:  passbook broker start")
+        # A pin alone must not strand the machine. The standard is explicit that
+        # a policy is enforced BY a broker and a box without one is never locked
+        # out by one — and unlike sealed reads, refusing here would protect
+        # nothing: on a store this process can already read, the values flow the
+        # same way they always did. The threat a pin is for is a program that
+        # quietly became different code, and that program does not stop the
+        # broker; a person who does could read the store directly anyway.
+        #
+        # So it runs — and says plainly that it could not check, because the one
+        # unacceptable outcome is implying a coverage that did not happen.
+        print(f"warning: {who} is pinned, but no broker is running to check what "
+              f"this is.", file=sys.stderr)
+        print("warning: running it unchecked. Start one:  passbook broker start",
+              file=sys.stderr)
+        return None
 
     # The broker spawns the child and keeps the values. We get bytes it has
     # already scrubbed, which is why this is a socket round trip rather than the
@@ -3299,9 +3322,17 @@ def machine_state(*, verify: bool = False) -> dict:
                        "destinations": passbook_grant.destinations_for(name, policy)}
                 for name in passbook_grant.guarded(policy)
             }
+            # Which apps may only run the code they were pinned to. Reported,
+            # not editable here: a pin is taken from a command line, which is
+            # not a thing a settings panel can offer honestly.
+            state["access"]["pinned"] = {
+                name: passbook_access.pin_for(name, policy)
+                for name in passbook_access.pinned_apps(policy)
+            }
         except ImportError:
             state["access"]["reads"] = "open"
             state["access"]["guarded"] = {}
+            state["access"]["pinned"] = {}
     except ImportError:
         state["access"] = {"available": False, "detail": "Access modes are not installed."}
 
@@ -3604,6 +3635,152 @@ def cmd_guard(args: argparse.Namespace) -> int:
     if rule.get("destinations"):
         print(f"   may be sent to:       {', '.join(rule['destinations'])}")
     print("   it is never printed, by get, by reveal, or to an agent.")
+    return 0
+
+
+def _identity_lines(record) -> list[str]:
+    """The identity of one command, as a person reads it."""
+    import passbook_identity
+
+    lines = [f"   {passbook_identity.describe(record)}"]
+    if record.get("status") == "identified":
+        for part in record["identities"]:
+            lines.append(f"      {part}")
+        if record.get("script"):
+            lines.append(f"      script: {record['script']}")
+    return lines
+
+
+def cmd_pin(args: argparse.Namespace) -> int:
+    """Bind an app to the code it was approved to run.
+
+    A guard says where a key may go. A pin says what may hold it — not by name,
+    which anything can claim, and not by signature, which says who compiled a
+    program and nothing about the script it was handed, but by what the code
+    actually is. `passbook_identity` has the measurements behind that choice.
+    """
+    module = _access()
+    if module is None:
+        return _fail("Access policy is not installed on this machine.", "Run:  passbook install")
+    try:
+        import passbook_identity
+    except ImportError:
+        return _fail("Identification is not installed on this machine.",
+                     "Run:  passbook install")
+    import passbook_grant
+
+    # argparse eats the first `--` itself, so `pin APP -- node x.js` arrives
+    # correctly split. `pin --what -- node x.js` does not: with no APP given,
+    # the optional positional takes `node` and the identity comes back as the
+    # SCRIPT, silently answering a different question. Put it back.
+    command = list(args.command or [])
+    if command and command[0] == "--":
+        command = command[1:]
+    app = args.app
+    if args.what and app:
+        command = [app, *command]
+        app = ""
+    policy = module.read_policy()
+
+    # `--what` is inspection: it answers what a command WOULD be pinned as,
+    # changing nothing. Being able to look before committing is what stops the
+    # first pin from being a guess.
+    if args.what:
+        if not command:
+            return _fail("Identify what?", "passbook pin --what -- node server.js")
+        record = passbook_identity.identify(command)
+        print(" ".join(command)[:100])
+        for line in _identity_lines(record):
+            print(line)
+        if record["status"] == "ambiguous":
+            print("\n   This cannot be pinned. The code is in the argument list, not a")
+            print("   file, so there is nothing to compare against later.")
+        return 0 if record["status"] == "identified" else 1
+
+    if not app:
+        pinned = module.pinned_apps(policy)
+        if not pinned:
+            print("No app is pinned.")
+            print("See what a command would be pinned as:")
+            print("   passbook pin --what -- node server.js")
+            print("Then pin it:")
+            print("   passbook pin myapp -- node server.js")
+            return 0
+        for name in pinned:
+            entry = module.pin_for(name, policy)
+            state = "enforced" if entry["mode"] == "pinned" else "recorded, NOT enforced"
+            print(f"{name}  ({state})")
+            for part in entry["identities"]:
+                print(f"   {part}")
+        return 0
+
+    if args.forget:
+        if not module.clear_pin(app, policy):
+            print(f"{app} was not pinned.")
+            return 0
+        module.write_policy(policy)
+        print(f"{app} is no longer pinned; it may run anything again.")
+        return 0
+
+    if args.off or args.on:
+        try:
+            mode = module.set_pin_mode(app, "off" if args.off else "pinned", policy)
+        except ValueError as error:
+            return _fail(str(error), f"passbook pin {app} -- <command>")
+        module.write_policy(policy)
+        print(f"{app} pinning is {'off' if mode == 'off' else 'enforced'}.")
+        return 0
+
+    if args.remove:
+        if not module.remove_pin(app, args.remove, policy):
+            return _fail(f"{args.remove} was not pinned for {app}.",
+                         f"See what is:  passbook pin {app}")
+        module.write_policy(policy)
+        print(f"Removed {args.remove} from {app}.")
+        return 0
+
+    if not command:
+        entry = module.pin_for(app, policy)
+        if not entry:
+            print(f"{app} is not pinned.")
+            print(f"Pin what it runs:  passbook pin {app} -- node server.js")
+            return 0
+        state = "enforced" if entry["mode"] == "pinned" else "recorded, NOT enforced"
+        print(f"{app}  ({state})")
+        for part in entry["identities"]:
+            print(f"   {part}")
+        if entry.get("updated"):
+            print(f"   last changed {entry['updated']}")
+        if entry["mode"] != "pinned":
+            print(f"\n   Nothing is refused while this is off.")
+            print(f"   Enforce it:  passbook pin {app} --on")
+        return 0
+
+    record = passbook_identity.identify(command)
+    if record["status"] == "ambiguous":
+        return _fail(f"That cannot be pinned: {record['reason']}.",
+                     "The code is in the argument list rather than a file, so there is\n"
+                     "nothing to compare against next time. Put it in a script and pin that.")
+    if record["status"] != "identified":
+        return _fail(f"That cannot be identified: {record['reason']}.")
+
+    before = set(module.pin_for(app, policy).get("identities") or [])
+    entry = module.add_pin(app, record["identities"], policy,
+                           note=" ".join(command)[:200], enforce=not args.record_only)
+    module.write_policy(policy)
+
+    added = sorted(set(record["identities"]) - before)
+    print(f"{app} is pinned to:")
+    for line in _identity_lines(record):
+        print(line)
+    if added and before:
+        print(f"   added {len(added)} of {len(record['identities'])}; "
+              f"{len(entry['identities'])} trusted in total")
+    if entry["mode"] == "pinned":
+        print("\n   Anything else it tries to run is refused, and so is inline code.")
+    else:
+        print("\n   Recorded but NOT enforced.")
+        print(f"   Enforce it:  passbook pin {app} --on")
     return 0
 
 
@@ -4964,6 +5141,25 @@ def build_parser() -> argparse.ArgumentParser:
                            help="replace what is bound rather than adding to it")
     guard_cmd.add_argument("--clear", action="store_true", help="unguard this key")
     guard_cmd.set_defaults(func=cmd_guard)
+
+    pin_cmd = subs.add_parser(
+        "pin", help="bind an app to the code it may run, so a changed program must be re-approved")
+    pin_cmd.add_argument("app", nargs="?", default="", metavar="APP")
+    pin_cmd.add_argument("--what", action="store_true",
+                         help="show what a command would be pinned as, and change nothing")
+    pin_cmd.add_argument("--on", action="store_true", help="enforce what is already pinned")
+    pin_cmd.add_argument("--off", action="store_true",
+                         help="stop enforcing, without discarding what was pinned")
+    pin_cmd.add_argument("--forget", action="store_true", help="drop this app's pin entirely")
+    pin_cmd.add_argument("--remove", default="", metavar="IDENTITY",
+                         help="stop trusting one identity")
+    pin_cmd.add_argument("--record-only", action="store_true", dest="record_only",
+                         help="add it to the list but do not start refusing yet")
+    # `*` and not REMAINDER: REMAINDER after a positional swallows the flags
+    # too, so `pin studio --off` arrived as a command called `--off`. With `*`,
+    # argparse parses the flags and everything after `--` still lands here.
+    pin_cmd.add_argument("command", nargs="*")
+    pin_cmd.set_defaults(func=cmd_pin)
 
     grants_cmd = subs.add_parser("grants", help="what is holding credentials right now")
     grants_cmd.add_argument("--json", action="store_true")

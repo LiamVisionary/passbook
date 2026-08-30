@@ -111,6 +111,7 @@ __all__ = [
     "destinations_for",
     "guarded",
     "host_allowed",
+    "identity_allowed",
     "command_allowed",
     "proxy",
     "redact",
@@ -453,6 +454,78 @@ def host_allowed(key: str, url: str, policy: Mapping[str, Any]) -> dict[str, Any
 
 
 # ── spawning ───────────────────────────────────────────────────────────────
+
+
+
+# ── pins ───────────────────────────────────────────────────────────────────
+#
+# `command_allowed` asks whether a key may go into a command that LOOKS like
+# this. A pattern matches text, so `deploy-tool *` keeps matching after
+# `deploy-tool` has been replaced by different code — which is the supply-chain
+# case, and the one a pattern cannot see. A pin compares what the program IS.
+#
+# Storage lives in `passbook_access`; the matching is here, with the others.
+
+
+def pin_for(app: str, policy: Mapping[str, Any]) -> dict[str, Any]:
+    """This app's pin as `passbook_access` wrote it. Empty means never pinned."""
+    pins = policy.get("pins")
+    entry = pins.get(str(app).strip()) if isinstance(pins, Mapping) else None
+    if not isinstance(entry, Mapping):
+        return {}
+    return {"mode": str(entry.get("mode") or "off").lower(),
+            "identities": [str(i) for i in (entry.get("identities") or []) if str(i)]}
+
+
+def identity_allowed(app: str, command: Sequence[str], policy: Mapping[str, Any], *,
+                     cwd: str = "", path: str = "") -> dict[str, Any]:
+    """Is this the code this app was approved to run?
+
+    Open when there is no pin, closed on anything a pin cannot resolve. Those
+    two defaults look inconsistent and are not: an app nobody has pinned has
+    made no claim to check, while an app whose owner turned pinning ON and then
+    asked to run something unidentifiable is the exact case the setting was
+    turned on for. It is `command_allowed`'s default before the owner opts in
+    and `host_allowed`'s after — the same rule both of those follow, which is
+    that silence means "no policy" and a policy that cannot be evaluated means
+    "no".
+    """
+    pin = pin_for(app, policy)
+    if pin.get("mode") != "pinned":
+        return {"allowed": True, "why": "not pinned", "identity": {}}
+
+    try:
+        import passbook_identity
+    except ImportError:
+        # Refusing beats ignoring. The owner turned this on explicitly, and a
+        # missing module silently reverting that would be the same failure as a
+        # policy writer dropping a section it did not recognise.
+        return {"allowed": False, "identity": {},
+                "why": f"{app} is pinned but identification is not installed on this "
+                       f"machine; passbook pin {app} --off to stop enforcing it"}
+
+    record = passbook_identity.identify(command, cwd=cwd, path=path)
+    trusted = set(pin["identities"])
+
+    if record["status"] == "ambiguous":
+        return {"allowed": False, "identity": record,
+                "why": f"{app} is pinned, and {record['reason']}. Inline code cannot "
+                       f"be pinned; put it in a file and pin that."}
+    if record["status"] != "identified":
+        return {"allowed": False, "identity": record,
+                "why": f"{app} is pinned and this command could not be identified: "
+                       f"{record['reason']}"}
+
+    brought = set(record["identities"])
+    if brought <= trusted:
+        return {"allowed": True, "identity": record,
+                "why": f"pinned: {passbook_identity.describe(record)}"}
+
+    new = sorted(brought - trusted)
+    return {"allowed": False, "identity": record,
+            "why": f"{app} is pinned and this is not the code that was pinned. "
+                   f"Changed or new: {', '.join(new)}. "
+                   f"If this change is expected:  passbook pin {app} -- <command>"}
 
 
 def _child_env(values: Mapping[str, str], *, extra: Mapping[str, str] | None,

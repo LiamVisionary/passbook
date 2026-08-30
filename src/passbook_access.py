@@ -876,6 +876,135 @@ def clear_guard(key: str, policy: MutableMapping[str, Any]) -> bool:
     return True
 
 
+
+# ── pins ───────────────────────────────────────────────────────────────────
+#
+# A guard binds a KEY to where it may go. A pin binds an APP to what it may
+# run — and specifically to the code it ran when its owner approved it, so that
+# a program which quietly becomes different code has to be approved again.
+#
+# This exists because the obvious version does not work. "Refuse anything
+# unsigned" was measured on a real machine before it was written: at a
+# permissive setting `/bin/sh`, `/usr/bin/python3` and every `node` pass, so it
+# stops nothing; at a strict one the only survivors are the vendor's own
+# binaries — including a bundled `node`, which runs whatever it is handed —
+# while PassBook's own ad-hoc-signed interpreter is refused. `passbook_identity`
+# documents the measurement. What survives it is a different question: not who
+# compiled this, but is this the same code as last time.
+#
+# Off unless its owner turns it on, per app, and always after the fact — you
+# pin what already runs. A feature that demanded a pin before anything worked
+# would be switched off wholesale within a week, which is the same trade the
+# guards section makes and for the same reason.
+#
+# Storage only. `passbook_grant.identity_allowed` owns the matching, exactly as
+# it owns command and host matching, so every read of this shape happens in one
+# place and `write_policy` stays the only thing that knows the file.
+
+
+PIN_MODES = ("off", "pinned")
+
+
+def read_pins(policy: Mapping[str, Any]) -> dict[str, Any]:
+    pins = policy.get("pins")
+    return dict(pins) if isinstance(pins, Mapping) else {}
+
+
+def pin_for(app: str, policy: Mapping[str, Any]) -> dict[str, Any]:
+    """This app's pin, as a whole record. Empty means never pinned."""
+    entry = read_pins(policy).get(str(app).strip())
+    if not isinstance(entry, Mapping):
+        return {}
+    return {
+        "mode": str(entry.get("mode") or "off").lower(),
+        "identities": sorted({str(i) for i in (entry.get("identities") or []) if str(i)}),
+        "updated": str(entry.get("updated") or ""),
+        "note": str(entry.get("note") or ""),
+    }
+
+
+def pinned_apps(policy: Mapping[str, Any]) -> list[str]:
+    """Apps with a pin of any kind, enforced or not."""
+    return sorted(name for name in read_pins(policy) if str(name).strip())
+
+
+def add_pin(app: str, identities: Iterable[str], policy: MutableMapping[str, Any], *,
+            note: str = "", enforce: bool = True) -> dict[str, Any]:
+    """Trust these identities for this app, keeping whatever was trusted before.
+
+    Additive, like `set_guard`, and for the same reason: a pin is built one
+    command at a time — the server today, the migration script next week — and
+    a call that replaced the set would turn every addition into a silent
+    narrowing discovered when something stops working at 3am.
+    """
+    name = str(app).strip()
+    if not name:
+        raise ValueError("which app?")
+    fresh = {str(i).strip() for i in identities if str(i).strip()}
+    if not fresh:
+        raise ValueError("nothing to pin")
+    pins = read_pins(policy)
+    entry = dict(pins.get(name) or {})
+    entry["identities"] = sorted({*(str(i) for i in (entry.get("identities") or [])), *fresh})
+    if enforce or not entry.get("mode"):
+        entry["mode"] = "pinned" if enforce else str(entry.get("mode") or "off")
+    entry["updated"] = _stamp(_now())
+    if note:
+        entry["note"] = str(note)[:200]
+    pins[name] = entry
+    policy["pins"] = pins
+    return entry
+
+
+def remove_pin(app: str, identity: str, policy: MutableMapping[str, Any]) -> bool:
+    """Stop trusting one identity. Returns whether it was there."""
+    name, wanted = str(app).strip(), str(identity).strip()
+    pins = read_pins(policy)
+    entry = dict(pins.get(name) or {})
+    kept = [str(i) for i in (entry.get("identities") or []) if str(i) != wanted]
+    if len(kept) == len(entry.get("identities") or []):
+        return False
+    entry["identities"] = sorted(kept)
+    entry["updated"] = _stamp(_now())
+    pins[name] = entry
+    policy["pins"] = pins
+    return True
+
+
+def set_pin_mode(app: str, mode: str, policy: MutableMapping[str, Any]) -> str:
+    """Turn enforcement on or off without discarding what was pinned.
+
+    Kept separate from `clear_pin` so that turning a pin off to get through an
+    incident does not throw away the list somebody assembled, which is what
+    makes turning it back on afterwards a decision rather than a project.
+    """
+    name = str(app).strip()
+    wanted = str(mode).strip().lower()
+    if wanted not in PIN_MODES:
+        raise ValueError(f"mode must be one of {', '.join(PIN_MODES)}")
+    pins = read_pins(policy)
+    entry = dict(pins.get(name) or {})
+    if not entry.get("identities") and wanted == "pinned":
+        raise ValueError(f"nothing is pinned for {name} yet")
+    entry["mode"] = wanted
+    entry.setdefault("identities", [])
+    entry["updated"] = _stamp(_now())
+    pins[name] = entry
+    policy["pins"] = pins
+    return wanted
+
+
+def clear_pin(app: str, policy: MutableMapping[str, Any]) -> bool:
+    """Forget this app's pin entirely. Returns whether there was one."""
+    name = str(app).strip()
+    pins = read_pins(policy)
+    if name not in pins:
+        return False
+    pins.pop(name)
+    policy["pins"] = pins
+    return True
+
+
 # ── projects ───────────────────────────────────────────────────────────────
 #
 # A third bound, beside scope (which workspaces) and audience (which agents):

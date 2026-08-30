@@ -885,6 +885,53 @@ Making refusals real needs the operating system to vouch for the caller — a
 code-signed binary and a keychain ACL on macOS, something different again
 elsewhere. That is a signing-and-distribution project, not a file in here.
 
+### Pinning what may hold a key
+
+A guard binds a key to the commands it may enter, matched as text. So
+`deploy-tool *` goes on matching after `deploy-tool` has quietly become
+different code — a dependency that took a compromised update and kept the
+access it was granted. A pin compares what the program **is**.
+
+```bash
+passbook pin --what -- node server.js   # what would this be pinned as?
+passbook pin studio -- node server.js   # pin it
+passbook pin studio                     # what is trusted
+passbook pin studio --off               # stop enforcing, keep the list
+```
+
+Once an app is pinned, anything else it tries to run is refused until you pin
+that too.
+
+**Why this is not "block unsigned programs".** That was measured before it was
+built, and it fails in both directions at once. Loosely, `/bin/sh`,
+`/usr/bin/python3` and every `node` are signed, so the three programs anything
+hostile reaches for first all pass. Strictly — one Developer ID team — the
+survivors are that vendor's own binaries, which on this machine includes a
+bundled `node` that will run `node -e '<anything>'`; meanwhile `/bin/sh` is
+refused, and so is PassBook's own uv-managed interpreter, which is ad-hoc
+signed and carries no team. The strict setting locks out the tool doing the
+enforcing and admits the universal bypass.
+
+A signature says *who compiled this*. For an interpreter that is vacuous: it
+covers `node`, never the script. So a pin uses the strongest thing available —
+a signing authority where there is one, the file's contents where there is not
+— and for `node server.js` it pins **both**, which is the pair a signature
+could never express. Inline code (`node -e`, `sh -c`, a script on stdin) has no
+file to compare and is refused outright rather than being let through on the
+interpreter's reputation.
+
+**What it does not do.** It does not close the gap between the check and the
+`exec` — the file can be replaced in between. A pin is for code that changed
+between one run and the next, not for an attacker racing it, and one who could
+win that race could have written the program beforehand anyway. It also says
+nothing about what an approved program does with what it is handed: the same
+binary, given a different argument, still does what the argument says.
+
+And a machine with no broker running is not locked out by one. There is nothing
+there to check the pin, and refusing would protect nothing on a store the
+process can already read — so it runs the command and says on stderr that it
+could not check.
+
 ## Backup
 
 ```bash

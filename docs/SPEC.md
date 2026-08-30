@@ -247,6 +247,66 @@ the caller's output, not in its transcript, and not in the record.
 
 Reference implementation: `passbook_grant.py`.
 
+## Pinning what may hold a key (optional)
+
+Not required for conformance. The bindings in the previous section constrain a
+key by the command line it enters — text, matched against a pattern. A pattern
+cannot see that the program behind the name has become different code, which is
+the case where a dependency takes a compromised update and keeps the access it
+was granted.
+
+The obvious answer is to require a code signature, and it does not work. On a
+normal developer machine, a permissive requirement admits the system shell, the
+system Python and every build of Node — the three programs anything hostile
+would reach for first. A requirement naming one vendor's team admits that
+vendor's binaries only, which on a machine that ships a bundled interpreter
+means admitting a program that will run whatever it is handed, while refusing
+the shell, the system interpreter, and often the PassBook build doing the
+enforcing, because a locally built or ad-hoc-signed interpreter carries no team
+at all. A signature answers *who compiled this*, and an interpreter makes that
+answer vacuous: the signature covers the interpreter, never the script.
+
+The question with an answer is whether the code is the same as the code its
+owner approved. An implementation that offers this must hold to all of:
+
+1. an identity is the strongest available statement about a file and no
+   stronger: a signing authority where one exists, and the file's contents where
+   one does not. An ad-hoc signature is not an authority — minting one requires
+   no account, no certificate and no review
+2. where a program's behaviour comes from an argument rather than from itself —
+   an interpreter given code inline or on stdin — the implementation reports
+   that it cannot identify what will run, and does not substitute the
+   interpreter's own identity for it
+3. an unidentifiable command is refused where a pin is in force, and the refusal
+   says which of those two cases it was
+4. pinning is off until its owner turns it on, per app, and is established from
+   what already runs. A scheme requiring every program be enumerated before
+   anything works is switched off wholesale, and an unenforced setting protects
+   nobody
+5. turning enforcement off does not discard what was pinned, so turning it back
+   on after an incident is a decision rather than a project
+6. the identity a spawn ran under is recorded, so that the record answers what
+   held a key and not merely what it was called
+
+The limits, stated rather than implied. A pin is checked against a path, and the
+file at that path can be replaced between the check and the `exec`; the window
+is real and is not closed by this. What a pin is *for* is code that changed
+between one run and the next, not an attacker racing the check — and such an
+attacker, able to write the program at the moment it is read, could equally have
+written it beforehand. A pin also says nothing about what an approved program
+does with what it is given: the same program, handed a different argument, still
+does what that argument says. Authority is delegable and pinning does not make
+it otherwise.
+
+Because a pin is enforced by the broker, the rule below applies to it in full:
+a machine with no broker running is not locked out by one. Where a pin cannot be
+checked and refusing would protect nothing — the values being readable by that
+process regardless — an implementation runs the command and reports that it
+could not check, rather than either refusing or implying a check it did not
+perform.
+
+Reference implementation: `passbook_identity.py`.
+
 ## Nothing else may become required
 
 Every optional part of this standard — stamping, sealing, linking, brokering,

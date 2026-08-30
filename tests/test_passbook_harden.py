@@ -364,3 +364,38 @@ def test_a_locked_tree_explains_a_failed_update(monkeypatch, capsys):
     out = capsys.readouterr()
     assert code == 1
     assert "sudo passbook update" in (out.out + out.err)
+
+
+def test_the_root_check_works_where_there_is_no_geteuid(monkeypatch):
+    """The bug that reached CI three times, caught on any platform.
+
+    `os.geteuid` is absent on Windows, so every direct call raised there while
+    passing everywhere else — which is why it kept coming back. Deleting the
+    attribute reproduces Windows on any machine, so this fails locally now
+    rather than twenty minutes later on a runner.
+    """
+    import passbook_cli
+
+    monkeypatch.delattr(os, "geteuid", raising=False)
+    assert harden.is_root() is False
+    assert passbook_cli._root_here() is False
+
+
+def test_no_module_calls_geteuid_directly(monkeypatch):
+    """One obvious thing to import, and nothing reaching past it.
+
+    A grep rather than a behaviour check on purpose: the behaviour test above
+    only covers the paths it happens to run, and the failures were always in a
+    branch nobody exercised on macOS.
+    """
+    src = Path(__file__).resolve().parents[1] / "src"
+    offenders = []
+    for module in src.glob("passbook*.py"):
+        for number, line in enumerate(module.read_text(encoding="utf-8").splitlines(), 1):
+            stripped = line.strip()
+            if stripped.startswith("#") or "getattr(os" in line:
+                continue
+            if "os.geteuid()" in line and "def is_root" not in line:
+                offenders.append(f"{module.name}:{number}")
+    assert not offenders, (
+        f"call passbook_harden.is_root() instead of os.geteuid(): {offenders}")

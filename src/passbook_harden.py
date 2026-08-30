@@ -67,8 +67,8 @@ import os
 import sys
 from typing import Any
 
-__all__ = ["available", "deny_debugger", "describe", "install", "posture",
-           "preexec", "runtime_root", "undo"]
+__all__ = ["available", "deny_debugger", "describe", "install", "is_root",
+           "posture", "preexec", "runtime_root", "undo"]
 
 # <sys/ptrace.h>: PT_DENY_ATTACH is 31 on Darwin. Spelled out because the
 # constant is not exposed by any Python module and importing it from a header
@@ -206,15 +206,21 @@ RUNTIME = Path("/usr/local/libexec/passbook")
 AGENT_PLIST = Path("/Library/LaunchAgents") / f"{LABEL}.plist"
 
 
-def _is_root() -> bool:
+def is_root() -> bool:
     """Whether this process can write to root-owned paths.
 
-    `os.geteuid` does not exist on Windows, so asking for it there is an
-    AttributeError rather than a False — which is how `undo()` crashed on the
-    Windows runners instead of politely declining.
+    `os.geteuid` does not exist on Windows, so asking for it directly is an
+    AttributeError rather than a False. That mistake has now been made three
+    times in this codebase — in `undo`, in `install`, and in `cmd_update` — so
+    this is public rather than private: the fix for making it a fourth time is
+    for there to be one obvious thing to import.
     """
     getter = getattr(os, "geteuid", None)
     return getter is not None and getter() == 0
+
+
+# Kept because the module's own callers below were written against it.
+_is_root = is_root
 
 
 def _writable_by_user(path: Path) -> bool:

@@ -1803,6 +1803,17 @@ def install_method() -> tuple[str, list[str]]:
     return "pip", [sys.executable, "-m", "pip", "install", "--upgrade", source]
 
 
+def _root_here() -> bool:
+    """Are we root? Asked through the module that gets it right on Windows."""
+    try:
+        import passbook_harden
+
+        return passbook_harden.is_root()
+    except ImportError:
+        getter = getattr(os, "geteuid", None)
+        return getter is not None and getter() == 0
+
+
 def _tree_is_locked() -> bool:
     """Whether PassBook's own installed tree is root-owned.
 
@@ -1868,7 +1879,7 @@ def cmd_update(args: argparse.Namespace) -> int:
         # names a path and not a reason — the exact shape of dead end this
         # project keeps trying to remove. If we locked it, say so, because the
         # answer is one word and nothing else on screen suggests it.
-        if _tree_is_locked() and os.geteuid() != 0:
+        if _tree_is_locked() and not _root_here():
             return _fail(
                 "PassBook's own code is locked, so updating it needs root.",
                 "That is the lock working rather than a fault:\n"

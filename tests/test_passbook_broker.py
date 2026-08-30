@@ -10,8 +10,12 @@ the last tests here assert that limit rather than paper over it.
 from __future__ import annotations
 
 import json
-import stat
+import os
+import shutil
+import signal
 import socket
+import stat
+import subprocess
 import sys
 import time
 from datetime import datetime, timedelta
@@ -638,3 +642,177 @@ def test_a_secret_written_into_the_command_is_not_echoed_back_by_grants(broker):
     shown = json.dumps(passbook_broker._ask({"op": "grants"}))
     assert "a-value" not in shown
     assert "[redacted:ALPHA]" in shown
+
+
+# ── a broker that outlives its store ───────────────────────────────────────
+#
+# Ported from a worktree that never landed. A throwaway HIVE_HOME is deleted far
+# more often than it is shut down, and the broker used to go on running: a
+# socket in a directory that no longer existed, unreachable by anything, still
+# holding the data key of a store that was gone.
+
+
+def _exited(pid: int) -> bool:
+    """Has the broker really gone?
+
+    `kill(pid, 0)` is not enough on its own: the broker is a child of this
+    process, a dead child is a zombie until it is reaped, and signalling a
+    zombie succeeds. So reap first, and only then ask.
+    """
+    try:
+        reaped, _ = os.waitpid(pid, os.WNOHANG)
+    except ChildProcessError:
+        return True  # subprocess's own bookkeeping got there first
+    except OSError:
+        pass
+    else:
+        if reaped == pid:
+            return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    return False
+
+
+def _wait_for_exit(pid: int, timeout: float = 15.0) -> float:
+    """Seconds until the broker exited, or the timeout having killed it off."""
+    started = time.monotonic()
+    while time.monotonic() - started < timeout:
+        if _exited(pid):
+            return time.monotonic() - started
+        time.sleep(0.05)
+    try:  # do not leave behind the stray this test exists to prevent
+        os.kill(pid, 9)
+        os.waitpid(pid, 0)
+    except OSError:
+        pass
+    return float("inf")
+
+
+def test_a_broker_whose_store_is_deleted_stops_instead_of_lingering(tmp_path, monkeypatch):
+    home = tmp_path / "hive"
+    monkeypatch.setenv("HIVE_HOME", str(home))
+    monkeypatch.delenv("HIVE_ENV_FILES", raising=False)
+    passbook.ensure(app="test")
+    passbook.set_values({"ALPHA": "a-value"})
+    started = passbook_broker.start()
+    if not started.get("ok"):
+        pytest.skip(f"the broker would not start here: {started.get('detail')}")
+    socket_file = passbook_broker.socket_path()
+    assert socket_file.exists()
+
+    shutil.rmtree(home)
+
+    elapsed = _wait_for_exit(started["pid"])
+    assert elapsed != float("inf"), "the broker outlived the store it was serving"
+    assert not socket_file.exists(), "a socket nothing can reach was left behind"
+
+
+def test_a_broker_stops_when_its_socket_alone_is_taken_away(broker):
+    """Same conclusion by a narrower route: the store is fine, the door is not.
+
+    A socket the broker no longer has a name at is a broker no client can dial,
+    which is the condition that matters — not whether the directory survived.
+    """
+    pid = int(passbook_broker.pid_path().read_text(encoding="utf-8").strip())
+
+    passbook_broker.socket_path().unlink()
+
+    assert _wait_for_exit(pid) != float("inf"), \
+        "the broker went on serving a socket it no longer had"
+    assert not passbook_broker.pid_path().exists(), "a pid file was left naming a dead broker"
+
+
+def test_a_departing_broker_does_not_take_its_replacement_with_it(broker):
+    """The reason the check is by inode and not by `exists()`.
+
+    Restart it under itself and the old process finds a socket at its own path
+    that belongs to the new one. Treating that as "still fine" would leave two
+    brokers on one name; treating it as "clean up after myself" would be worse —
+    the corpse would delete the live broker's socket on its way out.
+    """
+    old_pid = int(passbook_broker.pid_path().read_text(encoding="utf-8").strip())
+    passbook_broker.socket_path().unlink()  # the old broker is now unreachable
+
+    replacement = passbook_broker.start()
+    assert replacement.get("ok") and not replacement.get("already"), replacement
+
+    assert _wait_for_exit(old_pid) != float("inf"), "the replaced broker never stood down"
+
+    time.sleep(passbook_broker.STORE_CHECK_SECONDS + 0.5)  # let any late tidying happen
+    assert passbook_broker.running(), "the departing broker took the live one's socket"
+    assert (int(passbook_broker.pid_path().read_text(encoding="utf-8").strip())
+            == replacement["pid"]), "the departing broker deleted the live one's pid file"
+
+
+def test_a_broker_that_cannot_stand_down_is_reported_as_a_stray(broker):
+    """The population that self-shutdown cannot reach: brokers already running.
+
+    SIGSTOP stands in for one — a process that will not notice its store went
+    away, whatever the reason. Reporting is by the store each broker writes on
+    its own command line, so nothing here depends on the store still existing.
+    """
+    pid = int(passbook_broker.pid_path().read_text(encoding="utf-8").strip())
+    os.kill(pid, signal.SIGSTOP)
+    try:
+        passbook_broker.socket_path().unlink()
+
+        mine = [item for item in passbook_broker.strays() if item["pid"] == pid]
+
+        assert mine, "a broker with no socket left was not reported"
+        assert mine[0]["root"] == str(broker), "reported without saying which store"
+    finally:
+        os.kill(pid, signal.SIGCONT)
+    assert _wait_for_exit(pid) != float("inf")
+
+
+def test_a_working_broker_is_never_called_a_stray(broker):
+    assert not [item for item in passbook_broker.strays()
+                if item["root"] == str(broker)], "the live broker was reported as stray"
+
+
+def test_clearing_stops_the_strays_it_can_place_and_leaves_the_rest(broker, monkeypatch):
+    """`--clear` stops processes, so it acts only on what it can actually place.
+
+    A broker from before the store went on the command line is reported and left
+    alone: whether it is stray is genuinely unknown, and the cost of guessing
+    wrong is killing the broker a working store depends on.
+    """
+    pid = int(passbook_broker.pid_path().read_text(encoding="utf-8").strip())
+    # A real process standing in for the older broker, so "left alone" is
+    # something the test can watch rather than take on trust.
+    bystander = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    os.kill(pid, signal.SIGSTOP)
+    monkeypatch.setattr(passbook_broker, "_broker_processes", lambda: [
+        (pid, f"python -m passbook_broker --serve --root={broker}"),
+        (bystander.pid, "python -m passbook_broker --serve"),  # older, unplaceable
+    ])
+    try:
+        passbook_broker.socket_path().unlink()
+
+        result = passbook_broker.clear_strays()
+    finally:
+        os.kill(pid, signal.SIGCONT)
+
+    try:
+        assert [item["pid"] for item in result["stopped"]] == [pid]
+        assert [item["pid"] for item in result["unknown"]] == [bystander.pid], \
+            "a broker PassBook cannot place must be reported, not signalled"
+        assert bystander.poll() is None, "a broker PassBook cannot place was signalled anyway"
+        assert _wait_for_exit(pid) != float("inf"), \
+            "the stray was reported stopped but is still up"
+    finally:
+        bystander.kill()
+        bystander.wait()
+
+
+# ── holding a request open while a person answers ──────────────────────────
+#
+# The queue lives in the broker's memory, and the broker is another process — so
+# these go over the socket. Calling `passbook_broker.pending()` here would read
+# this process's own empty queue and quietly assert nothing.
+
+import threading  # noqa: E402
+
+import passbook_access as access  # noqa: E402

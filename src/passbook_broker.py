@@ -69,6 +69,7 @@ __all__ = [
     "signout",
     "vault_status",
     "SOCKET_FILENAME",
+    "clear_strays",
     "learn_policy",
     "pending",
     "resolve",
@@ -79,6 +80,7 @@ __all__ = [
     "start",
     "status",
     "stop",
+    "strays",
     "write_policy",
 ]
 
@@ -86,6 +88,17 @@ SOCKET_FILENAME = "broker.sock"
 PID_FILENAME = "broker.pid"
 POLICY_FILENAME = access.POLICY_FILENAME
 SPEC_VERSION = 1
+
+# How a running broker names itself in `ps`, which is the only thing left to ask
+# once its store — and with it its socket, its pid file and every other trace —
+# has been deleted out from under it.
+SERVE_FLAG = "--serve"
+ROOT_FLAG = "--root"
+
+# How often the serve loop checks that the socket it bound is still the socket
+# at its path. Two seconds is nothing — two `stat` calls — and it bounds how
+# long a broker whose store has been deleted can go on holding a data key.
+STORE_CHECK_SECONDS = 2.0
 
 CONNECT_TIMEOUT = 2.0
 # A request in `ask` mode is waiting on a person, so the client has to outlast
@@ -167,7 +180,7 @@ def endpoint(root: Path | None = None) -> str:
 
 
 class _UnixListener:
-    """The AF_UNIX server, behind the same two calls the pipe server offers."""
+    """The AF_UNIX server, behind the same few calls the pipe server offers."""
 
     def __init__(self, server: socket.socket, path: Path) -> None:
         self._server = server
@@ -177,9 +190,26 @@ class _UnixListener:
         connection, _ = self._server.accept()
         return connection
 
-    def close(self) -> None:
+    def settimeout(self, seconds: float | None) -> None:
+        self._server.settimeout(seconds)
+
+    def identity(self):
+        """Device and inode of the socket, or None if it is not there.
+
+        Not the path: a broker restarted under us finds a socket at its own
+        name that belongs to its replacement, and treating that as "still fine"
+        is how two brokers end up fighting over one name.
+        """
+        try:
+            got = self._path.stat()
+        except OSError:
+            return None
+        return (got.st_dev, got.st_ino)
+
+    def close(self, *, unlink: bool = True) -> None:
         self._server.close()
-        self._path.unlink(missing_ok=True)
+        if unlink:
+            self._path.unlink(missing_ok=True)
 
 
 def _listen(root: Path | None):
@@ -1423,6 +1453,50 @@ def _serve_one(connection: socket.socket, root: Path | None) -> None:
             pass
 
 
+_STOPPING = threading.Event()
+
+
+def _stop_on_sigterm() -> None:
+    """Turn SIGTERM into an ordinary exit from the serve loop.
+
+    `passbook broker stop` sends SIGTERM, and Python's default handler ends the
+    interpreter where it stands — no `finally`, so the data key is never zeroed
+    on the way out and the socket is left for `stop()` to sweep up afterwards.
+    Handling it instead means every shutdown leaves through the same door.
+
+    A handler can only be installed from the main thread; served from a thread
+    (a test, an embedder) this quietly leaves the default in place, which is the
+    behaviour everything had before.
+    """
+    _STOPPING.clear()
+
+    def _handler(_signum, _frame):
+        # Raising is what makes it prompt. A handler that only sets a flag
+        # returns into the blocked `accept()`, which Python then retries for the
+        # rest of its timeout (PEP 475) — so `stop()` would wait out a full tick
+        # every time. The flag is set as well because the loop condition reads
+        # it, and the raise lands in the `except KeyboardInterrupt` that a
+        # foreground Ctrl-C already used.
+        _STOPPING.set()
+        raise KeyboardInterrupt
+
+    try:
+        import signal
+
+        signal.signal(signal.SIGTERM, _handler)
+    except (AttributeError, OSError, ValueError):
+        pass
+
+
+def _drop_pid_file_if_ours(root: Path | None) -> None:
+    """Remove the pid file only while it still names this process."""
+    try:
+        if int(pid_path(root).read_text(encoding="utf-8").strip()) == os.getpid():
+            pid_path(root).unlink(missing_ok=True)
+    except (OSError, ValueError):
+        pass
+
+
 def serve(*, root: Path | None = None, ready: threading.Event | None = None,
           open_with_device: bool = False) -> None:
     """Run the broker in the foreground until interrupted.
@@ -1487,18 +1561,67 @@ def serve(*, root: Path | None = None, ready: threading.Event | None = None,
     if ready is not None:
         ready.set()
 
+    # A throwaway store — a test tree, a `mktemp -d` HIVE_HOME, a container
+    # layer — is deleted far more often than it is shut down. Without this the
+    # broker outlives it: listening on a socket whose directory is gone, so no
+    # client can ever reach it again, and still holding a data key in memory for
+    # a store that no longer exists. It has to notice that itself, because the
+    # thing that would have stopped it is the thing that went away.
+    #
+    # `bound` is None where the listener cannot answer — the Windows pipe, whose
+    # namespace is not a directory and cannot go missing this way. There the
+    # check is skipped rather than guessed at.
+    bound = server.identity()
+    if bound is not None:
+        server.settimeout(STORE_CHECK_SECONDS)
+
+    def still_ours() -> bool:
+        return bound is None or server.identity() == bound
+
+    ours = True
     try:
-        while True:
+        _stop_on_sigterm()
+        while not _STOPPING.is_set():
             try:
                 connection = server.accept()
+            # `socket.timeout`, not `TimeoutError`: the two are the same class
+            # from 3.10 on but not on 3.9, which this still supports, and there
+            # the wrong name falls through to the `OSError` arm below and stops
+            # the broker on its first idle tick.
+            except socket.timeout:
+                # Nothing came in; spend the pause checking we are still findable.
+                if not still_ours():
+                    ours = False
+                    break
+                continue
             except OSError:
+                break
+            stale = not still_ours()
+            if stale or _STOPPING.is_set():
+                # The last connection this socket will ever take. `ours` turns
+                # only on staleness: a plain stop still owns its own files.
+                ours = not stale
+                try:
+                    connection.close()
+                except OSError:
+                    pass
                 break
             threading.Thread(target=_serve_one, args=(connection, root), daemon=True).start()
     except KeyboardInterrupt:
         pass
     finally:
-        server.close()
-        pid_path(root).unlink(missing_ok=True)
+        # Whatever ends us, the data key goes with us. It only ever lived here.
+        with _VAULT_LOCK:
+            _forget_dek()
+        passbook.set_unsealer(None)
+        server.close(unlink=ours)
+        if ours:
+            pid_path(root).unlink(missing_ok=True)
+        else:
+            # The name at our path now belongs to something else — a broker that
+            # replaced us, most likely. Deleting its socket would be the last
+            # thing we ever did, and it would take the live broker with us.
+            _drop_pid_file_if_ours(root)
 
 
 # ── talking to it ──────────────────────────────────────────────────────────
@@ -1768,8 +1891,14 @@ def start(*, root: Path | None = None, wait: float = 5.0) -> dict[str, Any]:
         detach = {"creationflags": _DETACHED_PROCESS | _CREATE_NEW_PROCESS_GROUP}
     else:
         detach = {"start_new_session": True}
+    # The store goes on the command line, always last so a path containing
+    # spaces survives the round trip through `ps`. Two reasons, both earned:
+    # `start(root=X)` used to watch X while the child bound whatever the
+    # environment said, which simply timed out; and a broker that names its own
+    # store is a broker `strays()` can place later without process forensics.
+    store = Path(root) if root is not None else passbook.root()
     process = subprocess.Popen(
-        [sys.executable, "-m", "passbook_broker", "--serve"],
+        [sys.executable, "-m", "passbook_broker", SERVE_FLAG, f"{ROOT_FLAG}={store}"],
         cwd=str(package), **detach,
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
         env={**os.environ, "PYTHONPATH": os.pathsep.join(
@@ -1832,6 +1961,107 @@ def stop(*, root: Path | None = None) -> dict[str, Any]:
     return {"ok": True, "detail": "Stopped."}
 
 
+# ── strays ─────────────────────────────────────────────────────────────────
+#
+# A broker whose store was deleted now stands down on its own (see `serve`), so
+# nothing new can end up here. What is left is the older population: brokers
+# started before that landed, which are still listening on sockets in
+# directories that stopped existing hours ago and still holding whatever data
+# key was last signed in. They cannot be found through the store — the store is
+# what went missing — so they are found through the process table.
+
+
+def _broker_processes() -> list[tuple[int, str]]:
+    """`(pid, command)` for every broker process on this machine.
+
+    `ps` rather than a process library: nothing to add to the dependencies, no
+    `/proc` to assume, and the broker only runs where AF_UNIX does anyway. A
+    machine where this cannot be answered reports nothing rather than guessing.
+    """
+    try:
+        listing = subprocess.run(["ps", "-eo", "pid=,command="],
+                                 capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    found = []
+    for line in listing.stdout.splitlines():
+        number, _, command = line.strip().partition(" ")
+        # By position, not by "mentions the broker somewhere". A shell one-liner
+        # or an editor with this file open says `passbook_broker` too, and the
+        # difference matters because `clear_strays` signals what this returns.
+        # This is exactly the shape `start` spawns.
+        words = command.split()
+        if words[1:4] != ["-m", "passbook_broker", SERVE_FLAG]:
+            continue
+        try:
+            found.append((int(number), command.strip()))
+        except ValueError:
+            continue
+    return found
+
+
+def strays(*, root: Path | None = None) -> list[dict[str, Any]]:
+    """Brokers running here that nothing can reach.
+
+    A `root` of "" means a broker this version cannot place: it was started by a
+    PassBook that did not write its store on its command line, so whether it is
+    stray is genuinely unknown and it is reported as unknown rather than swept
+    up. `clear_strays` will not touch those.
+    """
+    mine = os.getpid()
+    # The one broker we can identify without it telling us: the pid this store
+    # wrote down, while this store's socket is still there to be dialled.
+    here = 0
+    if socket_path(root).exists():
+        try:
+            here = int(pid_path(root).read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            here = 0
+    out: list[dict[str, Any]] = []
+    for pid, command in _broker_processes():
+        if pid == mine:
+            continue
+        # Always the last argument, so a store path with spaces in it survives.
+        store = command.partition(f" {ROOT_FLAG}=")[2].strip()
+        if store:
+            socket_file = Path(store) / SOCKET_FILENAME
+            try:
+                if socket_file.exists():
+                    continue  # reachable, and therefore somebody's working broker
+            except OSError:
+                continue  # not a path this machine can even answer for
+            out.append({"pid": pid, "root": store,
+                        "detail": f"nothing left at {socket_file}"})
+        elif pid != here:
+            out.append({"pid": pid, "root": "", "detail":
+                        "started by an older PassBook, which did not record its store"})
+    return out
+
+
+def clear_strays(*, root: Path | None = None) -> dict[str, Any]:
+    """Stop the strays we can place. Never the ones we cannot.
+
+    SIGTERM, not SIGKILL: a broker handles it and leaves through its own
+    shutdown, which is what zeroes the data key on the way out.
+    """
+    stopped: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+    unknown: list[dict[str, Any]] = []
+    for item in strays(root=root):
+        if not item["root"]:
+            unknown.append(item)
+            continue
+        try:
+            os.kill(item["pid"], 15)
+        except ProcessLookupError:
+            stopped.append(item)  # gone between listing it and asking it to go
+        except OSError as error:
+            failed.append({**item, "detail": str(error)})
+        else:
+            stopped.append(item)
+    return {"ok": not failed, "stopped": stopped, "failed": failed, "unknown": unknown}
+
+
 def status(*, root: Path | None = None) -> dict[str, Any]:
     """Whether it is up, and what it would decide. Never a value."""
     policy = read_policy(root)
@@ -1857,5 +2087,7 @@ def status(*, root: Path | None = None) -> dict[str, Any]:
 
 
 if __name__ == "__main__":
-    if "--serve" in sys.argv:
-        serve()
+    if SERVE_FLAG in sys.argv:
+        named = next((arg[len(ROOT_FLAG) + 1:] for arg in sys.argv
+                      if arg.startswith(f"{ROOT_FLAG}=")), "")
+        serve(root=Path(named) if named else None)

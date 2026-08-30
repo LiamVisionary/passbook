@@ -187,6 +187,35 @@ running it, not by reading it — an unapproved agent ran unattended against a
 perfectly correct policy — and the command now says **NOT ENFORCED** with the
 two ways to fix it.
 
+### A broker no longer outlives the store it was serving
+
+Ported from a worktree that never landed. A throwaway `HIVE_HOME` — a test tree,
+a `mktemp -d`, a container layer — is deleted far more often than it is shut
+down, and the broker went on running: listening on a socket in a directory that
+no longer existed, so unreachable by anything, and still holding the data key of
+a store that was gone. Four were found on one machine, the oldest hours old.
+
+- The serve loop checks, on every accept and every couple of seconds besides,
+  that the socket at its path is still the one it bound — **by inode, not by
+  name**, so a broker that has been replaced leaves without deleting its
+  replacement's socket. Verified: a store deleted under a running broker stands
+  it down in about half a second.
+- **`passbook broker stop`** sends SIGTERM, which used to end the process where
+  it stood: no shutdown, so the data key was never zeroed and the socket was
+  left for `stop` to sweep up. Handled now, so every shutdown leaves through the
+  same door and zeroes the key on the way out.
+- **`passbook broker strays`** finds the older population through the process
+  table, since a stray's store is exactly what went missing. `--clear` stops the
+  ones it can place and leaves the ones it cannot, naming the command that will
+  identify them.
+- `broker start` records its store on the command line, which is what makes a
+  stray placeable at all — and fixes `start(root=X)` watching X while the child
+  bound whatever the environment said.
+
+The Windows pipe has no equivalent failure: its namespace is not a directory and
+cannot go missing this way, so the listener reports that it cannot tell and the
+check is skipped rather than guessed at.
+
 ### Manual sign-in after a reboot, by default, with a switch
 
 Two things had been conflated, and the conflation is why nobody could say what

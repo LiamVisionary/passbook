@@ -370,6 +370,23 @@ class PipeServer:
             raise _fail("CreateNamedPipe")
         return handle
 
+    def settimeout(self, seconds: float | None) -> None:
+        """Accepted and ignored. The pipe server blocks per connection, and the
+        staleness check the timeout exists for cannot apply here anyway — see
+        `identity`."""
+        self._accept_timeout = seconds
+
+    def identity(self):
+        """None: a pipe name is not a file, so there is nothing to stat.
+
+        The Windows pipe namespace is machine-wide rather than a directory, so
+        the failure this answers on POSIX — the store deleted out from under a
+        running broker, taking its socket with it — has no equivalent here. A
+        listener that cannot tell reports that it cannot, and the serve loop
+        skips the check rather than guessing it is stale.
+        """
+        return None
+
     def accept(self) -> PipeConnection:
         """Block until somebody connects, then hand back their end.
 
@@ -390,12 +407,17 @@ class PipeServer:
             self._pending = self._instance()
         return PipeConnection(handle, server_side=True)
 
-    def close(self) -> None:
+    def close(self, *, unlink: bool = True) -> None:
         """Stop listening, and unblock whoever is sitting in `accept`.
 
         `ConnectNamedPipe` cannot be cancelled from another thread, so the only
         portable way out is to be that client for a moment.
+
+        `unlink` is accepted and ignored: there is no socket file here to leave
+        behind, so there is nothing for a departing broker to avoid deleting.
+        It exists so both listeners answer the same call.
         """
+        _ = unlink
         with self._lock:
             if self._closed:
                 return

@@ -190,6 +190,11 @@ was never there:
 5. an explicitly named store list bypasses the broker, since naming files is how
    a test or a sandbox declares it is not on the machine's store
 6. every surface that reports on the broker also reports its limits
+7. a broker does not outlive the store it serves. Once its socket is gone,
+   nothing can reach it, and anything it holds in memory — a data key above all
+   — is held for a store that no longer exists. It stands down and forgets it.
+   Throwaway stores are deleted far more often than they are shut down, so this
+   cannot be left to whatever created one
 
 The limits are not incidental. Without the operating system vouching for the
 caller, any process running as the user can claim to be any app; the stores

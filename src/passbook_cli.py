@@ -4044,7 +4044,9 @@ def cmd_broker(args: argparse.Namespace) -> int:
         return _fail("The broker is not installed on this machine.")
     state = module.status()
     if args.json:
-        print(json.dumps(state, indent=2))
+        # Not part of `status()` itself: that is polled by the app, and this
+        # walks the process table.
+        print(json.dumps({**state, "strays": module.strays()}, indent=2))
         return 0 if state["running"] else 1
     print(f"broker:  {'running' if state['running'] else 'not running'}")
     print(f"socket:  {state['path']}")
@@ -4054,6 +4056,12 @@ def cmd_broker(args: argparse.Namespace) -> int:
         print(f"unlock:  {scope} — {item['remaining_seconds']}s left")
     if state.get("pending"):
         print(f"waiting: {len(state['pending'])} request(s) — answer with `passbook approve`")
+    # Named here rather than only under its own command, because nobody goes
+    # looking for a daemon they do not know they left behind.
+    loose = module.strays()
+    if loose:
+        print(f"strays:  {len(loose)} broker(s) for stores that are gone "
+              "— passbook broker strays")
     print(f"policy:  {state['policy_path']}")
     if state["apps"]:
         print(f"apps:    {', '.join(state['apps'])}")
@@ -4061,6 +4069,68 @@ def cmd_broker(args: argparse.Namespace) -> int:
         print("\nStart it with:  passbook broker start")
     print(LIMITS)
     return 0
+
+
+def _inspect_hint(pid: int) -> str:
+    """The command that answers which store a broker is serving, when it never said."""
+    if sys.platform.startswith("linux"):
+        return f"ls -l /proc/{pid}/fd"
+    return f"lsof -p {pid} | grep sock"
+
+
+def cmd_broker_strays(args: argparse.Namespace) -> int:
+    """Brokers nothing can reach, and the offer to stop them.
+
+    Worth a command of its own because the usual way of finding a daemon is
+    through its store, and a stray's store is precisely what went missing. Left
+    alone one holds a socket in a deleted directory — unreachable, so useless —
+    and, if anything ever signed in to that store, its data key in memory. Four
+    were found on one machine, the oldest hours old.
+
+    Listing is the default and clearing is a flag, because this stops processes
+    and the only evidence they are stray is a directory that is not there.
+    """
+    module = _broker()
+    if module is None:
+        return _fail("The broker is not installed on this machine.")
+    if args.clear:
+        result = module.clear_strays()
+    else:
+        found = module.strays()
+        result = {"ok": True, "stopped": [], "failed": [],
+                  "unknown": [item for item in found if not item["root"]],
+                  "listed": [item for item in found if item["root"]]}
+    if getattr(args, "json", False):
+        print(json.dumps(result, indent=2))
+        return 0 if result.get("ok", True) else 1
+
+    said = False
+    for item in result["stopped"]:
+        print(f"stopped  pid {item['pid']} — was serving {item['root']}")
+        said = True
+    for item in result["failed"]:
+        print(f"failed   pid {item['pid']} — {item['detail']}", file=sys.stderr)
+        said = True
+    for item in result.get("listed", []):
+        print(f"stray    pid {item['pid']} — {item['detail']}")
+        said = True
+    if result.get("listed"):
+        print("\nStop them with:  passbook broker strays --clear")
+    if result["unknown"]:
+        # Honest about the limit rather than sweeping up on a guess: these were
+        # started before brokers recorded their store, so whether they are stray
+        # is genuinely unknown, and killing one could take down a live store.
+        if said:
+            print()
+        print(f"{len(result['unknown'])} broker(s) were started by an older PassBook, which did")
+        print("not record its store — so PassBook cannot tell what they are serving.")
+        for item in result["unknown"]:
+            print(f"   pid {item['pid']}   see:  {_inspect_hint(item['pid'])}")
+        print("Stop one by hand once you have looked:  kill <pid>")
+        said = True
+    if not said:
+        print("No strays.")
+    return 0 if not result["failed"] else 1
 
 
 def cmd_broker_start(args: argparse.Namespace) -> int:
@@ -4987,6 +5057,13 @@ def build_parser() -> argparse.ArgumentParser:
                             help="open the vault at start using this machine's "
                                  "device factor, so a reboot needs no person")
     broker_run.set_defaults(json=False, func=cmd_broker_run)
+
+    broker_strays = broker_subs.add_parser(
+        "strays", help="brokers still running for stores that no longer exist")
+    broker_strays.add_argument("--clear", action="store_true",
+                               help="stop the ones PassBook can place")
+    broker_strays.add_argument("--json", action="store_true")
+    broker_strays.set_defaults(func=cmd_broker_strays)
 
 
     install = subs.add_parser("install", help="set up PassBook: runtime, commands, and store")

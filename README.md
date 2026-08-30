@@ -843,6 +843,48 @@ logs it or ships it in a crash report.
 
 ---
 
+### It ends with the store it serves
+
+A broker serving a store that has been deleted is a broker nothing can reach —
+its socket is in a directory that no longer exists — and it goes on holding
+whatever data key was last signed in. So it stops on its own when its socket is
+no longer there. Nothing to remember in a script that makes a throwaway
+`HIVE_HOME`.
+
+Brokers left behind by an older PassBook are found through the process table:
+
+```bash
+passbook broker strays          # ones running for stores that are gone
+passbook broker strays --clear  # stop them
+```
+
+`--clear` only stops brokers it can place. One that never recorded which store
+it serves is listed with the command that will tell you, and left alone.
+
+### What it does not do
+
+**It does not stop a determined attacker.** Three reasons, all deliberate:
+
+- anything running as you can connect to the socket and claim to be any app —
+  nothing in a request proves otherwise, and any secret that could prove it
+  would sit on the same disk the attacker can already read
+- the store file is still there to be read directly
+- stopping the broker restores full access, and every app keeps working
+
+That last one is a choice: a broker that could take the machine down by stopping
+would not survive a real week. So read `denied` in the record as *"an app asked
+for something it is not set up to need"* — a dependency doing more than you
+expected, or a policy to widen — never as *"an intruder was turned away"*.
+
+What it genuinely buys you is a **complete record** instead of a voluntary one,
+and **least privilege for honest code**: the common accident is not malware but
+a tool that reads the whole environment because that was the easy call, and then
+logs it or ships it in a crash report.
+
+Making refusals real needs the operating system to vouch for the caller — a
+code-signed binary and a keychain ACL on macOS, something different again
+elsewhere. That is a signing-and-distribution project, not a file in here.
+
 ## Backup
 
 ```bash

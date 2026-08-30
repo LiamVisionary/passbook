@@ -495,15 +495,27 @@ def _sealed_run(command: list[str], who: str, args: argparse.Namespace) -> int |
     begin = answer.get("begin") or {}
     for key, why in (begin.get("why") or {}).items():
         print(f"note: {key} was withheld — {why}", file=sys.stderr)
-    unscrubbed = [name for name, ok in (begin.get("redacted") or {}).items() if not ok]
+    unscrubbed = sorted(name for name, ok in (begin.get("redacted") or {}).items() if not ok)
     if unscrubbed:
         # Saying so beats implying a completeness that is not there. A value
         # under six characters cannot be searched for without wrecking the
         # output, and the person running this should hear it from us rather
         # than discover it in a log.
-        print(f"note: {', '.join(sorted(unscrubbed))} "
-              f"{'is' if len(unscrubbed) == 1 else 'are'} too short to redact from output.",
-              file=sys.stderr)
+        #
+        # Named, up to a point. A run that did not choose its keys gets the
+        # whole store, and on a real one that is seventeen ports and booleans
+        # listed in full on every single command — which is not a warning, it
+        # is a reason to stop reading stderr. The count is the honest part and
+        # is always printed; the names stop being useful once nobody reads them.
+        if len(unscrubbed) <= 5:
+            print(f"note: {', '.join(unscrubbed)} "
+                  f"{'is' if len(unscrubbed) == 1 else 'are'} too short to redact from output.",
+                  file=sys.stderr)
+        else:
+            print(f"note: {len(unscrubbed)} values are too short to redact from output "
+                  f"(shortest: {', '.join(unscrubbed[:3])}…). "
+                  f"Name what you need with --only to see the full list.",
+                  file=sys.stderr)
     return int(answer.get("exit_code") or 0)
 
 

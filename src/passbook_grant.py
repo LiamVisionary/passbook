@@ -93,6 +93,7 @@ import base64
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import threading
@@ -297,6 +298,43 @@ class Scrubber:
         return redact(rest, self._values)
 
 
+def _end_process_group(child) -> None:
+    """Stop the child and everything it started, then insist.
+
+    Signalling the child alone is not enough: it is usually a launcher, and the
+    process actually holding the port is its grandchild. Killing the group is
+    the only version of this that ends the thing the caller was waiting on.
+
+    Never the broker's own group — `start_new_session` gives the child its own,
+    and this refuses to act if that somehow did not happen, because the failure
+    mode there is signalling ourselves.
+    """
+    group = None
+    if os.name != "nt":
+        try:
+            group = os.getpgid(child.pid)
+            if group == os.getpgrp():
+                group = None  # not its own group after all; fall back to the child
+        except (OSError, AttributeError):
+            group = None
+
+    for stage, deadline in ((signal.SIGTERM, 5), (signal.SIGKILL, 5)):
+        try:
+            if group is not None:
+                os.killpg(group, stage)
+            elif stage == signal.SIGTERM:
+                child.terminate()
+            else:
+                child.kill()
+        except (OSError, AttributeError, ProcessLookupError):
+            return
+        try:
+            child.wait(timeout=deadline)
+            return
+        except subprocess.TimeoutExpired:
+            continue
+
+
 def stream(command: Sequence[str], values: Mapping[str, str], *,
            app: str = "", cwd: str = "", extra_env: Mapping[str, str] | None = None,
            grant: str = "", stdout: Any = None, stderr: Any = None,
@@ -322,6 +360,14 @@ def stream(command: Sequence[str], values: Mapping[str, str], *,
         child = subprocess.Popen(  # noqa: S603 — argv is a list, never a shell string
             argv, cwd=cwd or None, env=env,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            # Its own process group, so that reaping it reaps what it started.
+            # Terminating only the direct child left grandchildren running:
+            # `run -- sh -c 'sleep 60'` killed the `sh` and the `sleep` was
+            # reparented and carried on. A dev server is exactly this shape —
+            # node, which runs pnpm, which runs the server that holds the port.
+            # Harmless for the terminal, because the broker is the parent here
+            # and there is no controlling terminal to detach from.
+            start_new_session=(os.name != "nt"),
             preexec_fn=_hardened_child())
     except FileNotFoundError:
         return {"ok": False, "error": f"command not found: {argv[0]}"}
@@ -369,14 +415,8 @@ def stream(command: Sequence[str], values: Mapping[str, str], *,
             except subprocess.TimeoutExpired:
                 if caller_present():
                     continue
-                child.terminate()
-                try:
-                    code = child.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    # It ignored SIGTERM. The caller is gone either way, and a
-                    # process holding credentials is not one to leave running.
-                    child.kill()
-                    code = child.wait()
+                _end_process_group(child)
+                code = child.wait()
                 break
     for worker in pumps:
         worker.join(timeout=5)

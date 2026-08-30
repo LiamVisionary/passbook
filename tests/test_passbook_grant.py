@@ -13,6 +13,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -498,6 +499,39 @@ def test_a_streamed_child_is_killed_when_its_caller_goes_away():
     assert answer["ok"]
     assert elapsed < 20, f"waited {elapsed:.0f}s — the child outlived its caller"
     assert calls["n"] >= 3
+
+
+@needs_a_posix_shell
+def test_the_grandchildren_go_too(tmp_path):
+    """Signalling the direct child is not enough, and looked like it was.
+
+    `run -- sh -c 'sleep 60'` killed the `sh`; the `sleep` was reparented and
+    carried on holding whatever it held. A dev server is exactly this shape —
+    node runs pnpm runs the server that owns the port — so reaping the launcher
+    and leaving the server is the case that matters, not an edge one.
+    """
+    import time
+
+    marker = tmp_path / "grandchild.pid"
+    calls = {"n": 0}
+
+    def present() -> bool:
+        calls["n"] += 1
+        return calls["n"] < 4
+
+    grant.stream(
+        ["sh", "-c", f'sleep 30 & echo $! > {marker}; wait'],
+        {}, caller_present=present)
+
+    assert marker.exists(), "the grandchild never started"
+    pid = int(marker.read_text().strip())
+    time.sleep(1)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return  # gone, which is the point
+    os.kill(pid, 9)
+    raise AssertionError(f"grandchild {pid} outlived the caller")
 
 
 @needs_a_posix_shell

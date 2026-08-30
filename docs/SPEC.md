@@ -233,6 +233,18 @@ An implementation that offers this must hold to all of:
 7. neither the record nor any status surface may echo a value back, including
    one the caller wrote into its own command line
 
+A conforming implementation that seals reads must not offer an exemption keyed
+on the caller's *name*. The name in a request is a claim — the same claim the
+record already treats as unverified — so a list of names that may still read is
+a hole with a list attached, whatever it is called in the documentation. Where
+something genuinely needs plaintext, it must be identified by a property the
+caller cannot assert: descent from a spawn this broker performed is the only one
+this standard defines.
+
+This has a cost and the cost is the point. Replication cannot be exempted by
+name either, and copying a credential to another machine means reading it — so
+replication runs as a process the broker started, like everything else.
+
 The limits, again stated rather than implied. This does not confine what a
 command does with what it was given: a command free to make network calls can
 send its credential anywhere, and only the bindings in (5) constrain that. And

@@ -290,6 +290,43 @@ def mode_for(app: str, key: str, policy: Mapping[str, Any]) -> dict[str, Any]:
     return {"mode": DEFAULT_MODE}
 
 
+
+def is_new_store(root: Path | None = None) -> bool:
+    """Has this machine ever used PassBook?
+
+    Two signals, both required. No policy file means nobody has configured
+    anything; no keys means no app can be depending on a read yet. An upgrade
+    fails the second test and is left exactly as it was.
+    """
+    if policy_path(root).exists():
+        return False
+    try:
+        return not passbook.key_names()
+    except Exception:  # noqa: BLE001 — an unreadable store is not a new one
+        return False
+
+
+def seal_a_new_store(root: Path | None = None) -> bool:
+    """A store nobody has used yet starts sealed. Returns whether it did.
+
+    `reads` defaults to `open` because sealing an existing machine would break
+    every app that had not moved to `passbook run` yet — a real constraint, and
+    the reason the default was chosen. It was then applied to brand-new stores
+    too, which have no such app: a fresh install handed `DEPLOYER_PRIVATE_KEY`
+    in plaintext to any caller that asked for it. The migration default had
+    quietly become the product default.
+
+    So the decision moves to install time, where the two cases can be told
+    apart, and is written down rather than inferred on every read.
+    """
+    if not is_new_store(root):
+        return False
+    policy = read_policy(root)
+    policy["reads"] = "sealed"
+    write_policy(policy, root)
+    return True
+
+
 # ── how far a key reaches ──────────────────────────────────────────────────
 #
 # A workspace never sees a sibling's keys, which is the right default and is

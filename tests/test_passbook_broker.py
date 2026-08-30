@@ -991,42 +991,54 @@ def test_the_process_listing_is_not_truncated():
         f"cut off (widest line was {widest} characters)")
 
 
-def test_sealed_reads_let_an_approved_app_through_while_it_migrates(broker):
-    """Sealing everything at once would mean moving every app in one evening.
+def test_being_on_the_approved_list_buys_no_plaintext(broker):
+    """The exemption is gone, and it had to go: an app NAME is a claim.
 
-    An approved app keeps reading while it is converted to `passbook run`, and
-    the list shrinks as each one moves. A migration path, not a boundary — the
-    name is a claim, which is why the next test exists.
+    While it existed, an agent refused a key under its own name got the same
+    key by asking again as an approved app — six lines, no privilege, no
+    warning. An exemption anything can claim is not a migration path, it is a
+    hole with a list attached.
     """
     policy = passbook_broker.read_policy()
     policy["reads"] = "sealed"
     import passbook_access as access
 
-    access.approve_agent("still-migrating", policy)
+    access.approve_agent("on-the-list", policy)
     passbook_broker.write_policy(policy)
 
-    allowed = passbook_broker._ask({"op": "request", "app": "still-migrating",
-                                    "keys": ["ALPHA"]})
-    assert allowed["granted"].get("ALPHA") == "a-value"
-
-    refused = passbook_broker._ask({"op": "request", "app": "not-on-the-list",
-                                    "keys": ["ALPHA"]})
-    assert refused["granted"] == {} and "ALPHA" in refused["denied"]
+    for app in ("on-the-list", "not-on-the-list"):
+        answer = passbook_broker._ask({"op": "request", "app": app, "keys": ["ALPHA"]})
+        assert answer["granted"] == {}, f"{app} received plaintext under sealed reads"
+        assert "ALPHA" in answer["denied"]
 
 
-def test_no_exemption_reaches_a_guarded_key(broker):
-    """The line that makes guards worth having. An approved app is trusted to
-    hold ordinary credentials while it moves; it is never handed one its owner
-    said is used and never read."""
+@needs_a_posix_shell
+def test_sealed_reads_answer_a_caller_the_broker_started(broker):
+    """What replaces the exemption. A grant token is minted here and cannot be
+    guessed, which is the one property a name never had — so the thing that
+    genuinely needs plaintext is wrapped in `passbook run` rather than listed."""
     policy = passbook_broker.read_policy()
     policy["reads"] = "sealed"
-    policy["guards"] = {"ALPHA": {"commands": ["*"]}}
-    import passbook_access as access
-
-    access.approve_agent("trusted-app", policy)
     passbook_broker.write_policy(policy)
 
-    answer = passbook_broker._ask({"op": "request", "app": "trusted-app",
-                                   "keys": ["ALPHA", "BETA"]})
-    assert "ALPHA" in answer["denied"], "a guard was bypassed by an approval"
-    assert answer["granted"].get("BETA") == "b-value"
+    answer = passbook_broker._ask({
+        "op": "spawn", "app": "replication", "keys": ["ALPHA"],
+        "command": ["sh", "-c", 'test "$ALPHA" = "a-value" && echo GOT-IT'],
+    }, timeout=30)
+    assert answer["ok"] and "GOT-IT" in answer["stdout"]
+    assert "a-value" not in answer["stdout"]
+
+
+@needs_a_posix_shell
+def test_a_guard_still_refuses_a_grant_backed_caller(broker):
+    """Guards outrank the grant too. `run` is how everything reaches a value
+    now, so a guard that stopped at the spawn door would stop nothing."""
+    policy = passbook_broker.read_policy()
+    policy["reads"] = "sealed"
+    policy["guards"] = {"ALPHA": {"commands": ["nothing-matches *"]}}
+    passbook_broker.write_policy(policy)
+
+    answer = passbook_broker._ask({
+        "op": "spawn", "app": "anything", "keys": ["ALPHA", "BETA"],
+        "command": ["sh", "-c", "echo hi"]}, timeout=30)
+    assert "ALPHA" in answer["denied"], "a guard was bypassed by a grant"

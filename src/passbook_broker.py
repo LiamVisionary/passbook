@@ -1443,20 +1443,19 @@ def _handle(payload: Mapping[str, Any], root: Path | None = None,
         except ImportError:
             guarded_keys = set()
         sealed = reads_mode(policy) == "sealed"
-        # Sealing every read at once would mean migrating every app on the
-        # machine in one evening — on the box this was written for, twenty
-        # callers including fleet env replication. So an approved app may still
-        # read directly while it is being moved, and the list shrinks as each
-        # one moves to `passbook run`.
+        # There used to be an exemption here: an app on the approved list could
+        # still read plaintext while it was being migrated. It is gone, and it
+        # had to go, because an app NAME is a claim. Anything could call itself
+        # an approved one and read exactly what that app reads — which was
+        # demonstrated from an agent session in six lines, asking as
+        # `hivemindos` for a key the same agent had just been refused.
         #
-        # This is a migration path, NOT a second boundary. The app name is a
-        # claim, so anything can call itself an approved one and read what that
-        # app reads. What it buys is that sealing can be switched on today
-        # instead of after a rewrite; what it does not buy is protection from
-        # something that lies. Guards do not have this hole — they refuse a key
-        # to every caller, approved or not — which is why the money-movers are
-        # guarded rather than left to this.
-        exempt = sealed and app in set(access.approved_agents(policy))
+        # An exemption that anything can claim is not a migration path, it is
+        # the hole with a list attached. So sealed now means sealed, and the
+        # only caller that receives a value is one this broker STARTED: the
+        # grant token is minted here and cannot be guessed, which is the one
+        # property a name never had. Everything that genuinely needs plaintext
+        # — replication most of all — is wrapped in `passbook run` instead.
         keeping = []
         for key in allowed:
             if placed is not None:
@@ -1472,7 +1471,7 @@ def _handle(payload: Mapping[str, Any], root: Path | None = None,
                 # No exemption reaches a guard. That is what a guard is.
                 refused.append((key, _use_refusal(key, guarded_key=True)))
                 continue
-            if sealed and not exempt:
+            if sealed:
                 refused.append((key, _use_refusal(key, guarded_key=False)))
                 continue
             keeping.append(key)

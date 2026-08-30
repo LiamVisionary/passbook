@@ -1028,8 +1028,26 @@ window is not one of those, so under a seal it stops reading values at all.
   started" and "here it is on the pasteboard" cannot both be true, so a sealed
   machine says which one it means.
 
-Sealing is not the default and upgrading does not turn it on. `passbook policy
---reads sealed` does, and `--reads open` undoes it.
+**A new store starts sealed.** Upgrading never turns it on: an existing machine
+has apps that read by name and would break, which is why `open` was the default
+in the first place. But that reasoning is about migration, and a store created
+five minutes ago has nothing to migrate — it was still handing
+`DEPLOYER_PRIVATE_KEY` to any caller that asked for it. So the decision is made
+at install time, where the two cases can be told apart. `passbook policy --reads
+open` undoes it; `--reads sealed` turns it on for a machine that upgraded.
+
+**Sealed means sealed — there is no list.** There used to be one: an app marked
+approved could still read plaintext while it was being moved to `passbook run`.
+It was documented as a migration path rather than a boundary, and it was still
+wrong, because an app *name* is a claim. An agent refused a key under its own
+name got the same key by asking again as an approved app — six lines, no
+privilege, no warning. A list anything can join is not a list.
+
+What replaces it is the one thing a caller cannot type: a grant. The broker
+mints the token, so "a process I started" is checkable in a way "an app called
+X" never was. Everything that genuinely needs plaintext — replication above all,
+since copying a key to another machine means reading it — asks to be *started*
+rather than to be trusted. `passbook sync` does this to itself.
 
 ---
 

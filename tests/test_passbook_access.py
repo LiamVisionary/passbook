@@ -412,3 +412,44 @@ def test_confirmations_survive_a_policy_write(tmp_path):
     access.write_policy(policy, root=tmp_path)
     again = access.read_policy(tmp_path)
     assert access.needs_confirmation("delete", again) is True
+
+
+# ── what a new machine starts as ───────────────────────────────────────────
+
+
+def test_a_brand_new_store_starts_sealed(tmp_path, monkeypatch):
+    """`open` was chosen so an upgrade would not break apps that had not moved
+    to `passbook run` yet. That is a real constraint and it does not apply to a
+    store created five seconds ago — which nonetheless handed
+    DEPLOYER_PRIVATE_KEY to any caller that asked. The migration default had
+    become the product default."""
+    monkeypatch.setenv("HIVE_HOME", str(tmp_path))
+    monkeypatch.delenv("HIVE_ENV_FILES", raising=False)
+
+    assert access.is_new_store()
+    assert access.seal_a_new_store()
+    assert access.read_policy().get("reads") == "sealed"
+
+
+def test_a_machine_with_keys_is_left_open(tmp_path, monkeypatch):
+    """The upgrade case, which is the whole reason for the other default."""
+    monkeypatch.setenv("HIVE_HOME", str(tmp_path))
+    monkeypatch.delenv("HIVE_ENV_FILES", raising=False)
+    passbook.ensure(app="test")
+    passbook.set_values({"LEGACY_KEY": "x"})
+
+    assert not access.is_new_store()
+    assert not access.seal_a_new_store()
+    assert access.read_policy().get("reads") in (None, "open")
+
+
+def test_sealing_a_new_store_is_written_down_not_inferred(tmp_path, monkeypatch):
+    """Deciding this on every read would mean the answer changed the moment the
+    first key was added, which is a posture that silently loosens itself."""
+    monkeypatch.setenv("HIVE_HOME", str(tmp_path))
+    monkeypatch.delenv("HIVE_ENV_FILES", raising=False)
+    access.seal_a_new_store()
+    passbook.ensure(app="test")
+    passbook.set_values({"ADDED_LATER": "x"})
+
+    assert access.read_policy().get("reads") == "sealed"

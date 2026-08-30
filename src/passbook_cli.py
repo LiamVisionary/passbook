@@ -507,6 +507,48 @@ def _sealed_run(command: list[str], who: str, args: argparse.Namespace) -> int |
     return int(answer.get("exit_code") or 0)
 
 
+def _rerun_under_grant(app: str, reason: str) -> int | None:
+    """Re-run this exact command as a child the broker started, holding values.
+
+    Replication is the one job that genuinely needs plaintext: copying a key to
+    another machine means reading it. That used to be permitted by putting
+    `passbook-sync` on the approved list — which any caller could type, making
+    the exemption a decryption oracle with a friendly name.
+
+    A grant cannot be typed. So instead of asking to be trusted, sync asks the
+    broker to start it, and reads its values out of the environment it was born
+    with. Returns None when there is nothing to do — reads are open, or we ARE
+    the child already, in which case re-running would recurse forever.
+    """
+    if os.environ.get("PASSBOOK_GRANT"):
+        return None  # this IS the grant-backed child; carry on and do the work
+    try:
+        import passbook_access as access
+        import passbook_broker
+    except ImportError:
+        return None
+    if passbook_broker.reads_mode(access.read_policy()) != "sealed":
+        return None
+    if not passbook_broker.running():
+        return _fail(f"{app} needs the broker to open encrypted values, and none is running.",
+                     "Start one:  passbook broker start")
+
+    # The shim we were invoked as, when it is one we can execute again;
+    # otherwise the module, which works when PassBook is running as a library
+    # or from `python -c` and `sys.argv[0]` is not a program at all.
+    argv0 = sys.argv[0] if sys.argv[0] and os.access(sys.argv[0], os.X_OK) else ""
+    command = ([argv0, *sys.argv[1:]] if argv0
+               else [sys.executable, "-m", "passbook_cli", *sys.argv[1:]])
+    answer = passbook_broker.spawn_streaming(
+        command, passbook.key_names(), app=app, reason=reason,
+        project=passbook.project())
+    if answer is None:
+        return _fail("The broker did not answer.", "Check it:  passbook broker start")
+    if not answer.get("ok"):
+        return _fail(answer.get("error", "could not run it"))
+    return int(answer.get("exit_code") or 0)
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     """Run a command with the store loaded as a base. The process env wins."""
     command = list(args.command)
@@ -2678,6 +2720,13 @@ def cmd_sync(args: argparse.Namespace) -> int:
         return _fail("Fleet sync is not installed on this machine.",
                      "Run:  passbook install")
 
+    # Sealed reads answer only a caller the broker started, and replication has
+    # to hold plaintext to do its job. So start over as one, rather than asking
+    # for an exemption that anything could claim.
+    delegated = _rerun_under_grant("passbook-sync", "replicate to tailnet peers")
+    if delegated is not None:
+        return delegated
+
     peers = passbook_fleet.reachable()
     if not peers:
         ok, detail = passbook_fleet.available()
@@ -4562,7 +4611,11 @@ def cmd_install(args: argparse.Namespace) -> int:
             shim.chmod(0o755)
         written.append(name)
 
+    # Decided before the store is created, so "no keys yet" still means "new
+    # machine" rather than "we just made it".
+    starts_fresh = _access() is not None and _access().is_new_store()
     joined = passbook.ensure(app="passbook-cli", name="PassBook")
+    sealed_now = starts_fresh and _access().seal_a_new_store()
 
     print(f"\ncommands:  {len(written)} installed in {target}")
     # The shims point back at this directory, so it is load-bearing: moving or
@@ -4576,6 +4629,9 @@ def cmd_install(args: argparse.Namespace) -> int:
     print(f"store:     {passbook.describe()}")
     if joined.get("provisioned"):
         print("           created — a HivemindOS install later will adopt this same store")
+    if sealed_now:
+        print("reads:     sealed — values are never printed, to any caller")
+        print("           agents use keys through `passbook run`; nothing else changes")
     print(f"sealing and linking: {'ready' if sealing_ready else 'UNAVAILABLE'}")
     if not sealing_ready:
         print("\n  `passbook seal` and `passbook link` need cryptography, and setup could not")

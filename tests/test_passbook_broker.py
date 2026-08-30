@@ -14,6 +14,7 @@ import stat
 import socket
 import sys
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -392,13 +393,30 @@ def test_asking_is_recorded_even_when_nobody_answers(broker):
     assert "ask" in ops and "denied" in ops
 
 
+def _a_window_the_clock_is_not_in(minutes_ahead: int = 5) -> dict:
+    """A one-minute window that now is definitely outside.
+
+    A hardcoded 00:00–00:01 reads like "never now", but it is now for a
+    minute every day, and the suite duly failed at 00:01. Deriving the bounds
+    from the clock keeps them outside it whatever time the tests run, midnight
+    included: both bounds move together, so an offset that crosses midnight
+    just lands the window on the far side of it.
+    """
+    start = datetime.now() + timedelta(minutes=minutes_ahead)
+    end = start + timedelta(minutes=1)
+    return {"from": start.strftime("%H:%M"), "to": end.strftime("%H:%M")}
+
+
 def test_a_window_refusal_says_which_window(broker):
-    _ask_policy("window", window={"from": "00:00", "to": "00:01"})
+    window = _a_window_the_clock_is_not_in()
+    _ask_policy("window", window=window)
 
     answer = passbook_broker._ask({"op": "request", "app": "agent", "keys": ["ALPHA"]})
 
     assert answer["granted"] == {}
     assert "outside" in answer["why"]["ALPHA"]
+    assert window["from"] in answer["why"]["ALPHA"], \
+        "a refusal that names no hours teaches nobody when to come back"
 
 
 def test_a_wrongly_shaped_policy_is_survivable(broker):

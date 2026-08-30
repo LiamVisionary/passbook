@@ -35,7 +35,7 @@ import passbook_broker  # noqa: E402
 # is where that judgement lives, so a platform without either says so once.
 pytestmark = broker_marker()
 import passbook_stamp  # noqa: E402
-from _platform import needs_a_posix_shell  # noqa: E402
+from _platform import needs_a_posix_shell, needs_a_process_table  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
 # setuptools looks here too; see package-dir in pyproject.toml.
@@ -690,6 +690,7 @@ def _wait_for_exit(pid: int, timeout: float = 15.0) -> float:
     return float("inf")
 
 
+@needs_a_process_table
 def test_a_broker_whose_store_is_deleted_stops_instead_of_lingering(tmp_path, monkeypatch):
     home = tmp_path / "hive"
     monkeypatch.setenv("HIVE_HOME", str(home))
@@ -709,6 +710,7 @@ def test_a_broker_whose_store_is_deleted_stops_instead_of_lingering(tmp_path, mo
     assert not socket_file.exists(), "a socket nothing can reach was left behind"
 
 
+@needs_a_process_table
 def test_a_broker_stops_when_its_socket_alone_is_taken_away(broker):
     """Same conclusion by a narrower route: the store is fine, the door is not.
 
@@ -724,6 +726,7 @@ def test_a_broker_stops_when_its_socket_alone_is_taken_away(broker):
     assert not passbook_broker.pid_path().exists(), "a pid file was left naming a dead broker"
 
 
+@needs_a_process_table
 def test_a_departing_broker_does_not_take_its_replacement_with_it(broker):
     """The reason the check is by inode and not by `exists()`.
 
@@ -746,6 +749,7 @@ def test_a_departing_broker_does_not_take_its_replacement_with_it(broker):
             == replacement["pid"]), "the departing broker deleted the live one's pid file"
 
 
+@needs_a_process_table
 def test_a_broker_that_cannot_stand_down_is_reported_as_a_stray(broker):
     """The population that self-shutdown cannot reach: brokers already running.
 
@@ -767,11 +771,13 @@ def test_a_broker_that_cannot_stand_down_is_reported_as_a_stray(broker):
     assert _wait_for_exit(pid) != float("inf")
 
 
+@needs_a_process_table
 def test_a_working_broker_is_never_called_a_stray(broker):
     assert not [item for item in passbook_broker.strays()
                 if item["root"] == str(broker)], "the live broker was reported as stray"
 
 
+@needs_a_process_table
 def test_clearing_stops_the_strays_it_can_place_and_leaves_the_rest(broker, monkeypatch):
     """`--clear` stops processes, so it acts only on what it can actually place.
 
@@ -816,3 +822,46 @@ def test_clearing_stops_the_strays_it_can_place_and_leaves_the_rest(broker, monk
 import threading  # noqa: E402
 
 import passbook_access as access  # noqa: E402
+
+
+def test_the_broker_parser_copes_with_how_ps_actually_prints(tmp_path):
+    """Parsed from the words, not from a fixed position.
+
+    The first version required the interpreter at argv[0] and the module flag
+    immediately after. That held on one machine and not on the CI runners: the
+    test proving strays get reported found none at all, on Linux and Windows
+    both, and the failure said nothing about why.
+
+    Every line below is a real shape `ps` produces, plus the two that must NOT
+    match — because `clear_strays` sends SIGTERM to whatever this returns.
+    """
+    store = "/tmp/pytest-of-runner/pytest-0/test_a_broker0/hive"
+    matches = [
+        f"  1234 /venv/bin/python -m passbook_broker --serve --root={store}",
+        f"1234 /usr/bin/python3.12 -m passbook_broker --serve --root={store}",
+        # An interpreter flag before the module: -u, -X, -B all appear in the
+        # wild and all shift the position the first version depended on.
+        f" 1234 /venv/bin/python -u -m passbook_broker --serve --root={store}",
+    ]
+    for line in matches:
+        assert passbook_broker._brokers_in([line]), f"missed: {line}"
+
+    misses = [
+        "1234 grep -r passbook_broker --serve src/",
+        "1234 vim src/passbook_broker.py",
+        "1234 /venv/bin/python -m passbook_broker --help",
+        "1234 tail -f passbook_broker --serve.log",
+    ]
+    for line in misses:
+        assert not passbook_broker._brokers_in([line]), \
+            f"would have signalled: {line}"
+
+
+def test_the_parser_reads_the_store_off_the_command_line(tmp_path):
+    """The store is what makes a stray placeable, and it is last on purpose so
+    a path with spaces in it survives the round trip through `ps`."""
+    store = "/tmp/a store/with spaces/hive"
+    line = f"1234 /venv/bin/python -m passbook_broker --serve --root={store}"
+    found = passbook_broker._brokers_in([line])
+    assert found and found[0][0] == 1234
+    assert found[0][1].partition(" --root=")[2] == store

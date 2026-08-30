@@ -1978,20 +1978,45 @@ def _broker_processes() -> list[tuple[int, str]]:
     `/proc` to assume, and the broker only runs where AF_UNIX does anyway. A
     machine where this cannot be answered reports nothing rather than guessing.
     """
-    try:
-        listing = subprocess.run(["ps", "-eo", "pid=,command="],
-                                 capture_output=True, text=True, timeout=5)
-    except (OSError, subprocess.SubprocessError):
-        return []
+    # Two spellings, because `pid=,command=` is one option string to procps and
+    # two to BSD `ps`, and which one a machine has is not knowable in advance.
+    # The second is the portable form with a header line to skip.
+    for argv, skip_header in ((["ps", "-eo", "pid=,command="], False),
+                              (["ps", "-eo", "pid,args"], True)):
+        try:
+            listing = subprocess.run(argv, capture_output=True, text=True, timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if listing.returncode != 0:
+            continue
+        lines = listing.stdout.splitlines()
+        found = _brokers_in(lines[1:] if skip_header else lines)
+        if found:
+            return found
+    return []
+
+
+def _brokers_in(lines: Iterable[str]) -> list[tuple[int, str]]:
+    """Pick the broker processes out of `ps` output.
+
+    Matched on the consecutive run `-m passbook_broker --serve` appearing
+    anywhere in the arguments, rather than at a fixed position. Position was the
+    first version and it was too strict: it assumed the interpreter is always
+    argv[0] with nothing before the module flag, which held on the machine it
+    was written on and not on the CI runners, where the test that proves strays
+    are reported found none at all.
+
+    Still not "mentions the broker somewhere" — a shell one-liner or an editor
+    with this file open says `passbook_broker` too, and the difference matters
+    because `clear_strays` signals what this returns. The three words have to
+    run together, which nothing but the spawn produces.
+    """
+    wanted = ["-m", "passbook_broker", SERVE_FLAG]
     found = []
-    for line in listing.stdout.splitlines():
+    for line in lines:
         number, _, command = line.strip().partition(" ")
-        # By position, not by "mentions the broker somewhere". A shell one-liner
-        # or an editor with this file open says `passbook_broker` too, and the
-        # difference matters because `clear_strays` signals what this returns.
-        # This is exactly the shape `start` spawns.
         words = command.split()
-        if words[1:4] != ["-m", "passbook_broker", SERVE_FLAG]:
+        if not any(words[i:i + 3] == wanted for i in range(max(0, len(words) - 2))):
             continue
         try:
             found.append((int(number), command.strip()))

@@ -80,3 +80,13 @@ def command_file(prefix, name: str) -> Path:
 # than each rediscovering it on a red Windows job.
 needs_a_posix_shell = pytest.mark.skipif(
     os.name == "nt", reason="this needs a POSIX shell")
+
+
+# The stray-broker work is POSIX-shaped and says so in the code: it turns on a
+# socket file that can vanish with its directory, a process table `ps` can read,
+# and SIGSTOP/SIGTERM. The Windows pipe namespace is machine-wide rather than a
+# directory, so the failure being guarded against cannot happen there — the
+# listener reports it cannot tell and the check is skipped by design.
+needs_a_process_table = pytest.mark.skipif(
+    os.name == "nt",
+    reason="a socket file, `ps` and SIGSTOP; the pipe transport has none of them")

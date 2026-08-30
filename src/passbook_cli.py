@@ -3555,6 +3555,158 @@ def cmd_harden(args: argparse.Namespace) -> int:
     return 0
 
 
+def _discovered_agents() -> tuple[list, list, list]:
+    """Who this machine can name: installed, observed, and across the fleet.
+
+    Every source is optional and every one degrades to empty rather than
+    failing. A machine with no Tailscale, no agent runtimes and an empty ledger
+    gets an empty list and a command that still works — which is the difference
+    between a feature and a dependency.
+    """
+    installed, seen, peers = [], [], []
+    try:
+        import passbook_brief
+
+        installed = passbook_brief.status()
+    except Exception:  # noqa: BLE001 — briefing is optional
+        installed = []
+    try:
+        import passbook_stamp
+
+        # Who has ACTUALLY asked, which is the only source that reflects what
+        # happens rather than what is installed.
+        seen = [str(row.get("app") or "") for row in passbook_stamp.read_stamps(limit=2000)]
+    except Exception:  # noqa: BLE001 — no ledger yet is the common case
+        seen = []
+    try:
+        import passbook_fleet
+
+        there, _ = passbook_fleet.available()
+        if there:
+            # No probing: this is a name list for a policy screen, and paying a
+            # network round trip per peer to render it would make an offline
+            # laptop sit for seconds on a command that shows text.
+            peers = [str(peer.get("name") or "") for peer in passbook_fleet.peers(probe=False)]
+    except Exception:  # noqa: BLE001 — no fleet, or no Tailscale, is normal
+        peers = []
+    return installed, seen, peers
+
+
+def _approvals_are_enforced() -> tuple[bool, str]:
+    """Is the approved list actually in the path, or only written down?
+
+    A policy is enforced BY the broker. On a plaintext store with reads open,
+    `passbook run` resolves values from the file and never asks anyone — so an
+    approved list can be perfectly correct and change nothing at all. That is
+    the documented shape of this project, and it is also exactly how somebody
+    ends up believing a machine is locked down when it is not.
+    """
+    try:
+        import passbook_access as access
+        import passbook_broker
+    except ImportError:
+        return False, "the broker is not installed on this machine"
+    if passbook_broker.reads_mode(access.read_policy()) == "sealed":
+        return True, ""
+    try:
+        import passbook_seal
+
+        raw = passbook.parse_env_text(passbook.env_path().read_text(encoding="utf-8"))
+        if raw and all(str(v).startswith("hive-sealed:") for v in raw.values()):
+            return True, ""
+    except Exception:  # noqa: BLE001 — an unreadable store is not an argument
+        pass
+    return False, ("values on this machine can be read straight from the store "
+                   "file, so the broker — and this list — are not in the path")
+
+
+def cmd_approved(args: argparse.Namespace) -> int:
+    """Which agents get credentials without asking, and which have to check in."""
+    module = _access()
+    if module is None:
+        return _fail("Access modes are not installed on this machine.")
+    policy = module.read_policy()
+
+    if args.only:
+        module.set_default_mode("ask", policy)
+        module.write_policy(policy)
+        approved = module.approved_agents(policy)
+        print("Unapproved agents now have to ask.")
+        print(f"{len(approved)} approved and unaffected: {', '.join(approved) or 'none yet'}")
+        enforced, why = _approvals_are_enforced()
+        if not enforced:
+            print(f"\nNOT ENFORCED YET — {why}.")
+            print("Put the broker in the path:  passbook policy --reads sealed")
+            print("                       or:  passbook secure")
+        else:
+            print("\nApprove one:  passbook approved --add <agent>")
+        return 0
+
+    if args.everyone:
+        module.set_default_mode("always", policy)
+        module.write_policy(policy)
+        print("Every agent gets credentials without asking.")
+        print("This is the machine default, and what PassBook did before approvals existed.")
+        return 0
+
+    if args.add:
+        for name in args.add:
+            module.approve_agent(name, policy)
+        module.write_policy(policy)
+        for name in args.add:
+            print(f"{name} no longer has to ask.")
+        if module.default_mode(policy) == "always":
+            # Approving one agent on a machine where everyone is already allowed
+            # reads as a security step and is not one. Say so now rather than
+            # let somebody believe the list is doing work it is not.
+            print("\nNote: unapproved agents are also allowed on this machine.")
+            print("Make the list mean something:  passbook approved only")
+        return 0
+
+    if args.remove:
+        for name in args.remove:
+            if not module.unapprove_agent(name, policy):
+                print(f"{name} was not approved.")
+        module.write_policy(policy)
+        print(f"Back to the default ({module.default_mode(policy)}).")
+        return 0
+
+    installed, seen, peers = _discovered_agents()
+    agents = module.known_agents(policy, seen=seen, installed=installed, peers=peers)
+    if args.json:
+        print(json.dumps({"default": module.default_mode(policy), "agents": agents}, indent=2))
+        return 0
+
+    default = module.default_mode(policy)
+    print(f"unapproved agents: {default}")
+    if not agents:
+        print("\nNo agents found yet. They appear here once one asks for a "
+              "credential, or once a runtime is installed.")
+        return 0
+    print()
+    for agent in agents:
+        mark = "✓" if agent["approved"] else " "
+        print(f" {mark} {agent['name']:<28} {agent['mode']:<8} {', '.join(agent['where'])}")
+    if default == "always":
+        print("\nEvery agent is allowed, approved or not.")
+        print("Make the list mean something:  passbook approved only")
+    else:
+        enforced, why = _approvals_are_enforced()
+        if not enforced:
+            # The list is set and doing nothing. Saying so is the entire value
+            # of this branch: a correct policy that is not in the path is worse
+            # than no policy, because somebody is relying on it.
+            print(f"\nNOT ENFORCED — {why}.")
+            print("Put the broker in the path:  passbook policy --reads sealed")
+            print("                       or:  passbook secure")
+    # The honest line, and it belongs on the screen rather than in the docs:
+    # everything above is keyed on a name the caller chooses for itself.
+    print("\nAn agent's name is a claim, not a password. This list contains an")
+    print("accident and makes an unfamiliar caller visible; it does not stop")
+    print("something that decides to call itself one of these.")
+    return 0
+
+
 def cmd_state(args: argparse.Namespace) -> int:
     """One JSON object describing this machine's PassBook. Never a value."""
     print(json.dumps(machine_state(verify=getattr(args, "verify", False)),
@@ -4579,6 +4731,19 @@ def build_parser() -> argparse.ArgumentParser:
     harden_cmd.add_argument("--plan", action="store_true", help="show exactly what --install does")
     harden_cmd.add_argument("--json", action="store_true")
     harden_cmd.set_defaults(func=cmd_harden)
+
+    approved_cmd = subs.add_parser(
+        "approved", help="which agents get credentials without asking")
+    approved_cmd.add_argument("--add", action="append", default=[], metavar="AGENT",
+                              help="this agent no longer has to ask")
+    approved_cmd.add_argument("--remove", action="append", default=[], metavar="AGENT",
+                              help="back to the default for this agent")
+    approved_cmd.add_argument("--only", action="store_true",
+                              help="unapproved agents must ask from now on")
+    approved_cmd.add_argument("--everyone", action="store_true",
+                              help="every agent is allowed, approved or not")
+    approved_cmd.add_argument("--json", action="store_true")
+    approved_cmd.set_defaults(func=cmd_approved)
 
     state_cmd = subs.add_parser("state", help="everything a management surface needs, as JSON")
     state_cmd.add_argument("--pretty", action="store_true")

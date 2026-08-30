@@ -1251,3 +1251,152 @@ def decide_key(app: str, key: str, policy: Mapping[str, Any], *, root: Path | No
 
     return {"outcome": "ask", "mode": mode, "why": "needs approval",
             "timeout": ask_timeout(rule), "require_passkey": requires_passkey(rule)}
+
+# ── approved agents ────────────────────────────────────────────────────────
+#
+# `always` for everything is the setting people actually run, because `ask` for
+# everything asks forty times a day and gets switched off within a week. The
+# useful middle is neither: a default of `ask` with a named set of agents that
+# do not have to. An automation that runs at 3am keeps working; a coding agent
+# that has never asked for anything before has to check in.
+#
+# This is ORGANISATION, not authentication, and the difference has to stay
+# visible or somebody will lean on it. The name a caller gives is a claim — the
+# same claim `caller()` documents — so an unapproved agent can call itself an
+# approved one. What the list buys is real and worth having: an accident is
+# contained, an unfamiliar caller is visible, and the blast radius of a tool
+# nobody meant to grant is one prompt instead of the whole store. What it does
+# not buy is a boundary against something choosing to lie.
+
+
+def approved_agents(policy: Mapping[str, Any]) -> list[str]:
+    """Apps with an explicit `always`, ignoring the machine-wide default.
+
+    An app's mode lives at `apps[name]["default"]["mode"]`, which is where
+    `mode_for` looks and where `passbook policy --app` writes it. The first
+    version of this read `apps[name]["mode"]` — one level up, a place nothing
+    consults — so approving an agent wrote a key the decision point ignored and
+    the whole list was decoration. It looked right in a live test only because
+    an earlier `passbook policy` call had written the real one.
+    """
+    apps = policy.get("apps")
+    if not isinstance(apps, Mapping):
+        return []
+    found = []
+    for name, entry in apps.items():
+        if name == "*" or not isinstance(entry, Mapping):
+            continue
+        rule = entry.get("default")
+        if isinstance(rule, Mapping) and str(rule.get("mode", "")).lower() == "always":
+            found.append(str(name))
+    return sorted(found)
+
+
+def approve_agent(name: str, policy: MutableMapping[str, Any]) -> dict[str, Any]:
+    """Let this agent through without asking."""
+    who = str(name).strip()
+    if not who or who == "*":
+        raise ValueError("name an agent; '*' is the default, not an agent")
+    apps = policy.setdefault("apps", {})
+    entry = apps.setdefault(who, {})
+    entry["default"] = {"mode": "always"}
+    return entry
+
+
+def unapprove_agent(name: str, policy: MutableMapping[str, Any]) -> bool:
+    """Drop the override so this agent falls back to the default.
+
+    The rule is removed rather than set to `ask`, so that changing the default
+    later moves this agent with it. An agent pinned to `ask` would sit there
+    asking on a machine somebody had deliberately opened up, and nobody would
+    remember why.
+
+    Per-key rules the owner set separately are left alone: this undoes an
+    approval, and quietly discarding unrelated policy would be a different and
+    much less welcome operation.
+    """
+    who = str(name).strip()
+    apps = policy.get("apps")
+    if not isinstance(apps, MutableMapping) or who not in apps:
+        return False
+    entry = apps[who]
+    if not isinstance(entry, MutableMapping) or "default" not in entry:
+        return False
+    entry.pop("default")
+    if not entry:
+        apps.pop(who)
+    return True
+
+
+def default_mode(policy: Mapping[str, Any]) -> str:
+    """What an agent with no rule of its own gets.
+
+    Reads the `*` app entry first, because that is where `mode_for` looks before
+    it falls back to the machine default.
+    """
+    apps = policy.get("apps")
+    if isinstance(apps, Mapping):
+        entry = apps.get("*")
+        if isinstance(entry, Mapping):
+            rule = entry.get("default")
+            if isinstance(rule, Mapping) and rule.get("mode") in GRANT_MODES:
+                return str(rule["mode"])
+    fallback = policy.get("default")
+    if isinstance(fallback, Mapping) and fallback.get("mode") in GRANT_MODES:
+        return str(fallback["mode"])
+    return DEFAULT_MODE
+
+
+def set_default_mode(mode: str, policy: MutableMapping[str, Any]) -> str:
+    """Set what unapproved agents get. Written where `mode_for` reads it."""
+    wanted = str(mode).strip().lower()
+    if wanted not in GRANT_MODES:
+        raise ValueError(f"mode must be one of {', '.join(sorted(GRANT_MODES))}")
+    apps = policy.setdefault("apps", {})
+    entry = apps.setdefault("*", {})
+    entry["default"] = {"mode": wanted}
+    return wanted
+
+
+def known_agents(policy: Mapping[str, Any], *, seen: Iterable[str] = (),
+                 installed: Iterable[Mapping[str, Any]] = (),
+                 peers: Iterable[str] = ()) -> list[dict[str, Any]]:
+    """Every agent this machine can name, and what each one gets.
+
+    Three sources, because each knows something the others do not. `installed`
+    is which agent runtimes are on the disk — the ones that could ask tomorrow.
+    `seen` is which names have actually asked, from the ledger, which is the
+    only one that reflects reality rather than intent. `peers` is other machines
+    in the fleet, where a name means somebody else's agent may reach this store.
+
+    Kept pure so the sources can be gathered by whoever has them, and so this
+    works identically on a machine with no fleet and no runtimes installed.
+    """
+    approved = set(approved_agents(policy))
+    default = default_mode(policy)
+    where: dict[str, set[str]] = {}
+
+    for entry in installed:
+        name = str(entry.get("id") or "").strip()
+        if name:
+            where.setdefault(name, set()).add("installed")
+    for name in seen:
+        name = str(name).strip()
+        if name:
+            where.setdefault(name, set()).add("has asked")
+    for name in peers:
+        name = str(name).strip()
+        if name:
+            where.setdefault(name, set()).add("fleet")
+    for name in approved:
+        where.setdefault(name, set()).add("approved")
+
+    return [
+        {
+            "name": name,
+            "approved": name in approved,
+            "mode": "always" if name in approved else default,
+            "where": sorted(places),
+        }
+        for name, places in sorted(where.items())
+    ]

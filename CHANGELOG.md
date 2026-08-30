@@ -89,6 +89,32 @@ the machine, which this project's spec explicitly forbids a policy from doing.
 The Agent runs as you and keeps all three, while the code and the thing that
 starts it stop being yours to edit.
 
+### Approved agents, so `always` does not have to mean everyone
+
+`always` for everything is the setting people actually run, because `ask` for
+everything asks forty times a day and gets switched off within a week. The
+useful middle is a default of `ask` with a named set that does not have to.
+
+- **`passbook approved`** lists every agent this machine can name and what each
+  one gets. Three sources: runtimes installed on the disk (`passbook brief`
+  already knows fifteen), names that have actually asked (from the ledger, the
+  only source reflecting what happens rather than what is installed), and fleet
+  peers over Tailscale. Every source is optional — a machine with none of them
+  shows an empty list and the command still works.
+- **`--add` / `--remove`**, and **`--only`** to make unapproved agents ask.
+  An automation that runs at 3am keeps running; a coding agent that has never
+  asked for anything has to check in.
+
+Two things this is careful to say rather than imply. An agent's name is a claim
+— the same claim `caller()` has always documented — so the list contains an
+accident and makes an unfamiliar caller visible; it does not stop something that
+decides to call itself one of these. And a policy is enforced *by* the broker,
+so on a plaintext store with reads open the list is written down and not in the
+path: `passbook run` resolves from the file and asks nobody. That was found by
+running it, not by reading it — an unapproved agent ran unattended against a
+perfectly correct policy — and the command now says **NOT ENFORCED** with the
+two ways to fix it.
+
 ### The shortest way in was neither of those
 
 Refusing a debugger and owning the code both assume an attacker has to subvert

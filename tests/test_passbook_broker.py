@@ -764,7 +764,16 @@ def test_a_broker_that_cannot_stand_down_is_reported_as_a_stray(broker):
 
         mine = [item for item in passbook_broker.strays() if item["pid"] == pid]
 
-        assert mine, "a broker with no socket left was not reported"
+        # Named, because "assert []" says nothing about which half went wrong:
+        # `ps` not answering, or the answer not being recognised. This failed on
+        # the CI runners and passed locally, and the bare assertion cost two
+        # round trips before it said anything useful.
+        seen = passbook_broker._broker_processes()
+        assert mine, (
+            f"a broker with no socket left was not reported.\n"
+            f"  looking for pid {pid}\n"
+            f"  _broker_processes saw: {seen}\n"
+            f"  strays returned: {passbook_broker.strays()}")
         assert mine[0]["root"] == str(broker), "reported without saying which store"
     finally:
         os.kill(pid, signal.SIGCONT)

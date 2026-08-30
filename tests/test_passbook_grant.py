@@ -466,3 +466,42 @@ def test_check_still_says_locked_when_it_really_is(
         argparse.Namespace(keys=["WATCHED"], quiet=False, json=False, app=""))
     out = capsys.readouterr().out
     assert "locked" in out
+
+
+# ── the child does not outlive its caller ──────────────────────────────────
+
+
+@needs_a_posix_shell
+def test_a_streamed_child_is_killed_when_its_caller_goes_away():
+    """`child.wait()` alone left it running, reparented to the broker.
+
+    Measured with `passbook run -- sleep 120`: kill the client and the sleep
+    survived every time, holding whatever port or lock it had, with nothing
+    reaping it and nothing able to see it was orphaned. A dev server restarted
+    on every file change would pile these up until the port ran out.
+
+    Detected from the socket rather than from a failed write, because a child
+    that prints nothing never triggers one — which is exactly an idle server.
+    """
+    import time
+
+    calls = {"n": 0}
+
+    def present() -> bool:
+        calls["n"] += 1
+        return calls["n"] < 3  # the caller "leaves" after roughly a second
+
+    started = time.time()
+    answer = grant.stream(["sh", "-c", "sleep 30"], {}, caller_present=present)
+    elapsed = time.time() - started
+
+    assert answer["ok"]
+    assert elapsed < 20, f"waited {elapsed:.0f}s — the child outlived its caller"
+    assert calls["n"] >= 3
+
+
+@needs_a_posix_shell
+def test_a_present_caller_still_gets_its_child_run_to_completion():
+    """The other half: the check must not cut short a caller that is still there."""
+    answer = grant.stream(["sh", "-c", "echo done"], {}, caller_present=lambda: True)
+    assert answer["ok"] and answer["exit_code"] == 0

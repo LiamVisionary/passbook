@@ -299,7 +299,8 @@ class Scrubber:
 
 def stream(command: Sequence[str], values: Mapping[str, str], *,
            app: str = "", cwd: str = "", extra_env: Mapping[str, str] | None = None,
-           grant: str = "", stdout: Any = None, stderr: Any = None) -> dict[str, Any]:
+           grant: str = "", stdout: Any = None, stderr: Any = None,
+           caller_present=None) -> dict[str, Any]:
     """Run a command, passing its output through live, with values removed.
 
     This is what `passbook run` needs and `spawn` cannot give it: a build that
@@ -348,7 +349,35 @@ def stream(command: Sequence[str], values: Mapping[str, str], *,
     ]
     for worker in pumps:
         worker.start()
-    code = child.wait()
+
+    # The child belongs to the caller that asked for it, so it must not outlive
+    # them. `child.wait()` alone meant it did: killing a `passbook run` left the
+    # command still running, reparented to the broker, holding whatever port or
+    # lock it had. Nothing reaped it and nothing could see it was orphaned —
+    # measured with `run -- sleep 120`, which survived its client every time.
+    #
+    # Detected from the socket rather than from the pumps: a child that prints
+    # nothing never triggers a failed write, and a dev server sitting idle is
+    # exactly that case.
+    if caller_present is None:
+        code = child.wait()
+    else:
+        while True:
+            try:
+                code = child.wait(timeout=0.5)
+                break
+            except subprocess.TimeoutExpired:
+                if caller_present():
+                    continue
+                child.terminate()
+                try:
+                    code = child.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    # It ignored SIGTERM. The caller is gone either way, and a
+                    # process holding credentials is not one to leave running.
+                    child.kill()
+                    code = child.wait()
+                break
     for worker in pumps:
         worker.join(timeout=5)
     return {"ok": True, "exit_code": code, "grant": token,

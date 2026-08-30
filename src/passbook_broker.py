@@ -51,6 +51,7 @@ import contextlib
 import json
 import os
 import secrets
+import select
 import socket
 import subprocess
 import sys
@@ -1309,10 +1310,26 @@ def _spawn_streaming(payload: Mapping[str, Any], root: Path | None,
         def flush(self) -> None:
             return None
 
+    def _caller_present() -> bool:
+        """Is the process that asked for this still on the socket?
+
+        A closed peer shows up as readable-with-nothing-to-read. Peeking rather
+        than reading, because the protocol has no client-to-server traffic after
+        the request and consuming a byte would be a protocol change.
+        """
+        try:
+            ready, _, _ = select.select([connection], [], [], 0)
+            if not ready:
+                return True
+            return bool(connection.recv(1, socket.MSG_PEEK))
+        except OSError:
+            return False
+
     answer = passbook_grant.stream(
         command, values, app=app, cwd=str(payload.get("cwd") or ""),
         extra_env=payload.get("env") if isinstance(payload.get("env"), Mapping) else None,
-        grant=token, stdout=_Frames("out"), stderr=_Frames("err"))
+        grant=token, stdout=_Frames("out"), stderr=_Frames("err"),
+        caller_present=_caller_present)
 
     if answer.get("ok"):
         _remember_grant(token, app=app, keys=values, command=command, pid=None,

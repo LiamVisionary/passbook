@@ -47,13 +47,11 @@ require a driver, and says so rather than pretending.
 running as you" to "root", which is the whole of what a user-space mechanism
 can do.
 
-**The code is still writable,** until you install the daemon. PassBook lands
-under the user's own home, so a caller that can write a file can edit the
-redactor out of `passbook_grant` and never need a debugger at all. `install()`
-below is the answer to that one: root-owned code, a root-owned plist, and a
-broker that still runs as you so the keychain and your store keep working.
-Until it is run, `posture()` lists this as an open gap rather than implying it
-is handled.
+**The code is still writable,** until you lock it. PassBook lands under the
+user's own home, so a caller that can write a file can edit the redactor out of
+`passbook_grant` and never need a debugger at all. `install()` below locks the
+installed tree **in place** and starts the broker from a root-owned plist. Until
+it is run, `posture()` lists this as an open gap rather than implying otherwise.
 
 **A process that already had a debugger attached** when it called this is not
 retroactively protected. The flag is applied as early as possible for that
@@ -69,7 +67,8 @@ import os
 import sys
 from typing import Any
 
-__all__ = ["available", "deny_debugger", "describe", "preexec"]
+__all__ = ["available", "deny_debugger", "describe", "install", "posture",
+           "preexec", "runtime_root", "undo"]
 
 # <sys/ptrace.h>: PT_DENY_ATTACH is 31 on Darwin. Spelled out because the
 # constant is not exposed by any Python module and importing it from a header
@@ -169,28 +168,33 @@ def status() -> dict[str, Any]:
     }
 
 
-# ── the daemon: root-owned code, and a start that is not the user's to edit ──
+# ── locking the code, in place ──────────────────────────────────────────────
 #
 # Refusing a debugger protects what the broker HOLDS. It does nothing about what
 # the broker IS. PassBook installs under the user's own home — on the machine
-# this was written, `site-packages` is `drwxr-xr-x liam:staff` — so a caller
-# that can write a file can edit the redactor out of `passbook_grant.py` and
-# every guarantee above evaporates with no debugger involved.
+# this was written, `site-packages` was `drwxr-xr-x liam:staff` — so a caller
+# that can write a file can edit the redactor out of `passbook_grant` and every
+# guarantee above evaporates with no debugger involved.
 #
-# That is the remaining hole, and it is not closed by a syscall. It is closed by
-# the code living somewhere the user's own processes cannot write.
+# The first version of this copied PassBook to a root-owned `/usr/local/libexec`
+# and ran the daemon from the copy. That was wrong, and wrong in a way worth
+# recording: `passbook update` runs `uv tool install --force` into the user's
+# own tree, so the daemon would have gone on running whatever it was installed
+# with — indefinitely, silently, and invisibly to a version check that reads the
+# copy the user updated. A credential broker quietly executing last month's
+# redactor is a worse failure than the writable directory it was meant to fix.
 #
-# Why a root-owned LaunchAgent rather than a service account under its own uid,
-# which is where this was first heading: a separate uid would also isolate the
-# process, but the broker needs the login keychain (the device factor), the
-# GUI session (passkey and Touch ID unlock) and read access to a store in the
-# user's home. A daemon has none of those. Worse, a store owned by a service
-# account can strand the machine when the daemon will not start, and this
-# project's own spec says a policy must never be able to do that. A LaunchAgent
-# whose plist and code are root-owned runs AS the user — keychain, biometrics
-# and store all keep working — while the thing an attacker would need to modify
-# stops being theirs. It buys the integrity half, which is the half still open,
-# and skips the isolation half, which `deny_debugger` already covers.
+# So: one tree, locked where it already is. Updating it needs root afterwards,
+# which for the code that holds a machine's credentials is the right way round
+# rather than a cost.
+#
+# A LaunchAgent, not a LaunchDaemon under its own uid. A daemon has no login
+# keychain, no GUI session for Touch ID, and no read access to a store in the
+# user's home — and a store it owned could strand the machine, which this
+# project's own spec forbids a policy from doing. The Agent runs AS the user and
+# keeps all three, while the code and the thing that starts it stop being the
+# user's to edit. That is the half that was still open; `deny_debugger` already
+# covers the isolation half.
 
 import plistlib  # noqa: E402
 import shutil  # noqa: E402
@@ -221,38 +225,77 @@ def _writable_by_user(path: Path) -> bool:
         return False
 
 
+def runtime_root() -> Path | None:
+    """The installed tree PassBook's modules actually load from.
+
+    Found by walking up from the loaded module rather than by guessing a path,
+    because a machine can carry a uv tool install, a pipx one and a checkout at
+    once, and locking the one this process is not running from would report
+    success and protect nothing.
+
+    None for a checkout, which has no `bin`/`lib` pair — and which must not be
+    locked: it is somebody's working tree, and chowning it to root would be a
+    surprising way to end their afternoon.
+    """
+    try:
+        import passbook
+
+        here = Path(passbook.__file__).resolve()
+    except Exception:  # noqa: BLE001 — no passbook is not our problem here
+        return None
+    for parent in here.parents:
+        if (parent / "bin").is_dir() and (parent / "lib").is_dir():
+            return parent
+    return None
+
+
+def interpreter_root() -> Path | None:
+    """Where the real interpreter lives, when it is outside the runtime tree.
+
+    A uv tool's `bin/python` is a symlink into uv's shared python store, so
+    locking the tool tree locks the link and leaves the binary it points at
+    writable — and anything that can replace that binary owns the broker
+    whatever else is protected.
+
+    Reported separately because locking it is a wider blow than locking one
+    tool: uv manages that store for every tool on the machine.
+    """
+    real = Path(sys.executable).resolve()
+    tree = runtime_root()
+    if tree is not None and str(real).startswith(str(tree)):
+        return None
+    for parent in real.parents:
+        if (parent / "bin").is_dir() and (parent / "lib").is_dir():
+            return parent
+    return real.parent
+
+
 def posture(*, runtime: Path | None = None, plist: Path | None = None) -> dict[str, Any]:
     """What is actually protected on this machine, and what is not.
 
     Reports rather than reassures. Every field here is something a person could
     check by hand; the value of gathering them is that nobody does.
     """
-    runtime = Path(runtime) if runtime else RUNTIME
     plist = Path(plist) if plist else AGENT_PLIST
-    here = Path(__file__).resolve().parent
+    tree = Path(runtime) if runtime else runtime_root()
+    interpreter = interpreter_root()
 
-    running_from_protected = str(here).startswith(str(runtime))
     findings = {
-        "debugger": {
-            "supported": available(),
-            "how": describe(),
-        },
+        "debugger": {"supported": available(), "how": describe()},
         "code": {
-            "path": str(here),
-            "writable_by_you": _writable_by_user(here),
-            "protected": running_from_protected and not _writable_by_user(here),
+            "path": str(tree) if tree else str(Path(__file__).resolve().parent),
+            "is_an_installed_tree": tree is not None,
+            "writable_by_you": _writable_by_user(tree) if tree
+                               else _writable_by_user(Path(__file__).resolve().parent),
         },
         "interpreter": {
-            "path": sys.executable,
-            "writable_by_you": _writable_by_user(Path(sys.executable).resolve().parent),
+            "path": str(interpreter) if interpreter else "inside the runtime tree",
+            "writable_by_you": _writable_by_user(interpreter) if interpreter else False,
         },
-        "daemon": {
-            "installed": plist.exists(),
-            "plist": str(plist),
-            "plist_writable_by_you": _writable_by_user(plist) if plist.exists() else True,
-        },
-        "runtime_installed": runtime.exists(),
+        "daemon": {"installed": plist.exists(), "plist": str(plist)},
     }
+    findings["code"]["protected"] = (
+        findings["code"]["is_an_installed_tree"] and not findings["code"]["writable_by_you"])
 
     # Checked last and reported first, because on the machine this was written
     # it was the shortest way in by a wide margin: one command, no prompt.
@@ -263,7 +306,10 @@ def posture(*, runtime: Path | None = None, plist: Path | None = None) -> dict[s
         gaps.append("vault key material comes back from `security "
                     "find-generic-password` with no prompt, so anything running "
                     "as you can open the vault without a debugger or an edit")
-    if findings["code"]["writable_by_you"]:
+    if not findings["code"]["is_an_installed_tree"]:
+        gaps.append("this is running from a checkout rather than an installed "
+                    "copy, so there is no tree to lock")
+    elif findings["code"]["writable_by_you"]:
         gaps.append("anything running as you can edit PassBook's own code, "
                     "including the part that removes secrets from output")
     if findings["interpreter"]["writable_by_you"]:
@@ -295,75 +341,83 @@ def agent_plist(program: Path, *, label: str = LABEL) -> dict[str, Any]:
 
 
 def plan(*, runtime: Path | None = None, plist: Path | None = None,
-         source: Path | None = None) -> list[dict[str, str]]:
+         interpreter: bool = False) -> list[dict[str, str]]:
     """Exactly what `install` would do, as steps a person can read and refuse.
 
     Returned rather than printed so the CLI, a test and a dry run all describe
     the same operation. A privileged installer that cannot be inspected before
     it runs is one people run blind or not at all.
     """
-    runtime = Path(runtime) if runtime else RUNTIME
     plist = Path(plist) if plist else AGENT_PLIST
-    source = Path(source) if source else Path(__file__).resolve().parent
-    program = runtime / "bin" / "passbook"
-    return [
-        {"what": f"create {runtime}",
-         "why": "a place for PassBook's code that your own processes cannot write"},
-        {"what": f"build a virtual environment there with {sys.executable.split('/')[-1]}",
-         "why": "so the interpreter and cryptography live there too, not in your home"},
-        {"what": f"install PassBook into it from {source}",
-         "why": "the code the broker actually runs"},
-        {"what": f"chown -R root:wheel {runtime} && chmod -R go-w {runtime}",
-         "why": "this is the step that closes the hole; everything else is arrangement"},
+    tree = Path(runtime) if runtime else runtime_root()
+    if tree is None:
+        return [{"what": "nothing", "why": "this is a checkout, not an installed "
+                                           "copy; there is no tree to lock"}]
+    steps = [
+        {"what": f"chown -R root:wheel {tree}",
+         "why": "the code the broker runs stops being yours — or any agent's — to edit"},
+        {"what": f"chmod -R go-w {tree}",
+         "why": "and stops being group-writable, which chown alone does not settle"},
         {"what": f"write {plist} as root:wheel 0644",
          "why": "what starts the broker must not be editable either"},
         {"what": f"launchctl bootstrap gui/$(id -u) {plist}",
-         "why": "start it now, and at every login, as you — so the keychain, "
+         "why": "start it now and at every login, as you — so the keychain, "
                 "Touch ID and your store all keep working"},
     ]
+    if interpreter:
+        where = interpreter_root()
+        if where is not None:
+            steps.insert(1, {
+                "what": f"chown -R root:wheel {where}",
+                "why": "the interpreter too — but this is uv's shared python store, "
+                       "so every uv tool on the machine needs sudo to update after"})
+    steps.append({
+        "what": "from now on:  sudo passbook update",
+        "why": "updating a locked tree needs root, which is the point rather "
+               "than a side effect"})
+    return steps
 
 
 def install(*, runtime: Path | None = None, plist: Path | None = None,
-            source: Path | None = None, launch: bool = True) -> dict[str, Any]:
-    """Do it. Requires root, and says so rather than half-finishing.
+            interpreter: bool = False, launch: bool = True) -> dict[str, Any]:
+    """Lock the installed tree in place, and start the broker from it.
 
-    Deliberately not attempted with `sudo` from inside: a tool that escalates on
-    its own behalf teaches people to let tools escalate, and this one is asking
-    to own a path that everything else on the machine will trust.
+    Locked **in place** rather than copied somewhere root-owned, which is what
+    this did first. A second copy is a second version: `passbook update` runs
+    `uv tool install --force` into the user's tree and would leave the daemon
+    running whatever it was installed with, indefinitely and silently. A
+    credential broker quietly executing last month's redactor is a worse
+    outcome than the writable directory this was meant to fix.
+
+    One tree, owned by root, and updating it needs root. That is the trade, and
+    for the code that holds a machine's credentials it is the right way round.
     """
-    runtime = Path(runtime) if runtime else RUNTIME
     plist = Path(plist) if plist else AGENT_PLIST
-    source = Path(source) if source else Path(__file__).resolve().parent
+    tree = Path(runtime) if runtime else runtime_root()
 
     if sys.platform != "darwin":
         return {"ok": False, "why": "the LaunchAgent shape is macOS-only"}
+    if tree is None:
+        return {"ok": False, "why": "this is running from a checkout, not an "
+                                    "installed copy. Install it first, then lock that."}
     if not _is_root():
         return {"ok": False, "needs_root": True,
-                "why": "this writes to /usr/local/libexec and /Library/LaunchAgents"}
+                "why": f"this changes the owner of {tree} and writes to /Library/LaunchAgents"}
 
     try:
-        runtime.parent.mkdir(parents=True, exist_ok=True)
-        if runtime.exists():
-            shutil.rmtree(runtime)
-        subprocess.run([sys.executable, "-m", "venv", str(runtime)],
-                       check=True, capture_output=True)
-        pip = runtime / "bin" / "pip"
-        subprocess.run([str(pip), "install", "--quiet", str(source.parent)],
-                       check=True, capture_output=True)
-
-        # The whole point of the exercise, and the only step whose failure means
-        # the rest was pointless — so it is checked rather than assumed.
-        subprocess.run(["chown", "-R", "root:wheel", str(runtime)], check=True)
-        subprocess.run(["chmod", "-R", "go-w", str(runtime)], check=True)
-        if _writable_by_user(runtime):  # pragma: no cover - would mean chown lied
-            return {"ok": False, "why": f"{runtime} is still writable after chown"}
+        subprocess.run(["chown", "-R", "root:wheel", str(tree)], check=True)
+        subprocess.run(["chmod", "-R", "go-w", str(tree)], check=True)
+        if interpreter:
+            where = interpreter_root()
+            if where is not None:
+                subprocess.run(["chown", "-R", "root:wheel", str(where)], check=True)
+                subprocess.run(["chmod", "-R", "go-w", str(where)], check=True)
 
         plist.parent.mkdir(parents=True, exist_ok=True)
         with plist.open("wb") as handle:
-            plistlib.dump(agent_plist(runtime / "bin" / "passbook"), handle)
+            plistlib.dump(agent_plist(tree / "bin" / "passbook"), handle)
         os.chown(plist, 0, 0)
         os.chmod(plist, 0o644)
-
         if launch:
             subprocess.run(["launchctl", "bootstrap", f"gui/{os.getuid()}", str(plist)],
                            capture_output=True)
@@ -372,27 +426,48 @@ def install(*, runtime: Path | None = None, plist: Path | None = None,
                                     f"{(error.stderr or b'').decode()[:200]}"}
     except OSError as error:
         return {"ok": False, "why": str(error)}
-    return {"ok": True, "runtime": str(runtime), "plist": str(plist)}
+    return {"ok": True, "locked": str(tree), "plist": str(plist)}
 
 
-def undo(*, runtime: Path | None = None, plist: Path | None = None) -> dict[str, Any]:
-    """Put the machine back. Every privileged installer owes one of these."""
-    runtime = Path(runtime) if runtime else RUNTIME
+def undo(*, runtime: Path | None = None, plist: Path | None = None,
+         owner: str = "") -> dict[str, Any]:
+    """Give the tree back and remove the agent. Every installer owes one.
+
+    The owner has to be named or worked out, because `chown -R` in the wrong
+    direction is how a fix becomes an outage: handing a credential runtime to
+    the wrong account leaves it unreadable by the person who needs it.
+    """
     plist = Path(plist) if plist else AGENT_PLIST
+    tree = Path(runtime) if runtime else runtime_root()
     if sys.platform != "darwin":
         return {"ok": False, "why": "the LaunchAgent shape is macOS-only"}
     if not _is_root():
         return {"ok": False, "needs_root": True, "why": "this removes root-owned files"}
-    removed = []
+
+    # SUDO_USER is who invoked sudo — the account the tree belonged to. Falling
+    # back to the tree's parent's owner covers `sudo -i` and a root shell.
+    who = owner or os.environ.get("SUDO_USER", "")
+    if not who and tree is not None:
+        try:
+            import pwd
+
+            who = pwd.getpwuid(tree.parent.stat().st_uid).pw_name
+        except Exception:  # noqa: BLE001
+            who = ""
+    if tree is not None and not who:
+        return {"ok": False, "why": "could not work out who to give it back to; "
+                                    "pass --owner <you>"}
+
+    undone = []
     if plist.exists():
         subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}", str(plist)],
                        capture_output=True)
         plist.unlink()
-        removed.append(str(plist))
-    if runtime.exists():
-        shutil.rmtree(runtime)
-        removed.append(str(runtime))
-    return {"ok": True, "removed": removed}
+        undone.append(f"removed {plist}")
+    if tree is not None:
+        subprocess.run(["chown", "-R", f"{who}:staff", str(tree)], check=False)
+        undone.append(f"gave {tree} back to {who}")
+    return {"ok": True, "undone": undone}
 
 
 # ── the keychain item, which turned out to be the shortest way in ───────────

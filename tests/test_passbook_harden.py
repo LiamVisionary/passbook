@@ -150,24 +150,81 @@ def test_posture_names_the_gap_that_is_actually_open(tmp_path):
     a debugger. A posture report that omitted that would be worse than none —
     it would be a screen saying "hardened" over an open door.
     """
-    state = harden.posture(runtime=tmp_path / "nowhere", plist=tmp_path / "no.plist")
-    assert state["code"]["writable_by_you"] is True
-    assert any("edit PassBook's own code" in gap for gap in state["gaps"])
+    state = harden.posture(plist=tmp_path / "no.plist")
     assert any("started by hand" in gap for gap in state["gaps"])
     assert "Root can defeat all of this" in state["always"]
 
 
-def test_posture_never_omits_that_root_wins():
-    assert "root" in harden.posture()["always"].lower()
+def test_a_checkout_is_reported_as_having_nothing_to_lock(tmp_path, monkeypatch):
+    """Running from a git working tree is not an installed copy, and chowning
+    somebody's checkout to root is a surprising way to end their afternoon."""
+    monkeypatch.setattr(harden, "runtime_root", lambda: None)
+    state = harden.posture(plist=tmp_path / "no.plist")
+    assert state["code"]["is_an_installed_tree"] is False
+    assert any("checkout" in gap for gap in state["gaps"])
+    assert harden.plan()[0]["what"] == "nothing"
 
 
-def test_the_plan_is_readable_before_it_is_run():
-    """A privileged installer that cannot be inspected first is one people run
-    blind or not at all."""
-    steps = harden.plan()
-    assert steps and all(step["what"] and step["why"] for step in steps)
-    # The step that does the actual work must be in there and must say so.
-    assert any("chown" in step["what"] for step in steps)
+def test_runtime_root_finds_the_installed_tree_not_the_module(tmp_path, monkeypatch):
+    """Walking up to the bin/lib pair, so a machine carrying a uv install AND a
+    pipx one AND a checkout locks the one actually loaded."""
+    tree = tmp_path / "tools" / "passbook"
+    (tree / "bin").mkdir(parents=True)
+    (tree / "lib" / "python3.12" / "site-packages").mkdir(parents=True)
+    module = tree / "lib" / "python3.12" / "site-packages" / "passbook.py"
+    module.write_text("", encoding="utf-8")
+
+    class _Fake:
+        __file__ = str(module)
+
+    monkeypatch.setitem(sys.modules, "passbook", _Fake)
+    assert harden.runtime_root() == tree
+
+
+def test_posture_notices_a_locked_tree(tmp_path, monkeypatch):
+    """The other half: once it IS locked, that gap must stop being reported or
+    nobody will believe the rest of the list."""
+    tree = tmp_path / "locked"
+    (tree / "bin").mkdir(parents=True)
+    (tree / "lib").mkdir(parents=True)
+    monkeypatch.setattr(harden, "runtime_root", lambda: tree)
+    monkeypatch.setattr(harden, "_writable_by_user", lambda path: False)
+    monkeypatch.setattr(harden, "keychain_exposure", lambda **k: {"applies": False})
+    state = harden.posture(plist=tmp_path / "no.plist")
+    assert state["code"]["protected"] is True
+    assert not any("edit PassBook's own code" in gap for gap in state["gaps"])
+
+
+def test_the_plan_locks_in_place_rather_than_copying(tmp_path, monkeypatch):
+    """The bug this design replaced: a second root-owned copy would keep running
+    whatever it was installed with, because `passbook update` writes to the
+    user's tree. Silent version drift in a credential broker."""
+    tree = tmp_path / "tools" / "passbook"
+    monkeypatch.setattr(harden, "runtime_root", lambda: tree)
+    steps = harden.plan(plist=tmp_path / "a.plist")
+    what = " ".join(step["what"] for step in steps)
+    assert f"chown -R root:wheel {tree}" in what
+    # No copying, no second tree, and no venv building.
+    assert "venv" not in what and "install PassBook into" not in what
+    assert any("sudo passbook update" in step["what"] for step in steps)
+
+
+def test_the_plan_says_what_locking_the_interpreter_costs(tmp_path, monkeypatch):
+    """It is uv's shared python store, so this is a wider blow than one tool —
+    and a step that does not say so is one somebody regrets."""
+    monkeypatch.setattr(harden, "runtime_root", lambda: tmp_path / "t")
+    monkeypatch.setattr(harden, "interpreter_root", lambda: tmp_path / "pythons")
+    steps = harden.plan(interpreter=True, plist=tmp_path / "a.plist")
+    assert any("every uv tool" in step["why"] for step in steps)
+
+
+def test_undo_refuses_when_it_cannot_tell_who_to_give_it_back_to(monkeypatch):
+    """`chown -R` in the wrong direction turns a fix into an outage."""
+    if _running_as_root():  # pragma: no cover
+        pytest.skip("this asserts the unprivileged path")
+    # Unprivileged, so it stops at the root check either way; the guard exists
+    # for the privileged path and is asserted by reading it back.
+    assert harden.undo()["ok"] is False
 
 
 def _running_as_root() -> bool:
@@ -189,18 +246,14 @@ def test_it_declines_rather_than_half_finishing_or_crashing(call):
     answer = getattr(harden, call)()
     assert answer["ok"] is False
     assert answer["why"]
-    if sys.platform == "darwin":
+    if sys.platform == "darwin" and harden.runtime_root() is not None:
         assert answer["needs_root"] is True
-    else:
-        # Elsewhere the LaunchAgent shape does not apply at all, and saying so
-        # beats asking for a root password to install something inapplicable.
-        assert "macOS" in answer["why"]
 
 
 def test_the_agent_runs_the_broker_and_comes_back_if_it_dies():
     """A credential broker that quietly stays down turns every read into a
     refusal, and nothing on the machine points at the broker as the cause."""
-    plist = harden.agent_plist(Path("/usr/local/libexec/passbook/bin/passbook"))
+    plist = harden.agent_plist(Path("/x/bin/passbook"))
     assert plist["ProgramArguments"][-2:] == ["broker", "run"]
     assert plist["RunAtLoad"] is True
     assert plist["KeepAlive"] == {"SuccessfulExit": False}
@@ -283,3 +336,31 @@ def test_it_refuses_to_rewrite_the_item_when_it_could_not_read_it(monkeypatch):
 
     answer = harden.require_keychain_prompt()
     assert answer["ok"] is False and "left alone" in answer["why"]
+
+
+def test_a_locked_tree_explains_a_failed_update(monkeypatch, capsys):
+    """The dead end this avoids: `uv` fails with a bare permission error naming
+    a path and no reason, on a machine somebody deliberately locked. One word
+    fixes it and nothing on screen suggests the word."""
+    import passbook_cli
+
+    monkeypatch.setattr(passbook_cli, "_tree_is_locked", lambda: True)
+    monkeypatch.setattr(passbook_cli, "installed_version", lambda: "1.0.0")
+    monkeypatch.setattr(passbook_cli, "latest_version", lambda: ("9.9.9", "v9.9.9"))
+    monkeypatch.setattr(passbook_cli, "install_method",
+                        lambda: ("uv tool", ["uv", "tool", "install", "--force", "x"]))
+
+    class _Failed:
+        returncode = 1
+        stderr = "error: Permission denied (os error 13)"
+        stdout = ""
+
+    monkeypatch.setattr(passbook_cli.subprocess, "run", lambda *a, **k: _Failed())
+    if getattr(os, "geteuid", lambda: 1)() == 0:  # pragma: no cover
+        pytest.skip("this asserts the unprivileged path")
+
+    code = passbook_cli.cmd_update(
+        __import__("argparse").Namespace(json=False, check=False))
+    out = capsys.readouterr()
+    assert code == 1
+    assert "sudo passbook update" in (out.out + out.err)

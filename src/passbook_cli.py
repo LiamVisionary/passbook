@@ -1803,6 +1803,23 @@ def install_method() -> tuple[str, list[str]]:
     return "pip", [sys.executable, "-m", "pip", "install", "--upgrade", source]
 
 
+def _tree_is_locked() -> bool:
+    """Whether PassBook's own installed tree is root-owned.
+
+    Its own question rather than a flag, because the answer decides how an
+    unrelated failure gets explained: a permission error from uv means one thing
+    on a machine somebody deliberately locked and another on a machine with a
+    broken install.
+    """
+    try:
+        import passbook_harden
+
+        tree = passbook_harden.runtime_root()
+        return tree is not None and not os.access(tree, os.W_OK)
+    except ImportError:
+        return False
+
+
 def cmd_update(args: argparse.Namespace) -> int:
     """Say what this copy is, what the newest one is, and move to it."""
     current = installed_version()
@@ -1847,6 +1864,16 @@ def cmd_update(args: argparse.Namespace) -> int:
     print(f"\nUpdating to {newest} ...")
     done = subprocess.run(pinned, capture_output=True, text=True)
     if done.returncode != 0:
+        # A locked tree fails here as a bare permission error from uv, which
+        # names a path and not a reason — the exact shape of dead end this
+        # project keeps trying to remove. If we locked it, say so, because the
+        # answer is one word and nothing else on screen suggests it.
+        if _tree_is_locked() and os.geteuid() != 0:
+            return _fail(
+                "PassBook's own code is locked, so updating it needs root.",
+                "That is the lock working rather than a fault:\n"
+                "  sudo passbook update\n"
+                "To take the lock off instead:  sudo passbook harden --undo")
         return _fail("The update did not go through.",
                      (done.stderr or done.stdout).strip()[:400]
                      or f"Run it by hand:  {' '.join(pinned)}")
@@ -3438,14 +3465,14 @@ def cmd_harden(args: argparse.Namespace) -> int:
         return _fail("Process hardening is not installed on this machine.")
 
     if args.undo:
-        answer = passbook_harden.undo()
+        answer = passbook_harden.undo(owner=getattr(args, "owner", ""))
         if answer.get("needs_root"):
             return _fail("That removes root-owned files.",
                          "Run:  sudo passbook harden --undo")
         if not answer.get("ok"):
             return _fail(answer.get("why", "could not undo it"))
-        for path in answer.get("removed", []):
-            print(f"removed {path}")
+        for line in answer.get("undone", []):
+            print(line)
         print("The broker is yours again. Start one:  passbook broker start")
         return 0
 
@@ -3469,14 +3496,14 @@ def cmd_harden(args: argparse.Namespace) -> int:
         return 0
 
     if args.install:
-        answer = passbook_harden.install()
+        answer = passbook_harden.install(interpreter=getattr(args, "interpreter", False))
         if answer.get("needs_root"):
             # Deliberately not re-running under sudo. A tool that escalates on
             # its own behalf teaches people to let tools escalate, and this one
             # is asking to own a path everything else will trust.
             print("This needs root: it writes to /usr/local/libexec and /Library/LaunchAgents.")
             print("\nIt will:")
-            for step in passbook_harden.plan():
+            for step in passbook_harden.plan(interpreter=getattr(args, "interpreter", False)):
                 print(f"  · {step['what']}")
                 print(f"      {step['why']}")
             print("\nRun:  sudo passbook harden --install")
@@ -3484,8 +3511,9 @@ def cmd_harden(args: argparse.Namespace) -> int:
             return 1
         if not answer.get("ok"):
             return _fail(answer.get("why", "could not install it"))
-        print(f"PassBook now runs from {answer['runtime']}, owned by root.")
+        print(f"{answer['locked']} is now owned by root.")
         print(f"Started by {answer['plist']}, also owned by root.")
+        print("Updating it needs root from here:  sudo passbook update")
         print("\nCheck it:  passbook harden")
         return 0
 
@@ -3494,7 +3522,7 @@ def cmd_harden(args: argparse.Namespace) -> int:
         print(json.dumps(state, indent=2))
         return 0
     if args.plan:
-        for step in passbook_harden.plan():
+        for step in passbook_harden.plan(interpreter=getattr(args, "interpreter", False)):
             print(f"  · {step['what']}")
             print(f"      {step['why']}")
         return 0
@@ -4530,6 +4558,10 @@ def build_parser() -> argparse.ArgumentParser:
     harden_cmd.add_argument("--install", action="store_true",
                             help="install PassBook as root-owned code with a root-owned start")
     harden_cmd.add_argument("--undo", action="store_true", help="put the machine back")
+    harden_cmd.add_argument("--interpreter", action="store_true",
+                            help="lock the interpreter too; every uv tool then needs sudo to update")
+    harden_cmd.add_argument("--owner", default="",
+                            help="with --undo: who to give the tree back to")
     harden_cmd.add_argument("--keychain-prompt", action="store_true",
                             dest="keychain_prompt",
                             help="make every read of the vault key ask a person")

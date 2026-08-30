@@ -66,10 +66,21 @@ and every child holding a credential in its environment.
   nothing. Linux gets `prctl(PR_SET_DUMPABLE, 0)`; Windows says it cannot.
 - The flag **survives exec**, which is why a child works at all — `wrangler` and
   `npm` are protected without knowing PassBook exists.
-- **`passbook harden`** reports what is actually protected. **`--install`** moves
-  the code and its interpreter to root-owned `/usr/local/libexec/passbook` and
+- **`passbook harden`** reports what is actually protected. **`--install`**
+  locks PassBook's installed tree **in place** — `chown -R root:wheel` — and
   starts the broker from a root-owned LaunchAgent, closing the last user-space
-  gap: PassBook's own code being writable by anything running as you.
+  gap: PassBook's own code being writable by anything running as you. Updating
+  it needs root afterwards, which for the code holding a machine's credentials
+  is the right way round rather than a cost; `passbook update` says so instead
+  of surfacing a bare permission error from `uv`.
+
+  This first copied PassBook to a root-owned `/usr/local/libexec` and ran the
+  daemon from the copy. That was wrong, and worth recording: `passbook update`
+  runs `uv tool install --force` into the *user's* tree, so the daemon would
+  have gone on running whatever it was installed with — indefinitely, silently,
+  and invisibly to a version check reading the copy the user updated. A
+  credential broker quietly executing last month's redactor is a worse failure
+  than the writable directory it was meant to fix. One tree, locked where it is.
 
 A LaunchAgent rather than the service account first sketched here. A daemon
 under its own uid has no login keychain, no GUI session for Touch ID, and no

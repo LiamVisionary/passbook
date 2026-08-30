@@ -901,10 +901,11 @@ covered without knowing PassBook exists. Root still wins. It always will.
 
 **Until you run `sudo passbook harden --install`, PassBook's own code is
 writable by you** — and so by anything running as you, which can edit the
-redactor out and never need a debugger at all. That command moves the code and
-its interpreter somewhere root owns, and starts the broker from a root-owned
-LaunchAgent. `passbook harden` reports which of these is true right now rather
-than assuming.
+redactor out and never need a debugger at all. That command locks the installed
+tree where it already is and starts the broker from a root-owned LaunchAgent.
+Updating needs root afterwards, which for the code holding your credentials is
+the point rather than the cost. `passbook harden` reports what is true right now
+rather than assuming.
 
 **The record is tamper evident, not tamper proof.** It does not prevent an
 access, it makes one impossible to hide.

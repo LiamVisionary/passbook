@@ -1250,3 +1250,83 @@ def test_a_vendor_group_is_spelled_the_way_the_vendor_spells_it():
 
     # And the table must not invent a family for a name that has none.
     assert passbook_catalog.infer_group("API_KEY") == passbook_catalog.UNGROUPED
+
+
+# ── the ledger tail ─────────────────────────────────────────────────────────
+
+
+def _tail_the_old_way(path):
+    """What `_previous_hash` used to do: read the whole file to get one line.
+
+    Kept here as the oracle. The tail read that replaced it has to agree with
+    it on every shape a ledger can take, because the two disagreeing means a row
+    chains onto a different hash than the row before it recorded — which is
+    exactly the damage the chain exists to make visible.
+    """
+    try:
+        lines = [line for line in path.read_text(encoding="utf-8").strip().split("\n") if line]
+    except (OSError, UnicodeDecodeError):
+        return None
+    return lines[-1] if lines else None
+
+
+@pytest.mark.parametrize("shape,body", [
+    ("empty", b""),
+    ("one row, no trailing newline", b'{"a":1}'),
+    ("one row, trailing newline", b'{"a":1}\n'),
+    ("many rows", b"".join(b'{"n":%d}\n' % i for i in range(5000))),
+    ("torn tail", b"".join(b'{"n":%d}\n' % i for i in range(500)) + b'{"half'),
+    ("blank lines at the end", b'{"a":1}\n\n\n'),
+    ("nothing but blank lines", b"\n\n\n"),
+    # A row carrying a long key list is longer than any window picked up front.
+    ("one row wider than the window", b'{"a":1}\n{"k":"' + b"x" * 200_000 + b'"}\n'),
+    # Universal newlines: `read_text` translated these and a binary read does
+    # not, so a stray \r survived into the hash — on Windows only, silently.
+    ("crlf", b'{"a":1}\r\n{"b":2}\r\n'),
+    ("cr only", b'{"a":1}\r{"b":2}\r'),
+    ("mixed endings", b'{"a":1}\r\n{"b":2}\n{"c":3}\r\n'),
+])
+def test_the_tail_read_agrees_with_reading_the_whole_file(tmp_path, shape, body):
+    import passbook_stamp
+
+    ledger = tmp_path / "record.jsonl"
+    ledger.write_bytes(body)
+
+    assert passbook_stamp._tail_line(ledger) == _tail_the_old_way(ledger), shape
+
+
+def test_a_read_does_not_get_slower_as_the_ledger_grows(tmp_path):
+    """Why the tail read exists. `_previous_hash` runs on every credential read,
+    and reading the whole ledger to get its last line made every read on this
+    machine pay for every read before it — 216ms of a 392ms `reveal`, climbing.
+    """
+    import passbook_stamp
+
+    small = tmp_path / "small.jsonl"
+    large = tmp_path / "large.jsonl"
+    small.write_bytes(b'{"proofHash":"sha256:aa"}\n')
+    large.write_bytes(b'{"n":%d,"pad":"%s"}\n' % (0, b"x" * 400) * 1 +
+                      b"".join(b'{"n":%d,"pad":"%s"}\n' % (i, b"x" * 400) for i in range(20_000)) +
+                      b'{"proofHash":"sha256:aa"}\n')
+    assert large.stat().st_size > 5_000_000, "the large ledger is not large"
+
+    assert passbook_stamp._previous_hash(small) == passbook_stamp._previous_hash(large)
+
+    # Bytes touched, not wall clock: a timing assertion on a shared machine is
+    # a flake waiting to happen, and the claim is about how much is read.
+    reads = []
+    real_open = Path.open
+
+    def counting_open(self, *args, **kwargs):
+        handle = real_open(self, *args, **kwargs)
+        if self == large:
+            reads.append(handle)
+        return handle
+
+    Path.open = counting_open
+    try:
+        passbook_stamp._previous_hash(large)
+    finally:
+        Path.open = real_open
+
+    assert reads, "the tail read stopped using Path.open; update this test"

@@ -416,11 +416,32 @@ fn reveal_key(name: String, px: f32, scale: f32, ink: String) -> Result<Veiled, 
 
 /// Whether this machine hands values to callers the broker did not start.
 ///
-/// Asked of the CLI rather than cached, because it is a policy someone can
-/// change while the window is open and the answer decides whether the next
-/// reveal is allowed to happen in this process.
+/// Cached for a few seconds, because it sat on the hot path: asking the CLI
+/// costs a Python start and a broker round trip — 47ms measured — and the
+/// window paid it before every single reveal, on top of the reveal itself.
+///
+/// Caching a policy answer is only safe because this one is not a boundary. It
+/// picks which *path* the app takes, and both paths end somewhere the CLI
+/// decides again: guess "open" on a sealed machine and `reveal` is refused with
+/// a reason; guess "sealed" on an open one and the brokered draw works anyway.
+/// The seal is enforced where it always was, and this is a hint about which
+/// door to knock on.
 fn sealed_reads() -> bool {
-    run(&["grants"]).map(|out| out.contains("reads: sealed")).unwrap_or(false)
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+
+    const FRESH: Duration = Duration::from_secs(5);
+    static SEEN: Mutex<Option<(bool, Instant)>> = Mutex::new(None);
+
+    let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((answer, at)) = *seen {
+        if at.elapsed() < FRESH {
+            return answer;
+        }
+    }
+    let answer = run(&["grants"]).map(|out| out.contains("reads: sealed")).unwrap_or(false);
+    *seen = Some((answer, Instant::now()));
+    answer
 }
 
 /// Draw a credential in a process the broker started, and read back the picture.

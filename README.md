@@ -920,6 +920,28 @@ Copying happens in the app, not the window: `navigator.clipboard.writeText`
 takes a string, so leaving copy in the page would have re-materialised on the
 row's most-used button exactly what the rest of this avoids.
 
+### On a machine that seals reads
+
+`reads: sealed` says values go only into processes the broker started. The app's
+window is not one of those, so under a seal it stops reading values at all.
+
+- **`passbook reveal` is refused**, including with `--confirm`. Until now it was
+  not: `reveal` checked the guard list and nothing else, so the one command an
+  agent reaches for printed values straight past a seal that says this machine
+  does not print them.
+- **The app still shows you your own key.** It asks the broker to spawn a child —
+  itself, in a `--draw` mode with no window — which is handed the value the way
+  every brokered child is, draws it, and writes a PNG the app reads back and
+  unlinks. The value exists only in a process the broker started; what crosses
+  back is pixels. The draw leaves a grant record like any other brokered run.
+- **Copy is refused.** The clipboard is readable by every process on the machine
+  and, on macOS, by your other devices. "Values go only into processes the broker
+  started" and "here it is on the pasteboard" cannot both be true, so a sealed
+  machine says which one it means.
+
+Sealing is not the default and upgrading does not turn it on. `passbook policy
+--reads sealed` does, and `--reads open` undoes it.
+
 ---
 
 ## What it does not claim

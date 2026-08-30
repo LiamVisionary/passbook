@@ -169,7 +169,7 @@ def cmd_check(args: argparse.Namespace) -> int:
     held = set(passbook.key_names())
 
     refused = _refusals([k for k in args.keys if k in held], caller("passbook-check", args))
-    missing, locked = [], []
+    missing, locked, sealed_off = [], [], []
     for key in args.keys:
         value = values.get(key, "")
         if value and key not in refused:
@@ -179,6 +179,16 @@ def cmd_check(args: argparse.Namespace) -> int:
         elif key in refused:
             if not args.quiet:
                 print(f"{key}: refused — {refused[key]}")
+        elif key in held and _sealed_refusal([key]):
+            # A fifth answer, and the one this command got wrong. Under sealed
+            # reads — or for a guarded key — the value is simply not handed to
+            # a caller like this one. The key is present, the vault is open,
+            # and nothing needs repairing. Reporting `locked` sent a reader to
+            # `passbook signin`, which would change nothing and leave them
+            # certain something was broken.
+            sealed_off.append(key)
+            if not args.quiet:
+                print(f"{key}: set, never printed here")
         elif key in held:
             locked.append(key)
             if not args.quiet:
@@ -188,6 +198,11 @@ def cmd_check(args: argparse.Namespace) -> int:
             if not args.quiet:
                 print(f"{key}: missing")
 
+    if sealed_off and not missing and not locked and not refused:
+        print(f"\nPresent and usable, never printed: {', '.join(sealed_off)}")
+        print("Run what needs them:  passbook run --only "
+              f"{sealed_off[0]} -- <command>")
+        return 0
     if refused and not missing and not locked:
         return _fail(
             f"\nRefused by this machine's policy: {', '.join(refused)}",

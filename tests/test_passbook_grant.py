@@ -385,3 +385,84 @@ def test_a_process_born_with_a_grant_does_not_ask_again(tmp_path, monkeypatch):
 
     monkeypatch.setattr(passbook, "_ask_broker", explode)
     assert passbook.request(["SOME_KEY"], app="child") == {"SOME_KEY": "from-the-grant"}
+
+
+# ── check must not report a guarded key as locked ──────────────────────────
+
+
+@pytest.fixture
+def no_leaked_unsealer():
+    """Put back the module-level unsealer these commands install.
+
+    `cmd_check` calls `_use_broker_for_sealed_values`, which sets a global on
+    the `passbook` module. In a CLI that is harmless — the process exits a
+    moment later. In a test session it survives, and the next test that tries
+    to open a sealed store gets an unsealer pointing at a broker that is not
+    running.
+
+    That is exactly what happened: these two tests passed, and
+    `test_a_sealed_store_still_lends_correctly` in the link suite failed
+    afterwards with a LinkError, in a file neither of them touches. Worth a
+    fixture rather than a note, because the next command to reach for that
+    helper will do the same thing.
+    """
+    before = passbook._UNSEALER
+    yield
+    passbook.set_unsealer(before)
+
+
+def test_check_does_not_call_a_guarded_key_locked(
+        tmp_path, monkeypatch, capsys, no_leaked_unsealer):
+    """The bug: with reads sealed, `passbook check` reported every key as
+    `locked` on a machine whose vault was wide open.
+
+    Found live — `check OPENAI_API_KEY` said locked while `run --only
+    OPENAI_API_KEY` resolved the value in the same second. It sent a reader to
+    `passbook signin`, which would change nothing and leave them certain
+    something was broken. That is exactly the dead end this project keeps
+    removing, introduced by the change that added sealed reads.
+    """
+    import argparse
+
+    import passbook_cli
+
+    monkeypatch.setenv("HIVE_HOME", str(tmp_path / "hive"))
+    monkeypatch.delenv("HIVE_ENV_FILES", raising=False)
+    passbook.ensure(app="test")
+    passbook.set_values({"WATCHED": "a-real-value"})
+
+    monkeypatch.setattr(passbook_cli, "_sealed_refusal",
+                        lambda keys: "WATCHED is guarded and never printed.")
+    monkeypatch.setattr(passbook_cli, "_store_values", lambda: {})
+    monkeypatch.setattr(passbook_cli, "_refusals", lambda keys, app: {})
+
+    code = passbook_cli.cmd_check(
+        argparse.Namespace(keys=["WATCHED"], quiet=False, json=False, app=""))
+    out = capsys.readouterr().out
+    assert "locked" not in out
+    assert "never printed" in out
+    assert "passbook signin" not in out
+    assert code == 0
+
+
+def test_check_still_says_locked_when_it_really_is(
+        tmp_path, monkeypatch, capsys, no_leaked_unsealer):
+    """The other half. A genuinely shut vault must keep pointing at `signin`,
+    or the fix above would swap one wrong answer for another."""
+    import argparse
+
+    import passbook_cli
+
+    monkeypatch.setenv("HIVE_HOME", str(tmp_path / "hive"))
+    monkeypatch.delenv("HIVE_ENV_FILES", raising=False)
+    passbook.ensure(app="test")
+    passbook.set_values({"WATCHED": "a-real-value"})
+
+    monkeypatch.setattr(passbook_cli, "_sealed_refusal", lambda keys: "")
+    monkeypatch.setattr(passbook_cli, "_store_values", lambda: {})
+    monkeypatch.setattr(passbook_cli, "_refusals", lambda keys, app: {})
+
+    passbook_cli.cmd_check(
+        argparse.Namespace(keys=["WATCHED"], quiet=False, json=False, app=""))
+    out = capsys.readouterr().out
+    assert "locked" in out

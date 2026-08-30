@@ -47,6 +47,23 @@ crossing it.
   used to leave behind are overwritten now. That was invisible while the value
   was on its way to a webview that could not erase anything either.
 
+**`reads: sealed` did not cover `reveal`.** It checked the guard list and never
+`reads_mode`, so `passbook reveal KEY --confirm KEY` printed values on a machine
+whose own refusal message said it does not print them — and `--confirm` skipped
+the terminal check that was the only other thing in the way. That is the exact
+command an agent reaches for. It is refused now, and the refusal names both ways
+through: `passbook run` for a program, and the window for the person whose
+credential it is.
+
+**Under a seal the app draws through the broker.** The window is not a process
+the broker started, so it no longer reads the value: it asks the broker to spawn
+this same binary in a `--draw` mode with no window, which is handed the value the
+way every brokered child is, draws it, and writes a PNG the app reads back and
+unlinks. The picture comes back through a file rather than the child's stdout
+because `passbook run` decodes a child's output as UTF-8 with replacement, which
+would destroy every non-UTF-8 byte of a PNG. Copy is refused outright on a sealed
+machine: the clipboard is readable by every process on it.
+
 The font is the system's, found by path — nothing is bundled, for the same reason
 the icon set is drawn by hand. A machine with no monospace font PassBook can draw
 with refuses to reveal rather than falling back to text, which would have quietly

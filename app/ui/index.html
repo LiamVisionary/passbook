@@ -340,6 +340,22 @@
   .keyrow .val.picture img { display: block; height: 16px; width: auto; max-width: none; }
   .keyrow .val.picture img.measured { height: auto; }
   .keyrow .val.empty { color: var(--ink3); font-style: italic; }
+  /* Shown from the moment the eye is pressed until the picture is on screen.
+     Same box as the value it is standing in for, so the row does not move when
+     one becomes the other. */
+  .keyrow .val.loading { display: flex; align-items: center; gap: 8px; color: var(--ink3); }
+  .spinner {
+    width: 12px; height: 12px; border-radius: 50%; flex: none;
+    border: 2px solid var(--line2); border-top-color: var(--ink3);
+    animation: spin .6s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  /* A person who has asked not to see motion gets a pulse instead of a spin,
+     and still gets told something is happening. */
+  @media (prefers-reduced-motion: reduce) {
+    .spinner { animation: pulse 1.2s ease-in-out infinite; }
+    @keyframes pulse { 50% { opacity: .35; } }
+  }
   /* A hidden value is a chip beside its name, not a field of its own: a row of
      empty grey per key is most of what you see on a store of any size. */
   /* Not decoration: this is the one place a person looking at a key can learn
@@ -991,6 +1007,7 @@ Use the copy button to put it on the clipboard."
     const held = revealed[k];
     delete revealed[k];
     delete replacing[k];
+    delete revealing[k];
     clearTimeout(hideTimers[k]);
     delete hideTimers[k];
     if (held?.token && invoke) invoke("forget_reveal", { token: held.token }).catch(() => {});
@@ -1156,6 +1173,14 @@ Use the copy button to put it on the clipboard."
   let revealed = {};
   // key -> the timer that will hide it again.
   let hideTimers = {};
+  // key -> true while its value is being fetched and drawn.
+  //
+  // Both halves of this matter. It paints a spinner, so a press is acknowledged
+  // in the same frame rather than half a second later; and it makes a second
+  // press while the first is in flight do nothing, which is what actually went
+  // wrong — the first press looked like it had failed, the second started a
+  // *second* reveal, and the value appeared when that one landed.
+  let revealing = {};
   // key -> true while the row is showing an empty box to type a new value into.
   // Replacing rather than editing is deliberate: the old value is never put in
   // an input, so there is nothing to pre-fill and nothing to erase afterwards.
@@ -1545,6 +1570,8 @@ Use the copy button to put it on the clipboard."
       ${replacing[k] ? `<input class="val" data-replace="${esc(k)}" value=""
         spellcheck="false" autocapitalize="off" autocomplete="off"
         placeholder="Type a new value for ${esc(k)}, or press Escape" />`
+       : revealing[k] ? `<div class="val loading" role="status" aria-live="polite">
+           <span class="spinner"></span>Reading ${esc(k)}…</div>`
        : shown ? valuePicture(k) : ""}
       ${pending ? `<div class="confirmstrip">
         <span class="grow">Remove it? Another app may be using it, and the value is
@@ -4435,7 +4462,13 @@ passbook oauth connect google:work</pre>
       call("forget_machine", { host: b.dataset.forget }));
     main.querySelectorAll("[data-reveal]").forEach((b) => b.onclick = async () => {
       const k = b.dataset.reveal;
+      // A press while one is already in flight is the press that caused this:
+      // it used to start a second reveal rather than being ignored.
+      if (revealing[k]) return;
       if (revealed[k]) { hideValue(k); paint(); return; }
+      // Painted before the await, so the press is acknowledged in this frame
+      // instead of whenever the store answers.
+      revealing[k] = true; notice = ""; paint();
       // The drawing happens on the other side, at the moment the plaintext
       // exists, so the size and colour have to travel with the request rather
       // than with the fetch. What comes back is a token and a length, never the
@@ -4449,6 +4482,7 @@ passbook oauth connect google:work</pre>
           { name: k, px: 12, scale: dpr, ink: inkHex() }) };
         notice = ""; holdFor(k);
       } catch (e) { notice = String(e); }
+      finally { delete revealing[k]; }
       paint();
     });
     main.querySelectorAll("[data-hist]").forEach((b) => b.onclick = async () => {
@@ -4636,7 +4670,8 @@ passbook oauth connect google:work</pre>
     // A background refresh must not wipe a value someone is mid-edit on.
     const focused = document.activeElement;
     if (busy || confirming || audienceFor || bulkConfirm
-        || Object.keys(picked).length || Object.keys(connecting).length) return;
+        || Object.keys(picked).length || Object.keys(connecting).length
+        || Object.keys(revealing).length) return;
     if (focused?.classList?.contains("val") || focused?.classList?.contains("search")) return;
     // A half-typed password must survive the refresh for the same reason a
     // half-typed value does.

@@ -897,3 +897,44 @@ def test_the_process_listing_is_not_truncated():
     assert widest > 80, (
         "ps is truncating to the terminal width; a broker's --root= would be "
         f"cut off (widest line was {widest} characters)")
+
+
+def test_sealed_reads_let_an_approved_app_through_while_it_migrates(broker):
+    """Sealing everything at once would mean moving every app in one evening.
+
+    An approved app keeps reading while it is converted to `passbook run`, and
+    the list shrinks as each one moves. A migration path, not a boundary — the
+    name is a claim, which is why the next test exists.
+    """
+    policy = passbook_broker.read_policy()
+    policy["reads"] = "sealed"
+    import passbook_access as access
+
+    access.approve_agent("still-migrating", policy)
+    passbook_broker.write_policy(policy)
+
+    allowed = passbook_broker._ask({"op": "request", "app": "still-migrating",
+                                    "keys": ["ALPHA"]})
+    assert allowed["granted"].get("ALPHA") == "a-value"
+
+    refused = passbook_broker._ask({"op": "request", "app": "not-on-the-list",
+                                    "keys": ["ALPHA"]})
+    assert refused["granted"] == {} and "ALPHA" in refused["denied"]
+
+
+def test_no_exemption_reaches_a_guarded_key(broker):
+    """The line that makes guards worth having. An approved app is trusted to
+    hold ordinary credentials while it moves; it is never handed one its owner
+    said is used and never read."""
+    policy = passbook_broker.read_policy()
+    policy["reads"] = "sealed"
+    policy["guards"] = {"ALPHA": {"commands": ["*"]}}
+    import passbook_access as access
+
+    access.approve_agent("trusted-app", policy)
+    passbook_broker.write_policy(policy)
+
+    answer = passbook_broker._ask({"op": "request", "app": "trusted-app",
+                                   "keys": ["ALPHA", "BETA"]})
+    assert "ALPHA" in answer["denied"], "a guard was bypassed by an approval"
+    assert answer["granted"].get("BETA") == "b-value"

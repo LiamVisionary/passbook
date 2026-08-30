@@ -2157,7 +2157,13 @@ Use the copy button to put it on the clipboard."
                ${guarded.map(esc).join(", ")}.</div>`
             : `<div class="sub">No keys are individually guarded.
                <code>passbook guard NAME --to host</code> binds one.</div>`}
-        </div></div>
+        </div>
+        <button class="act" data-reads="${sealed ? "open" : "sealed"}"
+          ${busy ? "disabled" : ""}>${sealed ? "Allow reads" : "Seal reads"}</button></div>
+        ${sealed ? "" : `<p class="note">Sealing refuses a value to any caller PassBook
+          did not start. Apps that read directly keep working while they are on the
+          approved list — see <code>passbook approved</code> — and the list is meant
+          to shrink as each one moves to <code>passbook run</code>.</p>`}
       </div>`;
   }
 
@@ -4132,6 +4138,18 @@ passbook oauth connect google:work</pre>
     // Lock = put this window away. Agent access is a separate decision, made
     // on the screen this drops you on.
     main.querySelectorAll("[data-signout]").forEach((b) => b.onclick = () => lockWindow());
+    main.querySelectorAll("[data-reads]").forEach((b) => b.onclick = async () => {
+      // Sealing is reversible and changes nothing about what is stored, so it
+      // does not ask twice. Un-sealing is the direction worth a beat: it hands
+      // values back to every caller on the machine.
+      const wanted = b.dataset.reads;
+      if (wanted === "open" &&
+          !confirm("Allow any program running as you to read credential values again?")) return;
+      busy = true; paint();
+      try { state = await invoke("set_reads", { mode: wanted }) || state; }
+      catch (e) { alert(said(e)); }
+      finally { busy = false; paint(); }
+    });
     main.querySelectorAll("[data-verify]").forEach((b) => b.onclick = () => checkChain());
     main.querySelectorAll("[data-noticeclear]").forEach((b) => b.onclick = () => {
       notice = ""; paint();

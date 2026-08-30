@@ -251,6 +251,18 @@ fn state() -> Result<Value, String> {
 }
 
 #[tauri::command(async)]
+fn set_reads(mode: String) -> Result<Value, String> {
+    // The one switch that changes what every caller on the machine gets, so it
+    // is its own command rather than a flag on `set_mode`: "does this change
+    // who may read anything?" stays answerable by reading the name.
+    if mode != "open" && mode != "sealed" {
+        return Err("reads are either open or sealed".into());
+    }
+    run(&["policy", "--reads", mode.as_str()])?;
+    state()
+}
+
+#[tauri::command(async)]
 fn set_mode(app: String, key: String, mode: String) -> Result<Value, String> {
     let mut args = vec!["policy", "--mode", mode.as_str()];
     if !app.is_empty() {
@@ -2003,7 +2015,7 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            state, set_mode, unlock, lock, resolve, broker, revoke, add_key, remove_key, reveal_key,
+            state, set_mode, set_reads, unlock, lock, resolve, broker, revoke, add_key, remove_key, reveal_key,
             forget_reveal, copy_key, capture_protection,
             key_history, vault_state, vault_signin, vault_signout, vault_create_profile,
             vault_use_profile, vault_seal, vault_unseal, vault_secure, set_key_group, set_key_audience, set_key_scope, set_keys_scope, remove_keys,

@@ -11,6 +11,7 @@
     "dialog:allow-open",
     "allow-state",
     "allow-set-mode",
+    "allow-set-reads",
     "allow-unlock",
     "allow-lock",
     "allow-resolve",

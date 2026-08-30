@@ -1368,6 +1368,20 @@ def _handle(payload: Mapping[str, Any], root: Path | None = None,
         except ImportError:
             guarded_keys = set()
         sealed = reads_mode(policy) == "sealed"
+        # Sealing every read at once would mean migrating every app on the
+        # machine in one evening — on the box this was written for, twenty
+        # callers including fleet env replication. So an approved app may still
+        # read directly while it is being moved, and the list shrinks as each
+        # one moves to `passbook run`.
+        #
+        # This is a migration path, NOT a second boundary. The app name is a
+        # claim, so anything can call itself an approved one and read what that
+        # app reads. What it buys is that sealing can be switched on today
+        # instead of after a rewrite; what it does not buy is protection from
+        # something that lies. Guards do not have this hole — they refuse a key
+        # to every caller, approved or not — which is why the money-movers are
+        # guarded rather than left to this.
+        exempt = sealed and app in set(access.approved_agents(policy))
         keeping = []
         for key in allowed:
             if placed is not None:
@@ -1379,8 +1393,12 @@ def _handle(payload: Mapping[str, Any], root: Path | None = None,
                 else:
                     refused.append((key, f"{key} is not part of the grant this process was started with"))
                 continue
-            if key in guarded_keys or sealed:
-                refused.append((key, _use_refusal(key, guarded_key=key in guarded_keys)))
+            if key in guarded_keys:
+                # No exemption reaches a guard. That is what a guard is.
+                refused.append((key, _use_refusal(key, guarded_key=True)))
+                continue
+            if sealed and not exempt:
+                refused.append((key, _use_refusal(key, guarded_key=False)))
                 continue
             keeping.append(key)
         allowed = keeping

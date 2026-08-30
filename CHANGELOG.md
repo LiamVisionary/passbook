@@ -187,6 +187,24 @@ running it, not by reading it — an unapproved agent ran unattended against a
 perfectly correct policy — and the command now says **NOT ENFORCED** with the
 two ways to fix it.
 
+### Sealing reads without migrating the whole machine in one evening
+
+`--reads sealed` refused every caller the broker did not start, which is the
+guarantee — and on a real machine it meant moving twenty callers at once,
+fleet env replication among them. So an **approved** app may still read
+directly while it is being converted, and the list shrinks as each one moves
+to `passbook run`.
+
+This is a migration path and not a second boundary, which is worth saying
+plainly: the app name is a claim, so anything can call itself an approved one
+and read what that app reads. **No exemption reaches a guarded key** — a guard
+refuses every caller, approved or not, which is why the money-movers are
+guarded rather than left to this.
+
+- **A toggle in the window**, under Security, beside the state it reports.
+  Sealing does not ask twice; un-sealing does, because that hands values back
+  to every program running as you.
+
 ### A broker no longer outlives the store it was serving
 
 Ported from a worktree that never landed. A throwaway `HIVE_HOME` — a test tree,

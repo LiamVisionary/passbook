@@ -448,6 +448,25 @@ def _sealed_run(command: list[str], who: str, args: argparse.Namespace) -> int |
     sealed = passbook_broker.reads_mode(policy) == "sealed"
     guarded = set(passbook_grant.guarded(policy))
     wanted = list(args.only or []) or passbook.key_names()
+    # A stored value wins over the caller's environment by design, so that a
+    # caller cannot substitute one under a trusted name. That is right for a
+    # credential and wrong for a service's own configuration: the collector's
+    # LaunchAgent sets AGENT_TELEMETRY_PORT=8798, the store happens to hold that
+    # same NAME with another machine's port in it, and wrapping the collector
+    # silently moved it to a port something else already had. It crash-looped
+    # with an EADDRINUSE naming a port nobody configured.
+    #
+    # `--keep` is the caller saying which names are its own. Handled by not
+    # requesting them at all rather than by reordering the merge: a key that is
+    # never resolved cannot overwrite anything, cannot reach the child's
+    # environment by another route, and does not appear in the grant.
+    # getattr, not args.keep: `_sealed_run` is reached from more than one
+    # verb and from tests that build their own Namespace, and a hard
+    # attribute lookup turned a new flag into an AttributeError for every
+    # caller that predates it.
+    for name in (getattr(args, "keep", None) or []):
+        while name in wanted:
+            wanted.remove(name)
     involved = guarded.intersection(wanted)
     # A pin is checked where the spawn happens, which is the broker — so an app
     # with one has to go there, exactly as a guarded key does. Without this the
@@ -583,6 +602,13 @@ def cmd_run(args: argparse.Namespace) -> int:
         keep = set(args.only)
         child = {name: value for name, value in child.items()
                  if name in keep or name not in set(passbook.key_names())}
+    for name in (getattr(args, "keep", None) or []):
+        # Same meaning as on the brokered path: this name belongs to the caller.
+        # The process environment is merged over `child` below and would win
+        # anyway, but only if the caller actually has it set — dropping the
+        # stored value here means an unset one stays unset rather than quietly
+        # becoming whatever the store holds.
+        child.pop(name, None)
     # `load()` merges the process environment, so an empty result never happens.
     # The question that matters is whether the STORE's own keys resolved: if it
     # lists keys and not one of them came back, the vault is shut rather than the
@@ -4729,6 +4755,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--app", default="", help="who is asking; recorded")
     run.add_argument("--only", action="append", metavar="KEY", default=[],
                      help="hand the child only these keys; repeatable")
+    run.add_argument("--keep", action="append", metavar="NAME", default=[],
+                     help="this name is MY configuration, not a credential: do not "
+                          "let a stored value of the same name replace it; repeatable")
     run.add_argument("command", nargs=argparse.REMAINDER)
     run.set_defaults(func=cmd_run)
 

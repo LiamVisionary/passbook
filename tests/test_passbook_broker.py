@@ -591,6 +591,53 @@ def test_spawn_gives_the_child_the_value_and_the_caller_the_output(broker):
 
 
 @needs_a_posix_shell
+def test_a_stored_value_does_not_silently_replace_a_service_config(broker):
+    """A stored value outranks the caller's environment, which is right for a
+    credential and wrong for a service's own configuration.
+
+    The collector's LaunchAgent sets AGENT_TELEMETRY_PORT=8798. The store held
+    that same NAME carrying another machine's port. Wrapping the collector moved
+    it to a port something else already had, and it crash-looped with an
+    EADDRINUSE naming a port nobody had configured.
+
+    Compared inside the child, because the answer that comes back is redacted —
+    which is exactly how the collision stayed invisible.
+    """
+    check = 'test "$ALPHA" = "a-value" && echo STORE || echo CALLER'
+
+    asked = passbook_broker._ask({
+        "op": "spawn", "app": "svc", "keys": ["ALPHA"], "command": ["sh", "-c", check],
+        "env": {"ALPHA": "the-callers-own-value"}}, timeout=30)
+    assert asked["ok"] and "STORE" in asked["stdout"], "a credential must outrank caller env"
+
+    # What `--keep` does: the key is never requested, so nothing overwrites it.
+    kept = passbook_broker._ask({
+        "op": "spawn", "app": "svc", "keys": [], "command": ["sh", "-c", check],
+        "env": {"ALPHA": "the-callers-own-value"}}, timeout=30)
+    assert kept["ok"] and "CALLER" in kept["stdout"], "the caller's own config was replaced"
+
+
+def test_run_keep_drops_the_key_from_what_is_requested(broker, monkeypatch):
+    """The CLI half: --keep is honoured by not asking for the key at all."""
+    import argparse
+
+    import passbook_cli
+
+    policy = passbook_broker.read_policy()
+    policy["reads"] = "sealed"
+    passbook_broker.write_policy(policy)
+
+    seen = {}
+    monkeypatch.setattr(passbook_broker, "spawn_streaming",
+                        lambda command, keys, **kw: seen.setdefault("keys", list(keys))
+                        and None or {"ok": True, "exit_code": 0, "begin": {}})
+    args = argparse.Namespace(only=["ALPHA", "BETA"], keep=["ALPHA"], app="svc")
+    passbook_cli._sealed_run(["sh", "-c", "true"], "svc", args)
+
+    assert seen.get("keys") == ["BETA"], f"--keep did not drop the key: {seen.get('keys')}"
+
+
+@needs_a_posix_shell
 def test_spawn_refuses_a_program_that_is_not_the_code_that_was_pinned(broker, tmp_path):
     """A pattern matches text, so `deploy-tool *` keeps matching after
     `deploy-tool` has become different code. A pin compares what it IS."""

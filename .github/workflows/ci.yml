@@ -33,12 +33,17 @@ jobs:
       - name: Test
         run: python -m pytest tests -q -rs
 
-  # The link parser is the one place a value could leak into a URL, so its
-  # tests are not optional. They live in Rust next to the code and need the
-  # webview's system libraries to build, which is why they get their own job
-  # rather than riding along in the Python matrix.
+  # The Rust side handles values in two places a URL and a webview could leak
+  # them — the link parser, and the veil that rasterises a revealed credential
+  # so no JavaScript string and no accessibility-tree text ever holds it. Both
+  # are load-bearing, so the whole crate's tests run rather than one module's.
+  #
+  # This ran `cargo test ask::` for a long time, which was right when the
+  # parser was the only such place. It stopped being right when the veil
+  # landed: ten tests covering the one component whose entire job is keeping a
+  # credential out of reach, and CI ran none of them.
   parser:
-    name: link parser
+    name: rust
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -54,10 +59,9 @@ jobs:
           workspaces: app/src-tauri -> target
       - name: The staged CLI the app carries
         run: python3 scripts/stage-runtime.py
-      - name: Test the parser
+      - name: Test the crate
         working-directory: app/src-tauri
-        # Quoted: a trailing `::` in a plain scalar reads as a YAML mapping.
-        run: "cargo test --quiet ask::"
+        run: cargo test --quiet
 
   # A machine with no OS keystore is the normal case on a headless server, and
   # the vault has to work there on a password alone. This pins that.

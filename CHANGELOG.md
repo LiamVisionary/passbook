@@ -187,6 +187,31 @@ running it, not by reading it — an unapproved agent ran unattended against a
 perfectly correct policy — and the command now says **NOT ENFORCED** with the
 two ways to fix it.
 
+### Manual sign-in after a reboot, by default, with a switch
+
+Two things had been conflated, and the conflation is why nobody could say what
+the machine did. A **device factor** makes `passbook signin --device` work with
+no password. **Auto-opening** is something running that sign-in at boot. The
+first without the second is what this machine had — and nothing ran it at boot:
+no LaunchAgent started the broker, and `serve()` never opened anything. So every
+reboot already left the store shut until a person signed in. The exposure was
+real; the convenience it was traded for was not being collected.
+
+- **`passbook vault --stay-open`** reports both halves separately, because they
+  fail separately and one-without-the-other is the confusing case.
+- **`--stay-open on`** enrols the factor and installs a per-user LaunchAgent
+  running `broker run --open-with-device`. It states the cost — the opening key
+  sits in the OS keystore where any program running as you can fetch it — and
+  refuses without `--yes`.
+- **`--stay-open off`** removes both and forgets the keystore item.
+- **`passbook broker run --open-with-device`** is the flag that does it. A flag
+  rather than a behaviour: a broker that opens the vault with nobody present is
+  a decision, not a default. If the factor is gone it warns and starts shut,
+  because a broker that refuses to start over a missing factor is an outage.
+
+Off is the default and is not a new restriction — it is what the machine was
+already doing.
+
 ### A capability that could be granted and not taken back
 
 `passbook profile trust-device` stores a wrapping key in the OS keystore so a

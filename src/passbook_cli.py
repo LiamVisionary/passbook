@@ -34,6 +34,7 @@ import getpass
 import json
 import os
 import platform
+import plistlib
 import shutil
 import subprocess
 import sys
@@ -1134,12 +1135,114 @@ def cmd_profile_untrust_device(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_stay_open(args: argparse.Namespace) -> int:
+    """Whether a reboot opens the vault by itself, and switching that.
+
+    Off by default, and off is not a new restriction — it is what the machine
+    already did. A device factor on its own only makes the manual sign-in
+    passwordless; nothing was running it at boot. This makes the two halves one
+    switch so the answer to "does my machine open its own vault?" stops being
+    something you have to go and read three files to work out.
+    """
+    try:
+        import passbook_harden
+    except ImportError:
+        return _fail("Process hardening is not installed on this machine.")
+    module = _vault_or_fail()
+    if module is None:
+        return 1
+
+    state = passbook_harden.stay_open_state()
+    if not args.stay_open:
+        print(f"stay open between reboots: {'on' if state['on'] else 'off'}")
+        print(f"  device factor: {'yes' if state['device_factor'] else 'no'}")
+        print(f"  starts at login: {'yes' if state['boot_agent'] else 'no'}")
+        print(f"\n{state['why']}.")
+        if not state["on"]:
+            print("\nTurn it on:  passbook vault --stay-open on")
+        else:
+            print("\nTurn it off:  passbook vault --stay-open off")
+        return 0
+
+    plist = Path(state["plist"])
+    if args.stay_open == "off":
+        undone = []
+        if plist.exists():
+            subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}", str(plist)],
+                           capture_output=True)
+            plist.unlink()
+            undone.append("the login agent")
+        vault = module.read_vault()
+        for profile in vault.get("profiles", []):
+            for factor in [f for f in profile.get("factors", []) if f.get("kind") == "device"]:
+                try:
+                    module.remove_factor(profile["id"], factor["id"])
+                    undone.append("the device factor")
+                except module.VaultError as error:
+                    return _fail(str(error))
+        if not undone:
+            print("Already off. A reboot leaves the vault shut until you sign in.")
+            return 0
+        print(f"Removed {', '.join(undone)}.")
+        print("A reboot now leaves the vault shut until you sign in.")
+        print("The key it kept in the OS keystore has been forgotten.")
+        return 0
+
+    # Turning it on. The password is required — this grants the machine the
+    # ability to open the vault without one from here, so it is the last moment
+    # anybody is asked for it.
+    if not args.yes:
+        print("This lets this machine open the vault after a reboot with nobody present.")
+        print("\nThe cost, stated plainly:")
+        print("  · the opening key sits in the OS keystore, and ANY program")
+        print("    running as you can fetch it — no password, no prompt")
+        print("  · so an agent on this machine can open your vault")
+        print("\nWhat it buys: jobs that start at boot keep working without you.")
+        print("\nRe-run with --yes to accept that.")
+        return 1
+
+    opened = _open_vault(module, "", from_stdin=getattr(args, "password_stdin", False))
+    if opened is None:
+        return 1
+    dek, profile = opened
+    if not state["device_factor"]:
+        try:
+            module.add_device_factor(profile, dek=dek)
+        except module.VaultError as error:
+            return _fail(str(error))
+
+    program = Path(sys.argv[0]).resolve()
+    if program.name.startswith("python"):
+        program = Path(shutil.which("passbook") or "passbook")
+    plist.parent.mkdir(parents=True, exist_ok=True)
+    with plist.open("wb") as handle:
+        plistlib.dump(passbook_harden.vault_agent_plist(program), handle)
+    subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}", str(plist)],
+                   capture_output=True)
+    started = subprocess.run(["launchctl", "bootstrap", f"gui/{os.getuid()}", str(plist)],
+                             capture_output=True, text=True)
+    if started.returncode != 0:
+        return _fail("Could not start the login agent.",
+                     (started.stderr or "").strip()[:200])
+    print("On. A reboot opens the vault by itself.")
+    print(f"  agent: {plist}")
+    print("\nCheck it:  passbook vault --stay-open")
+    return 0
+
+
 def cmd_vault(args: argparse.Namespace) -> int:
     """Locked or open, which profiles exist, and what the store still exposes.
+
+    `--stay-open` is answered by `cmd_stay_open`, including with no value, so
+    "what is it set to" and "set it" are one flag rather than two commands that
+    could disagree.
 
     One call, because a sign-in screen needs all of it at once and asking three
     commands would let the answers disagree with each other mid-render.
     """
+    if getattr(args, "stay_open", None) is not None:
+        return cmd_stay_open(args)
+
     module = _vault()
     import passbook_broker
 
@@ -4035,7 +4138,7 @@ def cmd_broker_run(args: argparse.Namespace) -> int:
     if module is None:
         return _fail("The broker is not installed on this machine.")
     try:
-        module.serve()
+        module.serve(open_with_device=getattr(args, "open_with_device", False))
     except RuntimeError as error:
         return _fail(str(error))
     except KeyboardInterrupt:
@@ -4424,6 +4527,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     vault_cmd = subs.add_parser("vault", help="is the vault open, and who can open it")
     vault_cmd.add_argument("--json", action="store_true")
+    vault_cmd.add_argument("--stay-open", dest="stay_open", nargs="?", const="",
+                           choices=["on", "off", ""],
+                           help="whether a reboot opens the vault by itself; "
+                                "omit a value to see the current setting")
+    vault_cmd.add_argument("--yes", action="store_true", help="accept the trade-off")
+    vault_cmd.add_argument("--password-stdin", dest="password_stdin",
+                           action="store_true", help="read the password from stdin")
     vault_cmd.set_defaults(func=cmd_vault)
 
     passkey_cmd = subs.add_parser("passkey", help="passkeys that can open a profile")
@@ -4872,6 +4982,10 @@ def build_parser() -> argparse.ArgumentParser:
     broker_restart.set_defaults(json=False, func=cmd_broker_restart)
 
     broker_run = broker_subs.add_parser("run", help="run in the foreground, for launchd or systemd")
+    broker_run.add_argument("--open-with-device", action="store_true",
+                            dest="open_with_device",
+                            help="open the vault at start using this machine's "
+                                 "device factor, so a reboot needs no person")
     broker_run.set_defaults(json=False, func=cmd_broker_run)
 
 

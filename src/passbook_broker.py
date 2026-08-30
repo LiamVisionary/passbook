@@ -1423,8 +1423,19 @@ def _serve_one(connection: socket.socket, root: Path | None) -> None:
             pass
 
 
-def serve(*, root: Path | None = None, ready: threading.Event | None = None) -> None:
-    """Run the broker in the foreground until interrupted."""
+def serve(*, root: Path | None = None, ready: threading.Event | None = None,
+          open_with_device: bool = False) -> None:
+    """Run the broker in the foreground until interrupted.
+
+    `open_with_device` is the whole of "stay open between reboots", and it is a
+    flag rather than a behaviour because of what it means: the vault opens with
+    nobody present, using key material the OS keystore hands to anything running
+    as this user. Off, a reboot leaves the store shut until a person signs in —
+    which is the honest default and, on the machine this was written, was
+    already what happened. Nothing auto-opened; a device factor only made the
+    manual sign-in passwordless, which is a different and much smaller thing
+    than it sounded like.
+    """
     store_root(root).mkdir(parents=True, exist_ok=True)
     if running(root=root):
         raise RuntimeError(f"A broker is already listening on {endpoint(root)}")
@@ -1455,6 +1466,24 @@ def serve(*, root: Path | None = None, ready: threading.Event | None = None) -> 
     # somebody signs in. No other process installs this, which is what makes
     # the broker the only door rather than merely the polite one.
     passbook.set_unsealer(_unsealer)
+
+    if open_with_device:
+        # Deliberately after the socket exists and before `ready`, so a caller
+        # that waits for readiness gets a broker that is already open rather
+        # than one that opens a moment later — a race that would look like
+        # intermittently missing credentials at boot.
+        opened = signin(device=True, root=root)
+        if opened.get("ok"):
+            _record("signin", ["*"], app="passbook-broker", granted=True,
+                    reason="opened at start with this machine's device factor")
+        else:
+            # Not fatal. A broker that refuses to start because it could not
+            # open the vault takes the machine down over a factor somebody may
+            # have removed on purpose; one that starts shut behaves exactly as
+            # it does on every other boot.
+            print(f"could not open the vault with the device factor: "
+                  f"{opened.get('error', 'no reason given')}", file=sys.stderr)
+
     if ready is not None:
         ready.set()
 

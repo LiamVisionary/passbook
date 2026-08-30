@@ -589,3 +589,74 @@ def require_keychain_prompt(*, service: str = KEYCHAIN_SERVICE) -> dict[str, Any
     return {"ok": True, "service": service,
             "note": "every read of this item now asks a person. Headless opens "
                     "will stop working; that is the trade."}
+
+
+# ── staying open between reboots ───────────────────────────────────────────
+#
+# Two separate things had been conflated, and the conflation is why nobody could
+# say what the machine actually did:
+#
+#   a DEVICE FACTOR   lets `passbook signin --device` work with no password
+#   AUTO-OPENING      is something running that sign-in at boot
+#
+# The first without the second is what this machine had: a factor that sounded
+# like "the vault opens by itself" and in fact only meant "the person opening it
+# does not have to type anything". Nothing ran it at boot — no LaunchAgent
+# started the broker, `serve()` never opened anything — so every reboot already
+# left the store shut until somebody signed in. The exposure was real and the
+# convenience was not.
+#
+# So this is one switch over both halves, with the honest default: OFF means a
+# reboot needs a person, and nothing is in the keystore for a passing process to
+# fetch. ON means both — the factor and the agent that uses it — and says what
+# that costs before it does it.
+
+VAULT_AGENT_LABEL = "com.rizzma.passbook.vault"
+VAULT_AGENT_PLIST = Path("/Library/LaunchAgents") / f"{VAULT_AGENT_LABEL}.plist"
+USER_VAULT_AGENT = Path.home() / "Library" / "LaunchAgents" / f"{VAULT_AGENT_LABEL}.plist"
+
+
+def vault_agent_plist(program: Path, *, label: str = VAULT_AGENT_LABEL) -> dict[str, Any]:
+    """The agent that starts the broker already open."""
+    return {
+        "Label": label,
+        "ProgramArguments": [str(program), "broker", "run", "--open-with-device"],
+        "RunAtLoad": True,
+        "KeepAlive": {"SuccessfulExit": False},
+        "ProcessType": "Background",
+    }
+
+
+def stay_open_state(*, plist: Path | None = None) -> dict[str, Any]:
+    """Whether this machine opens its own vault after a reboot, and how.
+
+    Reports the two halves separately because they fail separately, and a
+    machine with one and not the other is the confusing case worth naming.
+    """
+    plist = Path(plist) if plist else USER_VAULT_AGENT
+    factor = False
+    try:
+        import passbook_vault
+
+        vault = passbook_vault.read_vault()
+        for profile in vault.get("profiles", []):
+            if any(f.get("kind") == "device" for f in profile.get("factors", [])):
+                factor = True
+    except Exception:  # noqa: BLE001 — no vault installed is a normal machine
+        pass
+    agent = plist.exists()
+    return {
+        "on": factor and agent,
+        "device_factor": factor,
+        "boot_agent": agent,
+        "plist": str(plist),
+        "why": (
+            "a reboot opens the vault by itself" if factor and agent else
+            "a device factor exists but nothing runs it at boot, so a reboot "
+            "still needs a person — and the keystore still holds material "
+            "anything running as you can fetch" if factor and not agent else
+            "an agent is installed but there is no device factor for it to use"
+            if agent and not factor else
+            "a reboot leaves the vault shut until you sign in"
+        ),
+    }

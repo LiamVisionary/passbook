@@ -399,3 +399,55 @@ def test_no_module_calls_geteuid_directly(monkeypatch):
                 offenders.append(f"{module.name}:{number}")
     assert not offenders, (
         f"call passbook_harden.is_root() instead of os.geteuid(): {offenders}")
+
+
+# ── staying open between reboots ───────────────────────────────────────────
+
+
+def test_the_two_halves_are_reported_separately(tmp_path, monkeypatch):
+    """A device factor and something that runs it at boot are different things,
+    and the machine this was built on had the first without the second — a
+    factor that sounded like "the vault opens itself" and only meant "the person
+    opening it types nothing". Reporting one number would have hidden that."""
+    monkeypatch.setattr(harden, "read_vault_safely", None, raising=False)
+
+    class _Vault:
+        @staticmethod
+        def read_vault():
+            return {"profiles": [{"factors": [{"kind": "device"}]}]}
+
+    monkeypatch.setitem(sys.modules, "passbook_vault", _Vault)
+    state = harden.stay_open_state(plist=tmp_path / "absent.plist")
+    assert state["device_factor"] is True
+    assert state["boot_agent"] is False
+    # Not "on" — that is the whole point of splitting them.
+    assert state["on"] is False
+    assert "still needs a person" in state["why"]
+
+
+def test_off_is_reported_as_off_with_neither_half(tmp_path, monkeypatch):
+    class _Vault:
+        @staticmethod
+        def read_vault():
+            return {"profiles": [{"factors": [{"kind": "password"}]}]}
+
+    monkeypatch.setitem(sys.modules, "passbook_vault", _Vault)
+    state = harden.stay_open_state(plist=tmp_path / "absent.plist")
+    assert state["on"] is False and state["device_factor"] is False
+    assert "shut until you sign in" in state["why"]
+
+
+def test_the_boot_agent_opens_the_vault_rather_than_only_starting_a_broker():
+    """A broker that starts shut is the default and is not what this switch is
+    for. The flag has to be on the command line or the agent silently delivers
+    half the feature."""
+    plist = harden.vault_agent_plist(Path("/x/bin/passbook"))
+    assert plist["ProgramArguments"][-3:] == ["broker", "run", "--open-with-device"]
+    assert plist["RunAtLoad"] is True
+
+
+def test_the_agent_is_per_user_not_machine_wide():
+    """This is a convenience preference, not a security boundary, so it lives in
+    the user's own LaunchAgents and needs no root. Putting it in /Library would
+    ask for a password to make the machine LESS strict."""
+    assert str(harden.USER_VAULT_AGENT).startswith(str(Path.home()))

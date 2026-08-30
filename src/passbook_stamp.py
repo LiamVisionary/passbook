@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import platform
 import socket
 from datetime import datetime, timezone
@@ -134,15 +135,49 @@ def proof_sha256(value: str) -> str:
     return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def _previous_hash(path: Path) -> str | None:
-    """The tail row's `proofHash` — what the next row must chain onto."""
+def _tail_line(path: Path) -> str | None:
+    """The last non-empty line, without reading the whole file to get it.
+
+    This used to be `read_text().split("\n")[-1]`, which is O(the ledger) on a
+    file that only ever grows — and it runs on *every* credential read, because
+    every row is chained onto the one before it. On this machine it was 216ms of
+    the 392ms a `reveal` cost, and the number was going up on its own.
+
+    Reading backwards from the end costs the same on the first row as on the
+    millionth. The window grows rather than being one fixed guess, because a row
+    carrying a long key list can be longer than any size picked in advance.
+    """
     try:
-        lines = [line for line in path.read_text(encoding="utf-8").strip().split("\n") if line]
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            if size == 0:
+                return None
+            window = 4096
+            while True:
+                start = max(0, size - window)
+                handle.seek(start)
+                # The same translation `read_text` would have applied, because
+                # the fallback for a torn tail hashes this string: a stray `\r`
+                # surviving here would chain onto a different hash than the old
+                # whole-file read produced, on Windows only, silently.
+                raw = handle.read(size - start).replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+                lines = [line for line in raw.split(b"\n") if line.strip()]
+                # Two or more lines in the window means the last one is whole —
+                # a newline was seen before it inside what was read. Reaching
+                # the start of the file settles it either way.
+                if len(lines) > 1 or start == 0 or window >= size:
+                    return lines[-1].decode("utf-8") if lines else None
+                window *= 4
     except (OSError, UnicodeDecodeError):
         return None
-    if not lines:
+
+
+def _previous_hash(path: Path) -> str | None:
+    """The tail row's `proofHash` — what the next row must chain onto."""
+    last = _tail_line(path)
+    if last is None:
         return None
-    last = lines[-1]
     try:
         parsed = json.loads(last)
     except json.JSONDecodeError:

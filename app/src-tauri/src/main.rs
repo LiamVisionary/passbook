@@ -230,12 +230,27 @@ fn run_json(args: &[&str]) -> Result<Value, String> {
 
 // ── what the window asks for ───────────────────────────────────────────────
 
-#[tauri::command]
+// Every command here is `(async)`, and none of them are `async fn`.
+//
+// That combination is deliberate and it is the difference between a window that
+// responds and one that does not. A bare `#[tauri::command(async)]` is dispatched on
+// the main thread; every command in this file shells out to the PassBook CLI,
+// so each one froze the webview for the length of a Python start plus whatever
+// it asked for — around 200ms for a reveal. The spinner added for that wait
+// could never be drawn, because the thread that would have drawn it was the
+// thread doing the waiting, and CSS animation stops with it.
+//
+// `(async)` on a sync function runs it on Tauri's blocking pool instead
+// (`sync_threadpool` in the macro). Nothing here becomes `async fn`: these are
+// blocking subprocess calls, and an `async fn` full of blocking work would move
+// the jam onto the async runtime rather than removing it.
+
+#[tauri::command(async)]
 fn state() -> Result<Value, String> {
     run_json(&["state"])
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn set_mode(app: String, key: String, mode: String) -> Result<Value, String> {
     let mut args = vec!["policy", "--mode", mode.as_str()];
     if !app.is_empty() {
@@ -248,13 +263,13 @@ fn set_mode(app: String, key: String, mode: String) -> Result<Value, String> {
     state()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn unlock(duration: String, reason: String) -> Result<Value, String> {
     run(&["unlock", "--for", duration.as_str(), "--reason", reason.as_str()])?;
     state()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn lock() -> Result<Value, String> {
     // Whatever is on screen was decrypted before the lock and would outlive it
     // by up to the hold. A lock that leaves a readable value behind it is the
@@ -265,7 +280,7 @@ fn lock() -> Result<Value, String> {
     state()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn resolve(id: String, approve: bool, remember: String) -> Result<Value, String> {
     let mut args = vec!["approve", id.as_str()];
     if !approve {
@@ -277,7 +292,7 @@ fn resolve(id: String, approve: bool, remember: String) -> Result<Value, String>
     state()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn broker(action: String) -> Result<Value, String> {
     match action.as_str() {
         "start" => run(&["broker", "start"])?,
@@ -287,7 +302,7 @@ fn broker(action: String) -> Result<Value, String> {
     state()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn revoke(did: String) -> Result<Value, String> {
     run(&["link", "revoke", did.as_str()])?;
     state()
@@ -296,7 +311,7 @@ fn revoke(did: String) -> Result<Value, String> {
 /// Adding a key is the one action that carries a secret, so it is passed to the
 /// CLI on stdin rather than as an argument — an argument would be visible to
 /// `ps` for as long as the process lived.
-#[tauri::command]
+#[tauri::command(async)]
 fn add_key(name: String, value: String, replace: bool) -> Result<Value, String> {
     use std::io::Write;
     use std::process::Stdio;
@@ -335,7 +350,7 @@ fn add_key(name: String, value: String, replace: bool) -> Result<Value, String> 
 /// The one operation here that can break something else on this machine, so it
 /// is its own command rather than a flag on another — and the window asks
 /// before calling it.
-#[tauri::command]
+#[tauri::command(async)]
 fn remove_key(name: String) -> Result<Value, String> {
     if name.trim().is_empty() {
         return Err("Which key?".into());
@@ -376,7 +391,7 @@ struct Veiled {
     hold_ms: u64,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn reveal_key(name: String, px: f32, scale: f32, ink: String) -> Result<Veiled, String> {
     let name = name.trim();
     if name.is_empty() {
@@ -433,14 +448,18 @@ fn sealed_reads() -> bool {
     const FRESH: Duration = Duration::from_secs(5);
     static SEEN: Mutex<Option<(bool, Instant)>> = Mutex::new(None);
 
-    let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some((answer, at)) = *seen {
+    // The lock is taken twice and held across neither subprocess call. Commands
+    // run on a pool now rather than one at a time on the main thread, so a lock
+    // held across `run` would turn two concurrent reveals into a queue — the
+    // exact serialisation this whole change is undoing, moved somewhere less
+    // obvious. The cost of two windows racing here is one redundant `grants`.
+    if let Some((answer, at)) = *SEEN.lock().unwrap_or_else(|e| e.into_inner()) {
         if at.elapsed() < FRESH {
             return answer;
         }
     }
     let answer = run(&["grants"]).map(|out| out.contains("reads: sealed")).unwrap_or(false);
-    *seen = Some((answer, Instant::now()));
+    *SEEN.lock().unwrap_or_else(|e| e.into_inner()) = Some((answer, Instant::now()));
     answer
 }
 
@@ -551,7 +570,7 @@ struct Protection {
     drawing: bool,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn capture_protection() -> Protection {
     Protection {
         capture: cfg!(any(target_os = "macos", target_os = "windows")),
@@ -565,7 +584,7 @@ fn capture_protection() -> Protection {
 /// fires, and when the row goes away. None of those are load-bearing — the hold
 /// in veil.rs expires regardless — but a value that is on screen for four
 /// seconds should not sit in this process for forty-five.
-#[tauri::command]
+#[tauri::command(async)]
 fn forget_reveal(token: String) -> bool {
     veil::forget(&token)
 }
@@ -581,7 +600,7 @@ fn forget_reveal(token: String) -> bool {
 /// can read it, and on macOS it goes to the user's other devices. Nothing here
 /// changes that, and it would be dishonest to imply otherwise. What changes is
 /// that pressing copy no longer also leaves an unerasable copy in the webview.
-#[tauri::command]
+#[tauri::command(async)]
 fn copy_key(app: tauri::AppHandle, name: String) -> Result<(), String> {
     use tauri_plugin_clipboard_manager::ClipboardExt;
 
@@ -611,12 +630,12 @@ fn copy_key(app: tauri::AppHandle, name: String) -> Result<(), String> {
 // browser, so it is spawned rather than awaited — a Tauri command that blocked
 // for three minutes waiting on a person would freeze the window.
 
-#[tauri::command]
+#[tauri::command(async)]
 fn oauth_state() -> Result<Value, String> {
     run_json(&["oauth", "--json"])
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn oauth_refresh(id: String) -> Result<Value, String> {
     if id.trim().is_empty() {
         return Err("Which sign-in?".into());
@@ -625,7 +644,7 @@ fn oauth_refresh(id: String) -> Result<Value, String> {
     oauth_state()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn oauth_disconnect(id: String) -> Result<Value, String> {
     if id.trim().is_empty() {
         return Err("Which sign-in?".into());
@@ -636,7 +655,7 @@ fn oauth_disconnect(id: String) -> Result<Value, String> {
 
 /// Start a browser sign-in. Returns as soon as it is running; the window polls
 /// `oauth_state` to find out how it went.
-#[tauri::command]
+#[tauri::command(async)]
 fn oauth_connect(id: String) -> Result<Value, String> {
     use std::process::Stdio;
 
@@ -661,7 +680,7 @@ fn oauth_connect(id: String) -> Result<Value, String> {
 // who has access.
 
 /// Pin keys to a group. An empty group returns them to inference from the name.
-#[tauri::command]
+#[tauri::command(async)]
 fn set_key_group(group: String, names: Vec<String>) -> Result<Value, String> {
     if names.is_empty() {
         return Err("Which keys?".into());
@@ -679,7 +698,7 @@ fn set_key_group(group: String, names: Vec<String>) -> Result<Value, String> {
 /// The CLI loops and reports per key, so one key owned by another workspace
 /// refuses without stopping the rest — and its refusal comes back verbatim,
 /// because "denied" with no cause is what makes people stop using a control.
-#[tauri::command]
+#[tauri::command(async)]
 fn set_keys_scope(names: Vec<String>, scope: String) -> Result<Value, String> {
     if names.is_empty() {
         return Err("Nothing selected.".into());
@@ -706,7 +725,7 @@ fn set_keys_scope(names: Vec<String>, scope: String) -> Result<Value, String> {
 }
 
 /// Delete several keys at once. The window asks first.
-#[tauri::command]
+#[tauri::command(async)]
 fn remove_keys(names: Vec<String>) -> Result<Value, String> {
     if names.is_empty() {
         return Err("Nothing selected.".into());
@@ -725,7 +744,7 @@ fn remove_keys(names: Vec<String>) -> Result<Value, String> {
 /// shown verbatim rather than softened — "only the acme workspace can change
 /// this" is the whole answer, and rewording it would lose which workspace to go
 /// and ask.
-#[tauri::command]
+#[tauri::command(async)]
 fn set_key_scope(name: String, scope: String) -> Result<Value, String> {
     if name.trim().is_empty() {
         return Err("Which key?".into());
@@ -745,7 +764,7 @@ fn set_key_scope(name: String, scope: String) -> Result<Value, String> {
 /// The verb stays `agents` even though the CLI now calls it `apps`: `agents` is
 /// an alias on the new CLI and the only name on an older one, and the app is
 /// routinely newer than the `passbook` it shells out to.
-#[tauri::command]
+#[tauri::command(async)]
 fn set_key_audience(name: String, mode: String, agents: Vec<String>) -> Result<Value, String> {
     if name.trim().is_empty() {
         return Err("Which key?".into());
@@ -774,7 +793,7 @@ fn set_key_audience(name: String, mode: String, agents: Vec<String>) -> Result<V
 ///
 /// `--agent` for the same reason as above: `--app` is the new spelling, this
 /// one works on every CLI that has ever shipped.
-#[tauri::command]
+#[tauri::command(async)]
 fn access_matrix(agents: Vec<String>) -> Result<Value, String> {
     let mut args: Vec<&str> = vec!["matrix", "--json"];
     if !agents.is_empty() {
@@ -824,7 +843,7 @@ fn run_with_password(args: &[&str], password: &str) -> Result<String, String> {
 }
 
 /// Everything a sign-in screen needs: locked or open, and who could open it.
-#[tauri::command]
+#[tauri::command(async)]
 fn vault_state() -> Result<Value, String> {
     run_json(&["vault", "--json"])
 }
@@ -833,7 +852,7 @@ fn vault_state() -> Result<Value, String> {
 /// session that lasts until somebody locks it — agents read credentials at
 /// four in the morning, and a vault that closes itself overnight does not
 /// protect anything, it just stops the work.
-#[tauri::command]
+#[tauri::command(async)]
 fn vault_signin(
     profile: String,
     password: String,
@@ -867,7 +886,7 @@ fn vault_signin(
 /// The WebAuthn ceremony happens in the window, because that is the only place
 /// with an authenticator; the secret it returns crosses one pipe and is used
 /// once. It is never stored — storing it would make the ceremony decorative.
-#[tauri::command]
+#[tauri::command(async)]
 fn vault_add_passkey(
     workspace: String,
     credential_id: String,
@@ -912,7 +931,7 @@ fn vault_add_passkey(
 ///
 /// The PRF secret goes over stdin exactly as enrolment sends it. It is a key,
 /// not a name, and an argv is readable by anything on this machine.
-#[tauri::command]
+#[tauri::command(async)]
 fn vault_signin_passkey(
     workspace: String,
     credential_id: String,
@@ -936,7 +955,7 @@ fn vault_signin_passkey(
 ///
 /// Asked before anything is drawn, so the window never offers a button that
 /// cannot work — which is exactly what "Add a passkey" was doing.
-#[tauri::command]
+#[tauri::command(async)]
 fn biometric_status() -> Value {
     let status = passbook_biometric::status();
     serde_json::json!({
@@ -960,7 +979,7 @@ fn biometric_status() -> Value {
 /// anything already running as you can call `passbook signin --device` itself
 /// and never see a prompt. It stops somebody at your keyboard, which is what
 /// it is for.
-#[tauri::command]
+#[tauri::command(async)]
 async fn vault_signin_device(workspace: String) -> Result<Value, String> {
     let asking = if workspace.trim().is_empty() {
         "unlock PassBook".to_string()
@@ -984,7 +1003,7 @@ async fn vault_signin_device(workspace: String) -> Result<Value, String> {
 ///
 /// The password is needed once, to wrap the key for the keystore. It goes over
 /// stdin like every other password in this file, never an argv.
-#[tauri::command]
+#[tauri::command(async)]
 async fn vault_trust_device(password: String) -> Result<Value, String> {
     if password.is_empty() {
         return Err("The vault password is needed once, to wrap the key.".into());
@@ -1004,7 +1023,7 @@ async fn vault_trust_device(password: String) -> Result<Value, String> {
 /// root opened all of them, so "which workspace" and "whose key" were separate
 /// questions. Creating one here is what makes them the same question: its own
 /// library, its own key.
-#[tauri::command]
+#[tauri::command(async)]
 fn vault_create_workspace(name: String, password: String) -> Result<Value, String> {
     let name = name.trim().to_string();
     if name.is_empty() {
@@ -1029,7 +1048,7 @@ fn vault_create_workspace(name: String, password: String) -> Result<Value, Strin
 /// the app away at the end of the day also stopped every agent reading
 /// credentials overnight — and the way people work around that is to never
 /// lock anything.
-#[tauri::command]
+#[tauri::command(async)]
 fn vault_signout(workspace: String, everything: bool) -> Result<Value, String> {
     veil::forget_all();
     let mut args = vec!["signout"];
@@ -1043,7 +1062,7 @@ fn vault_signout(workspace: String, everything: bool) -> Result<Value, String> {
     vault_state()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn vault_create_profile(label: String, password: String) -> Result<Value, String> {
     if label.trim().is_empty() {
         return Err("Give the profile a name.".into());
@@ -1055,7 +1074,7 @@ fn vault_create_profile(label: String, password: String) -> Result<Value, String
     vault_state()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn vault_use_profile(label: String) -> Result<Value, String> {
     if label.trim().is_empty() {
         return Err("Which profile?".into());
@@ -1065,7 +1084,7 @@ fn vault_use_profile(label: String) -> Result<Value, String> {
 }
 
 /// Turn one change-confirmation on or off.
-#[tauri::command]
+#[tauri::command(async)]
 fn set_confirmation(op: String, required: bool) -> Result<Value, String> {
     let op = op.trim();
     if !["add", "modify", "delete"].contains(&op) {
@@ -1080,7 +1099,7 @@ fn set_confirmation(op: String, required: bool) -> Result<Value, String> {
 }
 
 /// Which projects a key is for: every one, only these, or all but these.
-#[tauri::command]
+#[tauri::command(async)]
 fn set_key_projects(name: String, mode: String, projects: Vec<String>) -> Result<Value, String> {
     if name.trim().is_empty() {
         return Err("Which key?".into());
@@ -1112,7 +1131,7 @@ fn set_key_projects(name: String, mode: String, projects: Vec<String>) -> Result
 /// The passphrase travels to the CLI's stdin like a vault password does, and
 /// the values never enter this process: the CLI opens them, encrypts them and
 /// writes the file. This side only ever sees a path and a count.
-#[tauri::command]
+#[tauri::command(async)]
 fn export_store(path: String, shape: String, passphrase: String, note: String) -> Result<Value, String> {
     if path.trim().is_empty() {
         return Err("Where should it go?".into());
@@ -1144,7 +1163,7 @@ fn export_store(path: String, shape: String, passphrase: String, note: String) -
 }
 
 /// Look inside an export without importing it.
-#[tauri::command]
+#[tauri::command(async)]
 fn inspect_export(path: String, passphrase: String) -> Result<Value, String> {
     if path.trim().is_empty() {
         return Err("Which file?".into());
@@ -1156,7 +1175,7 @@ fn inspect_export(path: String, passphrase: String) -> Result<Value, String> {
 }
 
 /// Read an export into this store.
-#[tauri::command]
+#[tauri::command(async)]
 fn import_store(path: String, passphrase: String, overwrite: bool) -> Result<Value, String> {
     if path.trim().is_empty() {
         return Err("Which file?".into());
@@ -1172,7 +1191,7 @@ fn import_store(path: String, passphrase: String, overwrite: bool) -> Result<Val
 }
 
 /// Mint a recovery code. Returned once, to be written down.
-#[tauri::command]
+#[tauri::command(async)]
 fn make_recovery_code(password: String) -> Result<Value, String> {
     if password.is_empty() {
         return Err("The vault password is needed to mint a recovery code.".into());
@@ -1193,7 +1212,7 @@ fn make_recovery_code(password: String) -> Result<Value, String> {
 }
 
 /// Stop counting a tailnet machine as holding this store.
-#[tauri::command]
+#[tauri::command(async)]
 fn forget_machine(host: String) -> Result<Value, String> {
     if host.trim().is_empty() {
         return Err("Which machine?".into());
@@ -1206,7 +1225,7 @@ fn forget_machine(host: String) -> Result<Value, String> {
 ///
 /// Written into HivemindOS's own manifest by the CLI, not a PassBook-side copy,
 /// so the two apps cannot disagree about which workspace is active.
-#[tauri::command]
+#[tauri::command(async)]
 fn set_workspace(name: String) -> Result<Value, String> {
     if name.trim().is_empty() {
         return Err("Which workspace?".into());
@@ -1221,7 +1240,7 @@ fn set_workspace(name: String) -> Result<Value, String> {
 /// times is how a security feature earns a reputation for being annoying. The
 /// window offered them as separate steps and there was no single action that
 /// secured a machine, which is exactly the thing a first-run screen is for.
-#[tauri::command]
+#[tauri::command(async)]
 fn vault_secure(label: String, password: String) -> Result<Value, String> {
     if password.chars().count() < 8 {
         return Err("A vault password must be at least 8 characters.".into());
@@ -1232,7 +1251,7 @@ fn vault_secure(label: String, password: String) -> Result<Value, String> {
 }
 
 /// Encrypt every readable value. The action that makes the app's warning go away.
-#[tauri::command]
+#[tauri::command(async)]
 fn vault_seal(password: String) -> Result<Value, String> {
     if password.is_empty() {
         return Err("Enter your vault password.".into());
@@ -1243,7 +1262,7 @@ fn vault_seal(password: String) -> Result<Value, String> {
 
 /// Put it all back. Offered next to sealing so the door out is as visible as
 /// the door in — a security feature nobody can reverse is one nobody turns on.
-#[tauri::command]
+#[tauri::command(async)]
 fn vault_unseal(password: String) -> Result<Value, String> {
     if password.is_empty() {
         return Err("Enter your vault password.".into());
@@ -1261,7 +1280,7 @@ fn vault_unseal(password: String) -> Result<Value, String> {
 /// thing the CLI does — and `state` runs every five seconds behind an open
 /// window. Verifying twelve times a minute is not what makes a ledger
 /// trustworthy; it is just the bill for a page nobody had open.
-#[tauri::command]
+#[tauri::command(async)]
 fn verify_record() -> Result<Value, String> {
     let full = run_json(&["state", "--verify"])?;
     Ok(full.get("record").cloned().unwrap_or(Value::Null))
@@ -1269,7 +1288,7 @@ fn verify_record() -> Result<Value, String> {
 
 /// Fetched on demand rather than shipped with every state refresh: a store of
 /// several hundred keys would otherwise carry a history nobody asked to see.
-#[tauri::command]
+#[tauri::command(async)]
 fn key_history(name: String) -> Result<Value, String> {
     if name.trim().is_empty() {
         return Err("Which key?".into());
@@ -1726,13 +1745,13 @@ fn remember_page_ask(app: &tauri::AppHandle, body: &str, origin: &str) -> Result
 }
 
 /// What the window should be showing, if anything.
-#[tauri::command]
+#[tauri::command(async)]
 fn pending_ask() -> Option<ask::Ask> {
     pending().lock().ok().and_then(|slot| slot.clone())
 }
 
 /// Put the request down without storing anything.
-#[tauri::command]
+#[tauri::command(async)]
 fn dismiss_ask() {
     if let Ok(mut slot) = pending().lock() {
         *slot = None;
@@ -1745,7 +1764,7 @@ fn dismiss_ask() {
 /// `KEY=value` lines, so the whole set lands as a single operation with a
 /// single line in the ledger, and a half-applied request cannot happen.
 /// Values go down stdin and never appear in an argument list.
-#[tauri::command]
+#[tauri::command(async)]
 fn apply_ask(id: String, typed: Vec<(String, String)>, replace: bool) -> Result<Value, String> {
     use std::io::Write;
     use std::process::Stdio;
@@ -1825,7 +1844,7 @@ fn apply_ask(id: String, typed: Vec<(String, String)>, replace: bool) -> Result<
 // the CLI reading the same file again.
 
 /// What is in a file, without importing any of it.
-#[tauri::command]
+#[tauri::command(async)]
 fn inspect_env(path: String) -> Result<Value, String> {
     let target = path.trim();
     if target.is_empty() {
@@ -1840,7 +1859,7 @@ fn inspect_env(path: String) -> Result<Value, String> {
 ///
 /// `renames` arrives as pairs so the window can offer "add as new" per key
 /// without inventing the new name itself.
-#[tauri::command]
+#[tauri::command(async)]
 fn import_env(
     path: String,
     only: Vec<String>,

@@ -349,6 +349,8 @@
     border: 2px solid var(--line2); border-top-color: var(--ink3);
     animation: spin .6s linear infinite;
   }
+  /* Sized to sit where a 24-grid icon sat, so the button does not resize. */
+  .iconbtn .spinner { width: 14px; height: 14px; }
   @keyframes spin { to { transform: rotate(360deg); } }
   /* A person who has asked not to see motion gets a pulse instead of a spin,
      and still gets told something is happening. */
@@ -389,6 +391,12 @@
   /* A notice at the far end of the page is not feedback for a button press —
      the eye is on the button. It turns into a tick where it stands. */
   .iconbtn.done { background: var(--good-soft); color: var(--good); }
+  /* The same argument as the tick above, for the wait rather than the result.
+     A reveal costs a subprocess, and the eye is where the person is looking
+     when they press it — so the spinner is on the button, not only in the row
+     underneath where the value will land. */
+  .iconbtn.working { background: var(--accent-soft); }
+  .iconbtn.working .spinner { border-top-color: var(--accent); border-color: var(--accent-soft); border-top-color: var(--accent); }
   .iconbtn.done svg { animation: pop .22s ease-out; }
   .iconbtn:active { transform: scale(0.92); }
   @keyframes pop {
@@ -1010,6 +1018,10 @@ Use the copy button to put it on the clipboard."
     delete revealing[k];
     clearTimeout(hideTimers[k]);
     delete hideTimers[k];
+    // Not awaited, and deliberately so: the row has already stopped showing the
+    // value, and whether the app has finished overwriting its copy is not
+    // something the person should be made to wait to find out. The hold expires
+    // on its own regardless.
     if (held?.token && invoke) invoke("forget_reveal", { token: held.token }).catch(() => {});
   }
 
@@ -1554,6 +1566,10 @@ Use the copy button to put it on the clipboard."
         ${isGuarded(k)
           ? `<button class="iconbtn" disabled title="${esc(guardedWhy(k))}"
                aria-label="Guarded: never shown">${icon("lock")}</button>`
+          : revealing[k]
+          ? `<button class="iconbtn working" disabled aria-busy="true"
+               title="Reading ${esc(k)}…" aria-label="Reading ${esc(k)}">
+               <span class="spinner"></span></button>`
           : `<button class="iconbtn ${shown ? "on" : ""}" data-reveal="${esc(k)}"
           title="${shown ? "Hide value" : "Reveal value"}"
           aria-label="${shown ? "Hide value" : "Reveal value"}">${icon(shown ? "eyeOff" : "eye")}</button>`}

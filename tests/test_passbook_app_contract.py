@@ -797,7 +797,8 @@ def _commands() -> dict[str, str]:
     source = RUST.read_text(encoding="utf-8")
     found = {}
     for match in re.finditer(
-        r"#\[tauri::command\]\s*\n(?:pub\s+)?fn\s+(\w+)\s*\([^)]*\)\s*(?:->\s*([^{]+?))?\s*\{",
+        r"#\[tauri::command(?:\([^)]*\))?\]\s*\n(?:pub\s+)?(?:async\s+)?fn\s+(\w+)"
+        r"\s*\([^)]*\)\s*(?:->\s*([^{]+?))?\s*\{",
         source, re.S,
     ):
         found[match.group(1)] = " ".join((match.group(2) or "()").split())
@@ -945,3 +946,24 @@ def test_a_brokered_child_still_gets_the_value_under_a_seal(machine, tmp_path):
         assert "a-value" not in done.stdout
     finally:
         _cli("broker", "stop", home=machine)
+
+
+def test_no_command_is_dispatched_on_the_main_thread():
+    """A bare `#[tauri::command]` runs on the main thread.
+
+    Every command in this app shells out to the PassBook CLI, so a bare one
+    freezes the window for a Python start plus whatever it asked for. That is
+    not a slow command, it is a frozen application: the spinner drawn for the
+    wait cannot be painted, because the thread that would paint it is the thread
+    that is waiting. `(async)` on a sync function runs it on the blocking pool
+    instead — the macro calls that `sync_threadpool`.
+    """
+    source = RUST.read_text(encoding="utf-8")
+    bare = re.findall(r"#\[tauri::command\]\s*\n(?:pub\s+)?fn\s+(\w+)", source)
+    assert not bare, (
+        f"these commands would block the window while they run: {sorted(bare)}. "
+        f"Use #[tauri::command(async)]."
+    )
+    # And the parser above must still be finding them, or this passes vacuously
+    # on a file it can no longer read.
+    assert len(_commands()) > 40, "the command parser has drifted from the source"

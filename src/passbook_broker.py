@@ -1978,10 +1978,17 @@ def _broker_processes() -> list[tuple[int, str]]:
     `/proc` to assume, and the broker only runs where AF_UNIX does anyway. A
     machine where this cannot be answered reports nothing rather than guessing.
     """
-    # Two spellings, because `pid=,command=` is one option string to procps and
-    # two to BSD `ps`, and which one a machine has is not knowable in advance.
-    # The second is the portable form with a header line to skip.
-    for argv, skip_header in ((["ps", "-eo", "pid=,command="], False),
+    # `-ww` is the whole reason this works. Without it `ps` truncates each line
+    # to the terminal width, and on a CI runner that cut the broker off at
+    # `... -m passbook_broker --`, mid-flag: the match failed, and had it
+    # matched, `--root=` would have been missing too, so a stray could never
+    # have been placed. Not a formatting preference — a correctness one.
+    #
+    # Two spellings after that, because `pid=,command=` is one option string to
+    # procps and two to BSD `ps`. The second is the portable form, with a header
+    # line to skip.
+    for argv, skip_header in ((["ps", "-eww", "-o", "pid=,command="], False),
+                              (["ps", "-eww", "-o", "pid,args"], True),
                               (["ps", "-eo", "pid,args"], True)):
         try:
             listing = subprocess.run(argv, capture_output=True, text=True, timeout=5)

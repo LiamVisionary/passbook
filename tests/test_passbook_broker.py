@@ -885,3 +885,26 @@ def test_the_parser_reads_the_store_off_the_command_line(tmp_path):
     found = passbook_broker._brokers_in([line])
     assert found and found[0][0] == 1234
     assert found[0][1].partition(" --root=")[2] == store
+
+
+@needs_a_process_table
+def test_the_process_listing_is_not_truncated():
+    """`ps` truncates to the terminal width unless told not to.
+
+    On a CI runner that cut the broker off at `-m passbook_broker --`, mid-flag.
+    The match failed — and had it matched, `--root=` would have been gone too,
+    so the stray could never have been placed. This asserts the listing is wide
+    enough to carry a realistic invocation, which is the property, rather than
+    asserting a particular flag.
+    """
+    import subprocess as sp
+
+    # A path about as long as a real one: a hosted toolcache interpreter plus a
+    # pytest tmp store is comfortably past eighty columns.
+    listing = sp.run(["ps", "-eww", "-o", "pid=,command="],
+                     capture_output=True, text=True, timeout=5)
+    assert listing.returncode == 0
+    widest = max((len(line) for line in listing.stdout.splitlines()), default=0)
+    assert widest > 80, (
+        "ps is truncating to the terminal width; a broker's --root= would be "
+        f"cut off (widest line was {widest} characters)")

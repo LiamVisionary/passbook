@@ -420,9 +420,19 @@ def is_listening(name: str) -> bool:
     return _last_error() not in (ERROR_FILE_NOT_FOUND,)
 
 
-def connect(name: str, timeout: float) -> PipeConnection:
-    """Dial the broker, waiting out a busy moment but not a missing one."""
-    deadline = time.monotonic() + max(timeout, 0.0)
+def connect(name: str, timeout: float | None) -> PipeConnection:
+    """Dial the broker, waiting out a busy moment but not a missing one.
+
+    `None` means no deadline, matching what `settimeout(None)` means on a
+    socket: block for as long as it takes. A streaming spawn asks for that,
+    because the caller's command decides how long it runs and a timeout here
+    would kill a legitimate build at an arbitrary minute.
+
+    Without this, `max(None, 0.0)` raised a TypeError before the connection was
+    ever attempted — POSIX took `None` happily and Windows died on every
+    streamed run.
+    """
+    deadline = None if timeout is None else time.monotonic() + max(timeout, 0.0)
     while True:
         handle = _kernel32.CreateFileW(
             name, GENERIC_READ | GENERIC_WRITE, 0, None, OPEN_EXISTING, 0, None)
@@ -436,6 +446,6 @@ def connect(name: str, timeout: float) -> PipeConnection:
         if code != ERROR_PIPE_BUSY:
             raise _fail("CreateFile")
         # Every instance is in use. That is a queue, not an absence.
-        if time.monotonic() >= deadline:
+        if deadline is not None and time.monotonic() >= deadline:
             raise TimeoutError("every broker instance was busy")
         _kernel32.WaitNamedPipeW(name, 50)

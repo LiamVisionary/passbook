@@ -268,3 +268,27 @@ def test_the_shims_do_not_write_bytecode_into_the_install():
     assert "PYTHONPYCACHEPREFIX" in body
     assert "%~dp0..\\cli" not in body.split("PYTHONPYCACHEPREFIX")[1].split("\n")[0], \
         "the cache must not point back inside the install"
+
+
+def test_connect_accepts_no_deadline_on_any_platform():
+    """`None` means block for as long as it takes, the way a socket does.
+
+    A streaming spawn asks for exactly that: the caller's command decides how
+    long it runs, and a deadline here would kill a legitimate build at an
+    arbitrary minute. `connect` computed `max(timeout, 0.0)` before doing
+    anything else, so POSIX took `None` happily and every streamed run on
+    Windows died with a TypeError before the pipe was even opened.
+
+    Checked by reading the source rather than by dialling, because the failure
+    was in the arithmetic at the top of the function and reproducing it needs a
+    Windows kernel this suite does not have on every runner.
+    """
+    source = (Path(__file__).resolve().parents[1] / "src" / "passbook_pipe.py").read_text()
+    body = source[source.index("def connect("):]
+    # Both places that had to change: computing the deadline, and comparing
+    # against it. Asserting the guards rather than banning `max(timeout, 0.0)`,
+    # which is still there and correct now that it sits behind the check.
+    assert "None if timeout is None" in body, (
+        "connect() must tolerate timeout=None; bare arithmetic raises TypeError")
+    assert "deadline is not None" in body, (
+        "the busy-wait comparison must skip when there is no deadline")

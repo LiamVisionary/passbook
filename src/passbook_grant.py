@@ -338,7 +338,7 @@ def _end_process_group(child) -> None:
 def stream(command: Sequence[str], values: Mapping[str, str], *,
            app: str = "", cwd: str = "", extra_env: Mapping[str, str] | None = None,
            grant: str = "", stdout: Any = None, stderr: Any = None,
-           caller_present=None) -> dict[str, Any]:
+           caller_present=None, on_child=None) -> dict[str, Any]:
     """Run a command, passing its output through live, with values removed.
 
     This is what `passbook run` needs and `spawn` cannot give it: a build that
@@ -375,6 +375,13 @@ def stream(command: Sequence[str], values: Mapping[str, str], *,
         return {"ok": False, "error": f"not executable: {argv[0]}"}
     except OSError as error:
         return {"ok": False, "error": f"could not run it: {error}"}
+
+    if on_child is not None:
+        # The broker keeps a handle so it can end what it started when it goes.
+        try:
+            on_child(child)
+        except Exception:  # noqa: BLE001 — bookkeeping must never fail a run
+            pass
 
     def pump(source, sink, scrubber) -> None:
         try:

@@ -1036,6 +1036,45 @@ def _decide_many(keys: Iterable[str], *, app: str, policy: Mapping[str, Any],
     return allowed, refused
 
 
+# Children this broker started and is still waiting on. They hold credentials
+# in their environment, so when the broker goes they must go too: a restart used
+# to leave them running against a vault that had just locked, and — because they
+# now get their own process group — still holding whatever port they had, so the
+# service manager's replacement could not bind. Measured: `passbook broker
+# restart` orphaned the collector, which kept port 8798 and blocked its own
+# relaunch until it was killed by hand.
+_LIVE_CHILDREN: set = set()
+_LIVE_LOCK = threading.Lock()
+
+
+def _watch_child(child) -> None:
+    with _LIVE_LOCK:
+        _LIVE_CHILDREN.add(child)
+
+
+def _forget_child(child) -> None:
+    with _LIVE_LOCK:
+        _LIVE_CHILDREN.discard(child)
+
+
+def _end_live_children() -> None:
+    """Stop everything this broker started. Called on the way out, once."""
+    try:
+        import passbook_grant
+    except ImportError:
+        return
+    with _LIVE_LOCK:
+        children = list(_LIVE_CHILDREN)
+        _LIVE_CHILDREN.clear()
+    for child in children:
+        if child.poll() is not None:
+            continue
+        try:
+            passbook_grant._end_process_group(child)
+        except Exception:  # noqa: BLE001 — shutdown must finish regardless
+            pass
+
+
 def _pin_reason(app: str, verdict: Mapping[str, Any]) -> str:
     """What to write in the record when a pin refuses. Never argv.
 
@@ -1325,12 +1364,18 @@ def _spawn_streaming(payload: Mapping[str, Any], root: Path | None,
         except OSError:
             return False
 
+    started: list = []
     answer = passbook_grant.stream(
         command, values, app=app, cwd=str(payload.get("cwd") or ""),
         extra_env=payload.get("env") if isinstance(payload.get("env"), Mapping) else None,
         grant=token, stdout=_Frames("out"), stderr=_Frames("err"),
-        caller_present=_caller_present)
+        caller_present=_caller_present,
+        on_child=lambda child: (_watch_child(child), started.append(child)))
 
+    for child in started:
+        # It has already exited; keeping the handle would make the shutdown
+        # sweep grow without bound on a long-lived broker.
+        _forget_child(child)
     if answer.get("ok"):
         _remember_grant(token, app=app, keys=values, command=command, pid=None,
                         values=values)
@@ -1719,7 +1764,12 @@ def serve(*, root: Path | None = None, ready: threading.Event | None = None,
     except KeyboardInterrupt:
         pass
     finally:
-        # Whatever ends us, the data key goes with us. It only ever lived here.
+        # Whatever ends us, the data key goes with us. It only ever lived here —
+        # and so does everything we started, which is holding values opened with
+        # it. Children first: once the key is gone they could not be re-served
+        # anyway, and leaving them would mean live credentials in a process the
+        # operator believes they just locked.
+        _end_live_children()
         with _VAULT_LOCK:
             _forget_dek()
         passbook.set_unsealer(None)

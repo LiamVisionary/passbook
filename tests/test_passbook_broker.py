@@ -1089,3 +1089,36 @@ def test_a_guard_still_refuses_a_grant_backed_caller(broker):
         "op": "spawn", "app": "anything", "keys": ["ALPHA", "BETA"],
         "command": ["sh", "-c", "echo hi"]}, timeout=30)
     assert "ALPHA" in answer["denied"], "a guard was bypassed by a grant"
+
+
+@needs_a_posix_shell
+def test_a_broker_ends_what_it_started_when_it_stops(broker):
+    """A restart used to orphan every long-running grant-backed process.
+
+    They kept the credentials the broker had opened for them, against a vault
+    that had just locked — and, now that each gets its own process group, kept
+    whatever port they held, so the service manager's replacement could not
+    bind. Measured on a real machine: `passbook broker restart` left the
+    collector holding 8798 and blocking its own relaunch until it was killed
+    by hand.
+    """
+    import subprocess
+    import time
+
+    marker = Path(passbook.root()) / "long-child.pid"
+    started = subprocess.Popen(  # noqa: S603
+        [sys.executable, "-c",
+         "import os,sys,time,pathlib;"
+         f"pathlib.Path({str(marker)!r}).write_text(str(os.getpid()));"
+         "time.sleep(60)"])
+    # Registered the way a streamed child is, then swept the way shutdown does.
+    passbook_broker._watch_child(started)
+    for _ in range(50):
+        if marker.exists():
+            break
+        time.sleep(0.1)
+    assert marker.exists(), "the stand-in child never started"
+
+    passbook_broker._end_live_children()
+    started.wait(timeout=10)
+    assert started.poll() is not None, "the broker left a child running"

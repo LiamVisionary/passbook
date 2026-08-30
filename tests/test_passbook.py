@@ -1270,6 +1270,11 @@ def _tail_the_old_way(path):
     return lines[-1] if lines else None
 
 
+# Explicit ids, because pytest builds one from the VALUES otherwise — and two
+# of these bodies are 50KB and 200KB. That id goes into PYTEST_CURRENT_TEST,
+# and Windows caps a single environment variable at 32767 characters, so the
+# whole file died there with "the environment variable is longer than 32767
+# characters" while passing everywhere else.
 @pytest.mark.parametrize("shape,body", [
     ("empty", b""),
     ("one row, no trailing newline", b'{"a":1}'),
@@ -1285,7 +1290,7 @@ def _tail_the_old_way(path):
     ("crlf", b'{"a":1}\r\n{"b":2}\r\n'),
     ("cr only", b'{"a":1}\r{"b":2}\r'),
     ("mixed endings", b'{"a":1}\r\n{"b":2}\n{"c":3}\r\n'),
-])
+], ids=lambda value: value if isinstance(value, str) else "")
 def test_the_tail_read_agrees_with_reading_the_whole_file(tmp_path, shape, body):
     import passbook_stamp
 

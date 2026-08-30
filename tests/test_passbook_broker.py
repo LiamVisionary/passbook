@@ -769,11 +769,22 @@ def test_a_broker_that_cannot_stand_down_is_reported_as_a_stray(broker):
         # the CI runners and passed locally, and the bare assertion cost two
         # round trips before it said anything useful.
         seen = passbook_broker._broker_processes()
+        raw = []
+        for argv in (["ps", "-eo", "pid=,command="], ["ps", "-eo", "pid,args"]):
+            try:
+                got = subprocess.run(argv, capture_output=True, text=True, timeout=5)
+                hits = [ln for ln in got.stdout.splitlines() if "passbook" in ln]
+                raw.append(f"{' '.join(argv)} -> rc={got.returncode} "
+                           f"lines={len(got.stdout.splitlines())} hits={hits[:3]} "
+                           f"err={got.stderr.strip()[:80]!r}")
+            except Exception as error:  # noqa: BLE001
+                raw.append(f"{' '.join(argv)} -> raised {error!r}")
         assert mine, (
             f"a broker with no socket left was not reported.\n"
             f"  looking for pid {pid}\n"
             f"  _broker_processes saw: {seen}\n"
-            f"  strays returned: {passbook_broker.strays()}")
+            f"  strays returned: {passbook_broker.strays()}\n"
+            + "\n".join(f"  {line}" for line in raw))
         assert mine[0]["root"] == str(broker), "reported without saying which store"
     finally:
         os.kill(pid, signal.SIGCONT)

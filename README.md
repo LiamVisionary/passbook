@@ -42,6 +42,7 @@ you see here, you can do from a terminal.
 - [Encryption](#encryption)
 - [Who can read what](#who-can-read-what)
 - [Activity](#activity)
+- [Fleet replication](#fleet-replication)
 - [Devices](#devices)
 - [Sign-ins that stay alive](#sign-ins-that-stay-alive)
 - [Add to PassBook](#add-to-passbook)
@@ -557,6 +558,53 @@ passbook history --verify        # re-hash the chain and say whether it holds
 
 Tamper evident, not tamper proof. It does not prevent an access. It makes one
 impossible to hide.
+
+---
+
+## Fleet replication
+
+Machines on the same tailnet keep one store between them. Dry by default: it
+shows its working before it moves anything.
+
+```bash
+passbook sync                    # what would move, and where from
+passbook sync --apply            # actually pull it
+passbook sync --maintenance      # backfill, retry, pull and seed in one pass
+```
+
+**Newest wins, per key** — but not always what you want, so:
+
+| | |
+|---|---|
+| `--conflict local-wins` | never overwrite a value this machine has, while you work out why a peer disagrees |
+| `--conflict remote-wins` | take the peer's copy, for a deliberate one-way seed |
+| `--conflict fail` | change nothing and name every disagreement |
+| `--from HOST` | one named peer instead of all of them |
+| `--backfill-meta` | stamp keys carrying no timestamp |
+| `--push-missing` | seed a peer with keys it genuinely lacks |
+| `--retry-pending` | resend what did not arrive last time |
+
+No conflict policy overrides the two refusals. A peer's `hive-sealed:` blob is
+encrypted under *that* machine's key and is refused whatever you ask for, and a
+local value the vault will not open is never overwritten — neither is a
+conflict, they are cases with nothing to compare.
+
+**A key with no timestamp is stranded in both directions.** `plan_pull` reads
+its age as zero and will not overwrite it; serving it offers `updatedAt: 0` so
+no peer adopts it either. It sits on whichever machine wrote it and diverges
+the moment anyone edits it elsewhere. `--backfill-meta` stamps those, and runs
+first so they take part in the same pass.
+
+**Seeding refuses to guess.** A key missing from a peer's payload is not
+necessarily one the peer lacks: a machine whose vault is shut serves exactly
+what it can read and leaves the rest out. So a peer has to *say* it withheld
+nothing before anything is sent to it; one that cannot say is sent nothing. An
+absent key is a gap the next pass fills. An overwrite is not undoable.
+
+That is not hypothetical. This machine's own collector was serving 18 of 305
+keys to the fleet — it had lost its credentials and nobody could tell from the
+outside — and a blind push would have re-sent the other 286 over keys the peers
+already had.
 
 ---
 

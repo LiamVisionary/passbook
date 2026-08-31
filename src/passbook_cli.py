@@ -356,12 +356,34 @@ def cmd_add(args: argparse.Namespace) -> int:
         values.update(passbook.parse_env_text(text))
         if not values:
             return _fail("Nothing on stdin looked like KEY=value.")
+    # A plain `.env` from somewhere else — another runtime's file, a colleague's
+    # export. Read here rather than by shell redirection so the failure for a
+    # missing or unreadable file names the file.
+    if getattr(args, "from_env", ""):
+        source = Path(args.from_env).expanduser()
+        try:
+            values.update(passbook.parse_env_text(source.read_text(encoding="utf-8")))
+        except OSError as error:
+            return _fail(f"Could not read {source}: {error}")
+        if not values:
+            return _fail(f"Nothing in {source} looked like KEY=value.")
     for item in args.pairs:
         if "=" in item:
             key, _, value = item.partition("=")
             values[key.strip()] = value.strip()
             continue
         key = item.strip()
+        if getattr(args, "if_absent", False):
+            # hive-env's `--ensure-placeholder` writes `KEY=` to reserve a name.
+            # That does not port, and should not: this store drops empty values
+            # on write, so the placeholder would vanish silently — and if it did
+            # not, `passbook check` would answer `set` for a key holding nothing,
+            # which is the one answer worse than `missing`.
+            return _fail(
+                f"No value given for {key}, and --if-absent will not prompt.",
+                "There is no placeholder here: a key is present or it is not, so "
+                "that `check` can never say `set` about nothing.\n"
+                f"Give it a value:  passbook add --if-absent {key}=value")
         if not sys.stdin.isatty():
             return _fail(
                 f"No value given for {key}.",
@@ -382,6 +404,13 @@ def cmd_add(args: argparse.Namespace) -> int:
     # separately: a machine that wants to be told before a credential CHANGES
     # usually does not want a dialog for every new one.
     held = set(passbook.key_names())
+    if getattr(args, "if_absent", False):
+        already = sorted(k for k in values if k in held)
+        values = {k: v for k, v in values.items() if k not in held}
+        if already:
+            print(f"already set, left alone: {', '.join(already)}")
+        if not values:
+            return 0
     fresh = [k for k in values if k not in held]
     existing = [k for k in values if k in held]
     who = caller("passbook-add", args)
@@ -417,7 +446,18 @@ def cmd_remove(args: argparse.Namespace) -> int:
         result = passbook.remove_values(args.keys)
     except passbook.ContainerisedHomeError as error:
         return _fail(str(error))
+    # Recorded, because this is the one mutation that can break another app and
+    # it was the only one leaving no trace: the record showed credentials
+    # arriving and never showed them going.
     if result["removed"]:
+        try:
+            import passbook_stamp
+
+            passbook_stamp.stamp(op="remove", keys=result["removed"],
+                                 app=caller("passbook-delete", args),
+                                 reason="deleted from the store")
+        except Exception:  # noqa: BLE001 — a missing ledger must not fail a delete
+            pass
         print(f"removed: {', '.join(result['removed'])}")
     if result["absent"]:
         print(f"not in the store: {', '.join(result['absent'])}")
@@ -2765,7 +2805,23 @@ def cmd_sync(args: argparse.Namespace) -> int:
     if delegated is not None:
         return delegated
 
+    # One pass that does the lot, for a periodic job. Still dry unless --apply:
+    # a maintenance loop that wrote by default would be the one verb in here
+    # that changes a fleet without being asked twice.
+    if args.maintenance:
+        args.backfill_meta = True
+        args.retry_pending = True
+        args.push_missing = True
+
     peers = passbook_fleet.reachable()
+    if args.from_peer:
+        wanted = args.from_peer.split("@")[-1].strip().lower()
+        peers = [p for p in peers
+                 if wanted in (str(p.get("host", "")).lower(), str(p.get("address", "")).lower())]
+        if not peers:
+            return _fail(f"No peer here matches {args.from_peer}.",
+                         "See who is reachable:  passbook sync --json")
+
     if not peers:
         ok, detail = passbook_fleet.available()
         if not ok:
@@ -2777,6 +2833,17 @@ def cmd_sync(args: argparse.Namespace) -> int:
     raw = passbook._read_raw(store) if hasattr(passbook, "_read_raw") else \
         passbook.parse_env_text(store.read_text(encoding="utf-8"))
     local_meta = passbook_sync.read_meta(store)
+
+    # First, because a key with no timestamp is invisible to every step below:
+    # `plan_pull` reads its age as 0.0 and will not overwrite it, and `serve`
+    # offers it as `updatedAt: 0` so no peer adopts it either. Stamping it here
+    # means it takes part in this same pass rather than the next one.
+    stamped: list[str] = []
+    if args.backfill_meta:
+        stamped = passbook_sync.plan_backfill(passbook.key_names(), local_meta)
+        if stamped and args.apply:
+            passbook_sync.touch_meta(store, stamped)
+            local_meta = passbook_sync.read_meta(store)
 
     # Open what this machine can, so comparison is between secrets rather than
     # representations. A value that will not open is marked, never guessed at.
@@ -2799,7 +2866,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
         else:
             payloads.append((peer["host"], got))
 
-    plan = passbook_sync.plan_pull(local, local_meta, payloads)
+    plan = passbook_sync.plan_pull(local, local_meta, payloads, conflict=args.conflict)
     allowed, withheld = passbook_sync.sendable({k: "" for k in raw})
 
     # A peer holding OUR ciphertext cannot open it, now or ever: the data key
@@ -2813,6 +2880,55 @@ def cmd_sync(args: argparse.Namespace) -> int:
             fix = passbook_sync.plan_repair(got, openable)
             if fix["broken"]:
                 repairs[host] = fix
+
+    # Seeding a peer with what it is entirely missing. Distinct from a pull
+    # (which is about newer values) and from a repair (which overwrites): this
+    # only ever fills a gap, so it can never lose anything.
+    seeding: dict[str, dict[str, str]] = {}
+    if args.push_missing:
+        policy = _access().read_policy() if _access() is not None else {}
+        openable = {k: v for k, v in local.items()
+                    if isinstance(v, str) and not passbook_vault.is_sealed(v)}
+        for host, got in payloads:
+            fill = passbook_sync.plan_push(openable, local_meta, got, policy=policy)
+            if fill["send"]:
+                seeding[host] = fill["send"]
+
+    # Debts from a previous run: a push can fail because a peer was asleep or a
+    # collector was restarting, and without a record that key is simply absent
+    # there until somebody happens to change it again.
+    owed = passbook_sync.read_pending()
+    retry = passbook_sync.plan_retry(owed, [p["host"] for p in peers
+                                            if p["host"] not in unreachable]) \
+        if args.retry_pending else {}
+
+    sent: dict[str, int] = {}
+    if args.apply and (seeding or retry):
+        for host in sorted({*seeding, *retry}):
+            peer = next((p for p in peers if p["host"] == host), None)
+            if peer is None:
+                continue
+            payload = dict(seeding.get(host) or {})
+            for key in retry.get(host, []):
+                value = local.get(key)
+                if isinstance(value, str) and not passbook_vault.is_sealed(value):
+                    payload[key] = value
+            if not payload:
+                continue
+            ok, why = passbook_sync.push(host, peer["port"], payload, address=peer["address"])
+            if ok:
+                sent[host] = len(payload)
+                passbook_sync.note_delivered(sorted(payload), host)
+            else:
+                # Written down rather than logged and forgotten: the whole point
+                # of the queue is that an absence survives the outage that made it.
+                passbook_sync.note_undelivered(sorted(payload), [host])
+                print(f"  could not send to {host}: {why}", file=sys.stderr)
+        # A peer we could not even reach still owes what this pass would have
+        # given it, so record that too rather than letting it fall off.
+        if seeding and unreachable:
+            passbook_sync.note_undelivered(
+                sorted({k for keys in seeding.values() for k in keys}), unreachable)
 
     # Record the machines that receive this store, so the Machines page stops
     # saying "no linked machines" while four of them hold it. Recorded as
@@ -2847,6 +2963,14 @@ def cmd_sync(args: argparse.Namespace) -> int:
                                "repairable": len(fix["repair"]),
                                "cannotOpen": len(fix["cannotOpen"])}
                         for host, fix in repairs.items()},
+            "conflict": plan["conflict"],
+            "disagreed": plan["disagreed"],
+            "heldByConflictPolicy": plan["heldByConflictPolicy"],
+            "stampedMissingMeta": stamped,
+            "wouldSeed": {host: sorted(keys) for host, keys in seeding.items()},
+            "wouldRetry": retry,
+            "sent": sent,
+            "stillOwed": {k: v["owed"] for k, v in passbook_sync.read_pending().items()},
         }, indent=2))
         return 0
 
@@ -2886,6 +3010,34 @@ def cmd_sync(args: argparse.Namespace) -> int:
                 print(f"  could not repair {host}: {why}", file=sys.stderr)
         if repairs and not args.apply:
             print("\nNothing was sent. Add --apply to repair.")
+
+    if args.backfill_meta:
+        print(f"\nkeys with no timestamp: {len(stamped)}"
+              + ("" if args.apply or not stamped else "  (add --apply to stamp them)"))
+        for key in stamped[:10]:
+            print(f"  ~ {key}")
+    if plan["heldByConflictPolicy"]:
+        print(f"\nheld back by --conflict {plan['conflict']}: "
+              f"{len(plan['heldByConflictPolicy'])}")
+        for key in plan["heldByConflictPolicy"][:10]:
+            print(f"  = {key}")
+    if plan["conflict"] == "fail" and plan["disagreed"]:
+        print(f"\n{len(plan['disagreed'])} key(s) differ and --conflict fail was asked for; "
+              "nothing will be pulled.")
+        for key in plan["disagreed"][:10]:
+            print(f"  ! {key}")
+    if args.push_missing:
+        total = sum(len(keys) for keys in seeding.values())
+        print(f"\nwould seed peers with: {total} key(s) they lack")
+        for host, keys in sorted(seeding.items()):
+            print(f"  -> {host}: {len(keys)}")
+    if args.retry_pending:
+        print(f"\nowed from earlier runs: {sum(len(v) for v in retry.values())} key(s)")
+        for host, keys in sorted(retry.items()):
+            print(f"  -> {host}: {len(keys)}")
+    if sent:
+        for host, count in sorted(sent.items()):
+            print(f"  sent {count} key(s) to {host}")
 
     if adopted:
         print(f"\nrecorded on the Machines page: {len(adopted)} machine(s)")
@@ -4743,6 +4895,10 @@ def build_parser() -> argparse.ArgumentParser:
     add.add_argument("pairs", nargs="*", metavar="KEY[=value]")
     add.add_argument("--replace", action="store_true", help="overwrite a key that is already set")
     add.add_argument("--stdin", action="store_true", help="read KEY=value lines from stdin")
+    add.add_argument("--from-env", dest="from_env", default="", metavar="FILE",
+                     help="read KEY=value lines from a plain .env file")
+    add.add_argument("--if-absent", dest="if_absent", action="store_true",
+                     help="only add keys that are not already set; never prompts")
     add.add_argument("--app", default="", help="who is asking; recorded")
     add.set_defaults(func=cmd_add)
 
@@ -5149,6 +5305,22 @@ def build_parser() -> argparse.ArgumentParser:
                           help="find peers holding ciphertext they cannot open, and offer to replace it")
     sync_cmd.add_argument("--no-adopt", dest="no_adopt", action="store_true",
                           help="do not record the peers on the Machines page")
+    sync_cmd.add_argument("--from", dest="from_peer", default="", metavar="HOST",
+                          help="only this peer, rather than every one on the tailnet")
+    sync_cmd.add_argument("--conflict", default="newest",
+                          choices=["newest", "local-wins", "remote-wins", "fail"],
+                          help="what to do when both sides hold a value and they differ")
+    sync_cmd.add_argument("--backfill-meta", dest="backfill_meta", action="store_true",
+                          help="stamp keys carrying no timestamp, which are frozen out "
+                               "of sync in both directions until they have one")
+    sync_cmd.add_argument("--push-missing", dest="push_missing", action="store_true",
+                          help="seed peers with keys they are entirely missing; never "
+                               "overwrites a value a peer already holds")
+    sync_cmd.add_argument("--retry-pending", dest="retry_pending", action="store_true",
+                          help="resend keys that did not reach every peer last time")
+    sync_cmd.add_argument("--maintenance", action="store_true",
+                          help="backfill, retry, pull and push-missing in one pass, "
+                               "then report; for a periodic job")
     sync_cmd.add_argument("--json", action="store_true")
     sync_cmd.set_defaults(func=cmd_sync)
 

@@ -44,6 +44,7 @@ The parts that were already right, kept deliberately intact:
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 import urllib.request
@@ -127,6 +128,132 @@ def touch_meta(store: Path, keys: Iterable[str], *, when: float | None = None) -
 
 
 # ── the policy gate: the reason this module exists ─────────────────────────
+
+# ── keys with no timestamp ─────────────────────────────────────────────────
+
+
+def plan_backfill(names: Iterable[str], meta: Mapping[str, float]) -> list[str]:
+    """Keys carrying no `updatedAt`, which are frozen out of sync BOTH ways.
+
+    A key lands in the store with no timestamp whenever something writes it
+    outside the sanctioned path — a hand edit, an older writer, a tool that
+    knows the file but not the meta. `plan_pull` then reads its age as 0.0 and
+    refuses to overwrite it, while `serve` offers it as `updatedAt: 0` so no
+    peer will adopt it either. The key is stuck on whichever machine wrote it
+    and diverges silently the moment anyone edits it somewhere else.
+
+    Stamping makes it eligible again. Pure, so the caller decides the clock.
+    """
+    return sorted(name for name in names
+                  if str(name) and not float(meta.get(str(name), 0.0) or 0.0))
+
+
+# ── keys that have not reached every peer ──────────────────────────────────
+#
+# A push can fail for reasons that have nothing to do with the key: a peer
+# asleep, a collector restarting, a tailnet that has not converged. Without a
+# record, that key is simply absent there until somebody happens to change it
+# again — which on a fleet means "until somebody notices", and the last time
+# nobody noticed for a day.
+#
+# So a failed delivery is written down per key per host, and retried. The file
+# holds NAMES and timestamps, never values: it is bookkeeping about replication,
+# not a second copy of the store.
+
+PENDING_FILENAME = "sync-pending.json"
+
+
+def pending_path(root: Path | None = None) -> Path:
+    import passbook
+
+    return (Path(root) if root is not None else passbook.root()) / PENDING_FILENAME
+
+
+def read_pending(root: Path | None = None) -> dict[str, dict[str, Any]]:
+    """What is still owed to which peers. Unreadable bookkeeping is empty."""
+    try:
+        data = json.loads(pending_path(root).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return {}
+    entries = data.get("pending") if isinstance(data, dict) else None
+    if not isinstance(entries, dict):
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for key, raw in entries.items():
+        if not isinstance(key, str) or not KEY_RE.match(key) or not isinstance(raw, dict):
+            continue
+        owed = raw.get("owed")
+        stamped = raw.get("ts")
+        out[key] = {
+            "ts": float(stamped) if isinstance(stamped, (int, float)) else 0.0,
+            "owed": sorted({str(h) for h in owed if str(h)}) if isinstance(owed, list) else [],
+        }
+    return {k: v for k, v in out.items() if v["owed"]}
+
+
+def write_pending(entries: Mapping[str, Mapping[str, Any]], root: Path | None = None) -> Path:
+    path = pending_path(root)
+    payload = {"version": 1, "pending": {
+        key: {"ts": float(entry.get("ts") or 0.0),
+              "owed": sorted({str(h) for h in (entry.get("owed") or []) if str(h)})}
+        for key, entry in sorted(entries.items())
+        if entry.get("owed")}}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.chmod(tmp, 0o600)
+    tmp.replace(path)
+    return path
+
+
+def note_undelivered(keys: Iterable[str], hosts: Iterable[str], *,
+                     when: float | None = None, root: Path | None = None) -> dict[str, dict[str, Any]]:
+    """Record that these keys did not reach these hosts. Additive."""
+    stamp = time.time() if when is None else float(when)
+    entries = read_pending(root)
+    owed_hosts = sorted({str(h) for h in hosts if str(h)})
+    if not owed_hosts:
+        return entries
+    for key in keys:
+        name = str(key)
+        if not name or not KEY_RE.match(name):
+            continue
+        entry = entries.setdefault(name, {"ts": stamp, "owed": []})
+        entry["ts"] = stamp
+        entry["owed"] = sorted({*entry.get("owed", []), *owed_hosts})
+    write_pending(entries, root)
+    return entries
+
+
+def note_delivered(keys: Iterable[str], host: str, *, root: Path | None = None) -> dict[str, dict[str, Any]]:
+    """Clear a debt. A key owed to nobody stops being pending at all."""
+    entries = read_pending(root)
+    target = str(host)
+    for key in keys:
+        entry = entries.get(str(key))
+        if not entry:
+            continue
+        entry["owed"] = [h for h in entry.get("owed", []) if h != target]
+    entries = {k: v for k, v in entries.items() if v["owed"]}
+    write_pending(entries, root)
+    return entries
+
+
+def plan_retry(pending: Mapping[str, Mapping[str, Any]],
+               reachable: Iterable[str]) -> dict[str, list[str]]:
+    """Which keys to resend to which reachable host. Pure.
+
+    A host that is still unreachable keeps its debt rather than losing it: the
+    point of the queue is that an absence survives the outage that caused it.
+    """
+    live = {str(h) for h in reachable if str(h)}
+    plan: dict[str, list[str]] = {}
+    for key, entry in pending.items():
+        for host in entry.get("owed", []):
+            if host in live:
+                plan.setdefault(host, []).append(str(key))
+    return {host: sorted(keys) for host, keys in sorted(plan.items())}
+
 
 def may_leave_machine(key: str, policy: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """May this key be sent to another machine at all?
@@ -309,13 +436,29 @@ def push(host: str, port: str, values: Mapping[str, str], *, address: str = "",
     return False, str(answer.get("error") or "the collector refused it")
 
 
+CONFLICT_POLICIES = ("newest", "local-wins", "remote-wins", "fail")
+
+
 def plan_pull(local_values: Mapping[str, Any], local_meta: Mapping[str, float],
-              payloads: Iterable[tuple[str, Mapping[str, Any]]]) -> dict[str, Any]:
+              payloads: Iterable[tuple[str, Mapping[str, Any]]],
+              *, conflict: str = "newest") -> dict[str, Any]:
     """What a pull WOULD change, given local state and what peers offered.
 
     Pure: no network, no disk, no clock. Every rule that decides whether a
     peer's value replaces a local one lives here so it can be tested directly
     and read in one place.
+
+    `conflict` decides what happens when both sides hold a value and they
+    differ. `newest` is the default and the only one that needs timestamps:
+
+      newest       the later `updatedAt` wins; an unknown local age holds
+      local-wins   never overwrite a value this machine already has
+      remote-wins  take the peer's copy whatever the ages say
+      fail         change nothing and report every disagreement
+
+    `local-wins` and `remote-wins` still refuse a peer's ciphertext and still
+    refuse to guess at a value the vault will not open: those are not conflict
+    resolution, they are cases where there is nothing to compare.
     """
     candidates: dict[str, tuple[str, float, str]] = {}
     sealed_from_peers: list[str] = []
@@ -344,9 +487,15 @@ def plan_pull(local_values: Mapping[str, Any], local_meta: Mapping[str, float],
             if best is None or age > best[1]:
                 candidates[key] = (value, age, host)
 
+    wanted = str(conflict or "newest").strip().lower()
+    if wanted not in CONFLICT_POLICIES:
+        raise ValueError(f"conflict must be one of {', '.join(CONFLICT_POLICIES)}")
+
     apply: dict[str, tuple[str, float, str]] = {}
     skipped_unknown_age: list[str] = []
     skipped_shut: list[str] = []
+    disagreed: list[str] = []
+    held_by_policy: list[str] = []
     for key, (value, age, source) in sorted(candidates.items()):
         local_age = float(local_meta.get(key, 0.0))
         if key in local_values:
@@ -355,19 +504,33 @@ def plan_pull(local_values: Mapping[str, Any], local_meta: Mapping[str, float],
                 # Refusing to compare is refusing to overwrite: without the
                 # secret there is no telling "the peer agrees" from "the peer is
                 # newer", and guessing wrong writes plaintext over a sealed value.
+                # No conflict policy reaches this — there is nothing to compare.
                 skipped_shut.append(key)
                 continue
             if local == value:
                 continue
-            if age <= local_age:
+            disagreed.append(key)
+            if wanted == "local-wins":
+                held_by_policy.append(key)
                 continue
-            if local_age == 0.0:
-                skipped_unknown_age.append(key)
+            if wanted == "fail":
                 continue
+            if wanted == "newest":
+                if age <= local_age:
+                    continue
+                if local_age == 0.0:
+                    skipped_unknown_age.append(key)
+                    continue
+            # remote-wins falls through: the peer's copy is taken as given.
         elif local_age and age <= local_age:
             # Tombstoned: removed here after the peer's copy was written.
             continue
         apply[key] = (value, age, source)
+
+    if wanted == "fail" and disagreed:
+        # Report, change nothing. Half-applying a run the caller asked to abort
+        # is the worst of both answers.
+        apply = {}
 
     return {
         "apply": {key: value for key, (value, _, _) in apply.items()},
@@ -375,6 +538,9 @@ def plan_pull(local_values: Mapping[str, Any], local_meta: Mapping[str, float],
         "skippedUnknownAge": skipped_unknown_age,
         "skippedSealedShut": skipped_shut,
         "refusedSealedFromPeer": sorted(set(sealed_from_peers)),
+        "conflict": wanted,
+        "disagreed": sorted(set(disagreed)),
+        "heldByConflictPolicy": sorted(set(held_by_policy)),
     }
 
 
@@ -388,10 +554,37 @@ def plan_push(local_values: Mapping[str, str], local_meta: Mapping[str, float],
     """
     theirs = peer_payload.get("values") if isinstance(peer_payload.get("values"), dict) else {}
     allowed, withheld = sendable(local_values, policy=policy)
-    missing = {key: value for key, value in allowed.items() if key not in theirs}
+
+    # A key absent from a peer's payload is not necessarily a key the peer
+    # LACKS. `serve` leaves out anything it could not open, so a peer whose
+    # vault is shut offers a short list of exactly the values it can read — and
+    # seeding it "what it is missing" would rewrite hundreds of keys it already
+    # has. Measured: this machine's own collector served 18 of 305, and a blind
+    # push-missing would have re-sent the other 286.
+    #
+    # So the peer has to SAY it withheld nothing. `withheldSealed` is part of
+    # the serve contract; a payload without the field is an older or foreign
+    # server that cannot tell us, and the answer there is to send nothing rather
+    # than to guess. An absent key is a gap a later pass can fill; an overwrite
+    # is not undoable.
+    unopenable = peer_payload.get("withheldSealed")
+    if not isinstance(unopenable, list):
+        return {
+            "send": {},
+            "withheldByPolicy": sorted(withheld),
+            "reasons": withheld,
+            "updatedAt": {},
+            "cannotTell": True,
+        }
+
+    shut = {str(name) for name in unopenable}
+    missing = {key: value for key, value in allowed.items()
+               if key not in theirs and key not in shut}
     return {
         "send": missing,
         "withheldByPolicy": sorted(withheld),
         "reasons": withheld,
         "updatedAt": {key: local_meta.get(key, 0.0) for key in missing},
+        "heldBackAsUnopenableThere": sorted(shut & set(allowed)),
+        "cannotTell": False,
     }

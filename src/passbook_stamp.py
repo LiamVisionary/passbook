@@ -82,6 +82,13 @@ OPERATIONS = frozenset({
     # An OAuth grant renewed on the caller's behalf. Worth its own row: a
     # refresh that starts failing is the earliest sign a sign-in has died.
     "refresh",
+    # A key deleted. `remove` is the one operation that can break another app on
+    # this box, and it was the only mutation leaving no trace at all: `add`
+    # wrote a `write` row and `remove` wrote nothing, so the record could show a
+    # credential appearing and never show it going. It has also been the buggy
+    # one — a sealed key that reported `removed` and stayed on disk — which is
+    # precisely the case a receipt is for.
+    "remove",
     # A whole store leaving or entering the machine. The single most
     # consequential thing anyone can do here, and the row an audit looks for
     # first, so it is never folded into "read".

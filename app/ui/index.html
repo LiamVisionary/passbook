@@ -88,7 +88,7 @@
     width: 216px; flex: 0 0 216px; background: var(--sidebar);
     backdrop-filter: saturate(180%) blur(20px);
     border-right: 1px solid var(--line);
-    padding: 30px 10px 10px; -webkit-app-region: drag;
+    padding: 30px 10px 10px;
     display: flex; flex-direction: column;
   }
   .brand { display: flex; align-items: center; gap: 8px; padding: 6px 8px 14px; }
@@ -96,7 +96,7 @@
   .brand span { font-size: 13.5px; font-weight: 700; letter-spacing: -0.012em; }
   .navlist { display: flex; flex-direction: column; gap: 1px; }
   .navlist button {
-    -webkit-app-region: no-drag; display: flex; align-items: center; gap: 9px;
+    display: flex; align-items: center; gap: 9px;
     width: 100%; text-align: left; padding: 6px 9px; border: 0; border-radius: 7px;
     background: transparent; color: var(--ink1); font: inherit; cursor: default;
   }
@@ -120,7 +120,6 @@
      so one `margin-top: auto` does for both. */
   .navbottom { margin-top: auto; display: flex; flex-direction: column; gap: 8px; }
   .navfoot {
-    -webkit-app-region: no-drag;
     display: flex; align-items: center; gap: 4px; width: 100%;
     padding: 5px 6px 5px 9px; border: 1px solid var(--line); border-radius: 9px;
     background: var(--card); color: var(--ink1);
@@ -145,8 +144,7 @@
   .navfoot.exposed .navfoot-t { color: var(--warn); }
 
   /* ── content ─────────────────────────────────────────────────────────── */
-  main { flex: 1; overflow-y: auto; padding: 30px 28px 32px; -webkit-app-region: drag; }
-  main > * { -webkit-app-region: no-drag; }
+  main { flex: 1; overflow-y: auto; padding: 30px 28px 32px; }
   h2 { font-size: 21px; font-weight: 700; letter-spacing: -0.022em; }
   .lede { color: var(--ink2); margin: 3px 0 0; max-width: 62ch; }
   .pagehead { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 18px; }
@@ -202,6 +200,15 @@
   button.act:hover { background: var(--sel); }
   button.act.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
   button.act.primary:hover { filter: brightness(1.07); }
+  /* The same argument as `.iconbtn.done`, for a button that carries a word:
+     the press is answered where it happened, not in the notice bar at the far
+     end of the page. Green rather than the accent, so a glance can tell "this
+     worked" from "this is the button you want". */
+  button.act.done, button.act.primary.done {
+    background: var(--good-soft); border-color: var(--good-soft); color: var(--good);
+  }
+  button.act.primary.done:hover { background: var(--good-soft); filter: none; }
+  button.act.done svg { animation: pop .22s ease-out; }
   button.act.danger { color: var(--warn); }
   button.act.danger:hover { background: var(--warn-soft); }
   /* The button that removes a credential was styled `primary` — the same blue
@@ -266,6 +273,12 @@
   .addrow + .addrow { border-top: 0; padding-top: 0; }
   .keyrow { padding: 7px 14px; }
   .keyrow.open { background: var(--bg2); padding-bottom: 12px; }
+  /* Which of a few hundred rows is the one that just appeared. */
+  .keyrow.justadded { animation: settle 2.2s ease-out; }
+  @keyframes settle {
+    0%, 55% { background: var(--good-soft); }
+    100%    { background: transparent; }
+  }
   /* The chevron turns down when the row is open — the only thing on the row
      that says which of a few hundred is the one you opened. */
   .disclose svg { transition: transform .18s cubic-bezier(.2,.8,.3,1); }
@@ -407,6 +420,9 @@
   @media (prefers-reduced-motion: reduce) {
     .iconbtn.done svg { animation: none; }
     .iconbtn:active { transform: none; }
+    button.act.done svg { animation: none; }
+    /* The mark still has to be visible without the fade that makes it one. */
+    .keyrow.justadded { animation: none; background: var(--good-soft); }
   }
   .iconbtn.danger:hover { background: var(--warn-soft); color: var(--warn); }
   .iconbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -617,14 +633,12 @@
   #gate {
     position: fixed; inset: 0; z-index: 100; display: grid; place-items: center;
     padding: 24px; background: var(--bg); overflow-y: auto;
-    -webkit-app-region: drag;
   }
   /* An id beats [hidden] on specificity, so `display: grid` above would keep
      this on screen after gate.hidden = true — an empty, opaque, full-window
      sheet over the store, which is what a signed-in window would show. The
      attribute has to be given a rule of its own to mean anything here. */
   #gate[hidden] { display: none; }
-  #gate > * { -webkit-app-region: no-drag; }
   .gwrap { width: min(860px, 100%); display: grid; gap: 28px; justify-items: center; }
   .ghead { display: grid; justify-items: center; gap: 6px; margin-bottom: 4px; }
   .gmark {
@@ -791,10 +805,8 @@
   #ask {
     position: fixed; inset: 0; z-index: 120; display: grid; place-items: center;
     padding: 24px; background: var(--bg); overflow-y: auto;
-    -webkit-app-region: drag;
   }
   #ask[hidden] { display: none; }
-  #ask > * { -webkit-app-region: no-drag; }
   .awrap { width: min(520px, 100%); display: grid; gap: 18px; }
   .acard {
     background: var(--card); border: 1px solid var(--line); border-radius: 16px;
@@ -943,10 +955,24 @@
 
 </style>
 
-<nav id="nav"></nav>
-<main id="main"><p class="empty">Reading this device…</p></main>
-<div id="gate" hidden></div>
-<div id="ask" hidden></div>
+<!-- What you take hold of to move this window.
+     There is no title bar to grab: `TitleBarStyle::Overlay` runs the webview up
+     under the traffic lights, so every pixel you could drag belongs to a web
+     page. That was done here with `-webkit-app-region: drag`, which is
+     Chromium's answer and does not exist in WKWebView — the property does not
+     even parse there, so the rules were dead and the window could not be moved
+     at all. Tauri's own drag region is this attribute, read by a script it
+     injects into the page.
+     `deep` drags from anywhere inside the sidebar; the bare form drags only
+     when the element itself is what was clicked, which is exactly what the old
+     `> * { -webkit-app-region: no-drag }` rules meant. Buttons, links and
+     inputs are exempt without being marked. It also needs
+     `core:window:allow-start-dragging` in capabilities/default.json, or the
+     drag is refused at the ACL with the page none the wiser. -->
+<nav id="nav" data-tauri-drag-region="deep"></nav>
+<main id="main" data-tauri-drag-region><p class="empty">Reading this device…</p></main>
+<div id="gate" hidden data-tauri-drag-region></div>
+<div id="ask" hidden data-tauri-drag-region></div>
 <div id="drop" hidden></div>
 
 <script>
@@ -1028,7 +1054,7 @@ Use the copy button to put it on the clipboard."
   /** Start this key's clock, replacing any clock it already had. */
   function holdFor(k) {
     clearTimeout(hideTimers[k]);
-    hideTimers[k] = setTimeout(() => { hideValue(k); paint(); }, HIDE_AFTER);
+    hideTimers[k] = setTimeout(() => { hideValue(k); paintKeepingCaret(); }, HIDE_AFTER);
   }
 
   /** The icon set.
@@ -1170,6 +1196,15 @@ Use the copy button to put it on the clipboard."
   let expanded = {};    // key -> true while its settings are open
   let selectMode = false;   // whether rows show a checkbox
   let adding = false;       // whether the add-a-key fields are on screen
+  // The key the Add button has just written, held only long enough to say so.
+  //
+  // Adding used to answer with nothing at all: the fields cleared, and the row
+  // it made was somewhere in a list that is grouped, capped and possibly
+  // filtered — so on any real store the honest reading of the screen was that
+  // the press had done nothing. The button says it instead, where the eye
+  // already is, and the row it made is marked for the same moment.
+  let justAdded = "";
+  let justAddedTimer = 0;
   // key -> { token, length, hold_ms } once its value has been drawn. Not the
   // value: a revealed credential is now a picture fetched from /veil, and this
   // side never holds the string at all.
@@ -1205,11 +1240,20 @@ Use the copy button to put it on the clipboard."
   let query = "";
   let history = {};   // key -> rows, fetched only when someone opens it
 
+  /** Run a store command. Answers whether it worked, for the callers that
+   *  have something to say afterwards; a failure has already said it in
+   *  `notice` by then. */
   async function call(name, args = {}) {
     busy = true; paint();
-    try { const next = await invoke(name, args); notice = ""; state = next; }
-    catch (e) { notice = String(e); }
+    try { const next = await invoke(name, args); notice = ""; state = next; return true; }
+    catch (e) { notice = String(e); return false; }
     finally { busy = false; paint(); }
+  }
+
+  function markAdded(name) {
+    justAdded = name;
+    clearTimeout(justAddedTimer);
+    justAddedTimer = setTimeout(() => { justAdded = ""; paintKeepingCaret(); }, 2200);
   }
 
   /** Vault commands answer with vault state, not store state. */
@@ -1449,7 +1493,7 @@ Use the copy button to put it on the clipboard."
         : "nothing can read it";
     const glyph = exposed ? "alert" : open ? "unlock" : "lock";
 
-    return `<div class="navfoot ${tone}">
+    return `<div class="navfoot ${tone}" data-tauri-drag-region="false">
       <button class="navfoot-main" data-page="vault"
         title="${exposed ? `${bare} value(s) are in the clear on disk` : "Workspace and sign-in"}">
         ${icon(glyph, "navicon")}
@@ -1555,7 +1599,8 @@ Use the copy button to put it on the clipboard."
     // someone "Vault locked" in the sidebar while the eye icon beside every key
     // still worked, and the sentence that explained why was below 279 rows.
     const bare = readable ? readable.has(k) : false;
-    return `<div class="keyrow${open ? " open" : ""}">
+    return `<div class="keyrow${open ? " open" : ""}${k === justAdded ? " justadded" : ""}"
+      data-keyrow="${esc(k)}">
       <div class="head">
         ${selectMode ? `<input type="checkbox" class="pick" data-pick="${esc(k)}"
           ${picked[k] ? "checked" : ""} aria-label="Select ${esc(k)}" />` : ""}
@@ -1698,7 +1743,7 @@ Use the copy button to put it on the clipboard."
     copiedTimers[mark] = setTimeout(() => {
       delete copied[mark];
       delete copiedTimers[mark];
-      paint();
+      paintKeepingCaret();
     }, 1400);
   }
 
@@ -1870,7 +1915,9 @@ Use the copy button to put it on the clipboard."
         ${adding ? `<div class="addrow">
           <input id="k" placeholder="Name" spellcheck="false" autocapitalize="off" />
           <input id="v" type="password" placeholder="Value" />
-          <button class="act primary" id="addgo" ${busy ? "disabled" : ""}>Add</button>
+          <button class="act primary${justAdded ? " done" : ""}" id="addgo"
+            ${busy ? "disabled" : ""}>${justAdded
+              ? `${icon("check")} Added` : "Add"}</button>
         </div>` : ""}
         ${selectMode ? bulkBar(keys) : ""}
         ${groupedKeys(keys)
@@ -2792,6 +2839,9 @@ passbook oauth connect google:work</pre>
     // would claim the one thing that did not happen.
     use:       { did: "used", didnt: "could not use" },
     write:     { did: "changed", didnt: "could not change" },
+    // "deleted", not "changed": a key that is gone is a different event from a
+    // key with a new value, and the window has to be able to show which.
+    remove:    { did: "deleted", didnt: "could not delete" },
     denied:    { did: "was refused", didnt: "was refused" },
     ask:       { did: "asked to use", didnt: "asked to use" },
     approve:   { did: "was allowed", didnt: "was allowed" },
@@ -2816,7 +2866,7 @@ passbook oauth connect google:work</pre>
     approve: "check", unlock: "unlock", lock: "lock", refresh: "history",
     export: "out", import: "into", link: "link", unlink: "cross",
     provision: "plus", signin: "unlock", signout: "lock", seal: "lock",
-    use: "unlock",
+    use: "unlock", remove: "trash",
     unseal: "unlock", recovery: "shield",
   };
 
@@ -4135,6 +4185,46 @@ passbook oauth connect google:work</pre>
     });
   }
 
+  /** Is the caret in something a repaint would erase?
+   *
+   *  Only text entry counts. A button, a tickbox and a dropdown all keep focus
+   *  after they are clicked, and none of them hold anything that was typed —
+   *  counting those would hold the window still for as long as it sat there.
+   */
+  const TYPED = new Set(["", "text", "password", "search", "email", "url",
+                         "tel", "number"]);
+  function typing(el) {
+    if (!el || el === document.body) return false;
+    if (el.isContentEditable) return true;
+    if (el.tagName === "TEXTAREA") return true;
+    return el.tagName === "INPUT"
+      && TYPED.has((el.getAttribute("type") || "").toLowerCase());
+  }
+
+  /** Repaint without emptying the field someone is typing into.
+   *
+   *  A paint replaces every node, so a field being typed into comes back blank.
+   *  That is right after a button was pressed — the add row is meant to clear —
+   *  but wrong for the clocks that repaint on their own: a "Copied" tick
+   *  reverting, a revealed value expiring, the "Added" button going back to
+   *  "Add". Those used to wipe a name half-way through it. The typed text and
+   *  the caret come across, and only into a field the repaint left empty, so a
+   *  field the window fills in itself still wins.
+   */
+  function paintKeepingCaret() {
+    const el = document.activeElement;
+    if (!typing(el) || !el.id) { paint(); return; }
+    const { id, value } = el;
+    let at = value.length, to = value.length;
+    try { at = el.selectionStart ?? at; to = el.selectionEnd ?? to; } catch { /* refused */ }
+    paint();
+    const again = document.getElementById(id);
+    if (!again || again.value) return;
+    again.value = value;
+    again.focus();
+    try { again.setSelectionRange(at, to); } catch { /* refused */ }
+  }
+
   function paint() {
     if (!state) return;
     paintNav();
@@ -4665,7 +4755,25 @@ passbook oauth connect google:work</pre>
       const name = document.getElementById("k").value;
       const value = document.getElementById("v").value;
       if (!name.trim() || !value.trim()) { notice = "A key needs a name and a value."; paint(); return; }
-      await call("add_key", { name, value, replace: false });
+      if (!await call("add_key", { name, value, replace: false })) return;
+      // The store answers with the name it actually wrote, which is not always
+      // the one that was typed.
+      const wanted = name.trim().toLowerCase();
+      const added = (state?.store?.keys || []).find((k) => k.toLowerCase() === wanted)
+        || name.trim();
+      // A search that does not match the new key would hide the row this is
+      // about to point at, leaving the tick as the only evidence.
+      if (query.trim() && !added.toLowerCase().includes(query.trim().toLowerCase())) {
+        query = ""; resetRows();
+      }
+      markAdded(added);
+      paint();
+      [...main.querySelectorAll("[data-keyrow]")]
+        .find((el) => el.dataset.keyrow === added)
+        ?.scrollIntoView({ block: "nearest" });
+      // The fields are empty again after the repaint, so the next one can be
+      // typed straight away.
+      document.getElementById("k")?.focus();
     };
   }
 
@@ -4721,10 +4829,13 @@ passbook oauth connect google:work</pre>
     if (busy || confirming || audienceFor || bulkConfirm
         || Object.keys(picked).length || Object.keys(connecting).length
         || Object.keys(revealing).length) return;
-    if (focused?.classList?.contains("val") || focused?.classList?.contains("search")) return;
-    // A half-typed password must survive the refresh for the same reason a
-    // half-typed value does.
-    if (focused?.type === "password") return;
+    // Anything half-typed must survive the refresh — a key's name as much as
+    // its value. Naming the few fields worth protecting was the earlier
+    // approach, and it missed every field nobody thought to name: the repaint
+    // rebuilds `main` wholesale, so the text went with it mid-word. A field
+    // being typed into is the one thing on screen this window did not put
+    // there, so it waits for the caret to leave rather than listing fields.
+    if (typing(focused)) return;
     try {
       const next = await invoke("state");
       await refreshVault();

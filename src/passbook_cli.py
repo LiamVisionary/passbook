@@ -1430,6 +1430,11 @@ def cmd_vault(args: argparse.Namespace) -> int:
             "plaintext": state["plaintext"],
             "fully_sealed": state["fully_sealed"],
             "keystore": _keystore_note(),
+            # Whether a reboot opens this vault by itself. The window had no way
+            # to know this setting existed, so after a reboot it could not say
+            # why everything was shut, and offered nothing to change it — the
+            # answer lived only in `passbook vault --stay-open`.
+            "stay_open": _stay_open_state(),
             "detail": state["detail"],
         }
     if getattr(args, "json", False):
@@ -1439,6 +1444,21 @@ def cmd_vault(args: argparse.Namespace) -> int:
     if answer.get("supported"):
         print("Vault is open." if answer["unlocked"] else "Vault is locked.")
     return 0
+
+
+def _stay_open_state() -> dict[str, Any]:
+    """Whether a reboot opens the vault by itself, for the window.
+
+    Absent rather than guessed at when hardening is not installed: a window
+    that showed `off` there would be describing a setting the machine does not
+    have, and the two read identically to a person.
+    """
+    try:
+        import passbook_harden
+
+        return passbook_harden.stay_open_state()
+    except Exception:  # noqa: BLE001 — not installed, or a platform without it
+        return {}
 
 
 def _keystore_note() -> dict[str, Any]:

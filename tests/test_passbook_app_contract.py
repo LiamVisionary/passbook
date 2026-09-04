@@ -948,6 +948,127 @@ def test_a_brokered_child_still_gets_the_value_under_a_seal(machine, tmp_path):
         _cli("broker", "stop", home=machine)
 
 
+# ── `--reads` is the whole store's switch, and says so ──────────────────────
+#
+# `policy --app hivemindos --key PLAID_CLIENT_ID --reads open` exited 0, printed
+# "Reads are open", and left no trace of the app it named. Three separate
+# problems in one command:
+#
+#   1. It read as scoped and was not. The scope flags were dropped on the floor
+#      and the store-wide switch flipped anyway — so a command that looked like
+#      it touched one key on one app unsealed every key on the machine.
+#   2. Nothing was recorded for the app, so `policy` afterwards showed no row
+#      for it and the person went looking for a policy that had never existed.
+#   3. It implied a per-app exemption to sealed reads exists. It does not, and
+#      that is deliberate: the broker removed exactly that exemption because an
+#      app NAME is a claim (passbook_broker.py, above the sealed check).
+#      Anything can call itself `hivemindos` and read what the exemption opened.
+#
+# So the combination is refused rather than made to work. The refusal is the
+# honest answer — there is no scoped `--reads` to implement.
+
+
+def _reads_mode(home: Path) -> str:
+    import passbook_access as access
+
+    return str(access.read_policy(home).get("reads") or "open")
+
+
+@pytest.mark.parametrize("scope", [
+    ("--app", "hivemindos"),
+    ("--key", "DEMO_KEY"),
+    ("--app", "hivemindos", "--key", "DEMO_KEY"),
+])
+def test_reads_refuses_to_be_narrowed_by_a_scope(machine, scope):
+    """The reported command. It must fail loudly, and — the part that actually
+    bites — it must not flip the store-wide switch on its way out."""
+    assert _cli("policy", "--reads", "sealed", home=machine).returncode == 0
+    assert _reads_mode(machine) == "sealed"
+
+    done = _cli("policy", *scope, "--reads", "open", home=machine)
+
+    assert done.returncode != 0, f"policy {' '.join(scope)} --reads open exited 0"
+    assert _reads_mode(machine) == "sealed", (
+        "a command that refused still unsealed the store — this is the bug, not "
+        "the exit code"
+    )
+
+
+def test_the_refusal_explains_that_reads_is_store_wide(machine):
+    """A refusal that does not say why reads a policy that is arbitrary, and the
+    next thing somebody tries is the same command with `sudo`."""
+    done = _cli("policy", "--app", "hivemindos", "--key", "DEMO_KEY",
+                "--reads", "open", home=machine)
+    said = done.stdout + done.stderr
+
+    assert "--app" in said and "--key" in said, "the refusal must name what it rejected"
+    assert "claim" in said.lower(), (
+        "the refusal should say why there is no per-app exemption: a name is a claim"
+    )
+    assert "nothing was changed" in said.lower(), (
+        "it must say the store was left alone, or the reader assumes a partial write"
+    )
+    # And it must name the two things the person was probably reaching for.
+    assert "--mode" in said, "the refusal should point at the flag that IS scoped"
+    assert "passbook run" in said, "the refusal should name the way to use a sealed key"
+
+
+def test_a_refused_scope_writes_no_policy_row(machine):
+    """The second half of the original confusion: `policy` afterwards showed no
+    row for the app, because nothing had been written for it. A refusal must
+    leave that state honest rather than half-recording the app it rejected."""
+    _cli("policy", "--app", "hivemindos", "--key", "DEMO_KEY", "--reads", "open",
+         home=machine)
+
+    import passbook_access as access
+
+    assert "hivemindos" not in access.read_policy(machine).get("apps", {})
+    assert "hivemindos" not in _cli("policy", home=machine).stdout
+
+
+def test_reads_and_mode_together_are_refused_rather_than_half_applied(machine):
+    """`--mode` was discarded the same way whenever `--reads` was present: the
+    reads branch returned before the mode branch could run. Two switches, one
+    silently ignored."""
+    done = _cli("policy", "--mode", "ask", "--reads", "sealed", home=machine)
+
+    assert done.returncode != 0
+    assert _reads_mode(machine) == "open", "the ignored --mode still let --reads through"
+
+
+def test_reads_alone_still_sets_the_store_wide_switch(machine):
+    """The behaviour the refusal must not have cost. Both directions, because
+    `open` is the one an upgrade path depends on."""
+    assert _cli("policy", "--reads", "sealed", home=machine).returncode == 0
+    assert _reads_mode(machine) == "sealed"
+    assert _cli("policy", "--reads", "open", home=machine).returncode == 0
+    assert _reads_mode(machine) == "open"
+
+
+def test_a_scoped_mode_rule_still_writes_and_shows(machine):
+    """The other half of the same guard: the scope flags still mean what they
+    always meant when they are used with the flag that is actually scoped."""
+    assert _cli("policy", "--app", "hivemindos", "--key", "DEMO_KEY", "--mode",
+                "never", home=machine).returncode == 0
+
+    import passbook_access as access
+
+    rule = access.read_policy(machine)["apps"]["hivemindos"]["keys"]["DEMO_KEY"]
+    assert rule["mode"] == "never"
+    assert "hivemindos" in _cli("policy", home=machine).stdout
+
+
+def test_learn_may_still_seal_what_it_derived(machine):
+    """`--learn` consumes `--mode` and then falls through to the reads branch,
+    which is the one combination of the two that is meant to work. The guard
+    must not catch it."""
+    done = _cli("policy", "--learn", "--mode", "always", "--reads", "sealed",
+                home=machine)
+
+    assert done.returncode == 0, done.stderr[-400:]
+    assert _reads_mode(machine) == "sealed"
+
+
 def test_no_command_is_dispatched_on_the_main_thread():
     """A bare `#[tauri::command]` runs on the main thread.
 
@@ -967,3 +1088,63 @@ def test_no_command_is_dispatched_on_the_main_thread():
     # And the parser above must still be finding them, or this passes vacuously
     # on a file it can no longer read.
     assert len(_commands()) > 40, "the command parser has drifted from the source"
+
+
+def test_the_window_can_see_and_change_whether_a_restart_opens_the_vault():
+    """This setting was CLI-only, and the window did not know it existed.
+
+    So after a restart the app could not say why everything was shut — apps
+    getting no credentials, `add` refused — and offered nothing to change it.
+    The answer lived in `passbook vault --stay-open`, which you have to already
+    know about to go looking for.
+
+    Three pieces, and it is useless without all three: the state has to reach
+    the window, the window has to have a control, and the window has to be
+    allowed to call it.
+    """
+    import json
+    import re
+
+    cli = (REPO / "src/passbook_cli.py").read_text(encoding="utf-8")
+    assert '"stay_open": _stay_open_state()' in cli, "vault --json must carry it"
+
+    rust = (REPO / "app/src-tauri/src/main.rs").read_text(encoding="utf-8")
+    assert "fn set_stay_open(" in rust
+    block = re.search(r"tauri::generate_handler!\[(.*?)\]", rust, re.S)
+    assert block and "set_stay_open" in block.group(1), "not registered; the window cannot call it"
+
+    granted = set(json.loads(
+        (REPO / "app/src-tauri/capabilities/default.json").read_text(encoding="utf-8"))["permissions"])
+    assert "allow-set-stay-open" in granted
+
+    ui = UI.read_text(encoding="utf-8")
+    assert "function stayOpenBlock()" in ui
+    assert "${stayOpenBlock()}" in ui, "defined but never rendered"
+    assert '[data-stayopen]' in ui, "rendered but nothing handles the click"
+
+
+def test_turning_it_on_carries_the_warning_rather_than_a_bare_switch():
+    """Turning this on puts the opening key where any program running as you can
+    fetch it. A switch labelled "open at restart" with that fact left in the CLI
+    would be the app quietly making the machine weaker on the owner's behalf.
+
+    The CLI's own sentence, in the window, in both directions — the state that
+    offers to turn it on, and the state that describes it being on.
+    """
+    ui = UI.read_text(encoding="utf-8")
+    start = ui.index("function stayOpenBlock()")
+    block = ui[start:ui.index("\n  }\n", start)]
+
+    for phrase in ("keystore", "running as you can fetch it", "no password", "agent"):
+        assert phrase in block, f"the block does not say {phrase!r}"
+    # And again at the moment of pressing it, not only as page text.
+    #
+    # Bounded to the handler itself. A fixed-size window after the selector
+    # passed even with the warning deleted, because the slice ran on into the
+    # next handler and found the word there — a guard that cannot fail is worse
+    # than none, since it reads as coverage.
+    start = ui.index('main.querySelectorAll("[data-stayopen]")')
+    handler = ui[start:ui.index("\n    });", start)]
+    assert "confirm(" in handler, "turning it on must ask"
+    assert "keystore" in handler, "the confirm must carry the cost, not just ask"
+    assert "no password" in handler

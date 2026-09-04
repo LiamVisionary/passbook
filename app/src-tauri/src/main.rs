@@ -1029,6 +1029,37 @@ async fn vault_trust_device(password: String) -> Result<Value, String> {
     vault_state()
 }
 
+/// Whether a reboot opens this vault by itself.
+///
+/// Two halves that fail separately — a device factor, and something that runs
+/// it at boot — so the CLI owns both and this is one switch over it.
+///
+/// Turning it ON needs the password, because it grants this machine the power
+/// to open the vault without one from here: that is the last moment anybody is
+/// asked. Turning it OFF needs nothing; taking a capability away is never the
+/// dangerous direction, and requiring a password to become SAFER is how a
+/// setting ends up left on.
+#[tauri::command(async)]
+async fn set_stay_open(on: bool, password: String) -> Result<Value, String> {
+    if !on {
+        run(&["vault", "--stay-open", "off"])?;
+        return vault_state();
+    }
+    if password.is_empty() {
+        return Err("The vault password is needed once, to wrap the key for the keystore.".into());
+    }
+    tauri::async_runtime::spawn_blocking(|| {
+        passbook_biometric::authenticate("let this Mac open PassBook after a restart")
+    })
+    .await
+    .map_err(|error| format!("Could not wait for {error}"))??;
+    run_with_password(
+        &["vault", "--stay-open", "on", "--yes", "--password-stdin"],
+        &password,
+    )?;
+    vault_state()
+}
+
 /// Give a workspace a key of its own, and open it.
 ///
 /// A workspace was always a separate store; until now one vault at the machine
@@ -2015,7 +2046,7 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            state, set_mode, set_reads, unlock, lock, resolve, broker, revoke, add_key, remove_key, reveal_key,
+            state, set_mode, set_reads, set_stay_open, unlock, lock, resolve, broker, revoke, add_key, remove_key, reveal_key,
             forget_reveal, copy_key, capture_protection,
             key_history, vault_state, vault_signin, vault_signout, vault_create_profile,
             vault_use_profile, vault_seal, vault_unseal, vault_secure, set_key_group, set_key_audience, set_key_scope, set_keys_scope, remove_keys,

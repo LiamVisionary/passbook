@@ -7,11 +7,13 @@
   ],
   "permissions": [
     "core:default",
+    "core:window:allow-start-dragging",
     "notification:default",
     "dialog:allow-open",
     "allow-state",
     "allow-set-mode",
     "allow-set-reads",
+    "allow-set-stay-open",
     "allow-unlock",
     "allow-lock",
     "allow-resolve",

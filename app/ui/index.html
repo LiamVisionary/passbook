@@ -2171,9 +2171,60 @@ Use the copy button to put it on the clipboard."
           </div>`}
         ${aside(`<p>${esc(sentence(v?.keystore?.describe || "no OS keystore on this platform"))}.
           ${v?.keystore?.available
-            ? "Trusting this device would let jobs start at boot without you \u2014 at the cost of letting anything running as you open the vault. Add it with <code>passbook profile trust-device</code>."
+            ? "Letting jobs start at boot without you is the \u201cA restart opens the vault by itself\u201d switch above \u2014 at the cost of letting anything running as you open the vault."
             : "Sign-in here is by password, which works the same on every platform."}</p>`,
           "Unlock with this device instead")}
+      </div>`;
+  }
+
+  /** Whether a restart opens the vault by itself.
+   *
+   *  The window had no way to know this setting existed. So after a restart it
+   *  could not say why everything was shut, and offered nothing to change it —
+   *  the answer lived only in `passbook vault --stay-open`, which you have to
+   *  already know about to look for.
+   *
+   *  The warning is not decoration. Turning this on puts the opening key in the
+   *  OS keystore, where anything running as you can fetch it with no password
+   *  and no prompt, which includes every agent. That sentence is the CLI's own
+   *  and it comes across intact rather than being softened into a switch label.
+   */
+  function stayOpenBlock() {
+    const s = vault?.stay_open;
+    if (!s || typeof s.on !== "boolean") return "";   // not installed here
+    const halves = `<div class="sub">device factor: ${s.device_factor ? "yes" : "no"}
+      \u00b7 starts at login: ${s.boot_agent ? "yes" : "no"}</div>`;
+
+    if (s.on) {
+      return `
+        <div class="group">
+          <div class="row"><span class="statustile warn">${icon("unlock")}</span>
+          <div class="grow"><strong>A restart opens the vault by itself</strong> \u2014
+            jobs that start at boot keep working with nobody present. The cost:
+            the opening key sits in this Mac's keystore, and any program running
+            as you can fetch it \u2014 no password, no prompt. An agent on this
+            machine can open your vault.
+            ${halves}</div>
+          <button class="act" data-stayopen="off" ${busy ? "disabled" : ""}>
+            Require sign-in</button></div>
+        </div>`;
+    }
+    return `
+      <div class="group">
+        <div class="row"><span class="statustile good">${icon("lock")}</span>
+        <div class="grow"><strong>A restart leaves the vault shut</strong> \u2014 you sign
+          in once afterwards. Until you do, apps get no credentials and adding a
+          key is refused.
+          ${halves}</div></div>
+        <p class="note">Opening it automatically would put the key in this Mac's
+          keystore, where any program running as you can fetch it \u2014 no password,
+          no prompt. That includes every agent on this machine. What it buys is
+          jobs that start at boot without you.</p>
+        <div class="addrow two">
+          <input id="so-pw" type="password" placeholder="Vault password" />
+          <button class="act" data-stayopen="on" ${busy ? "disabled" : ""}>
+            ${icon("unlock")} Open at restart</button>
+        </div>
       </div>`;
   }
 
@@ -2331,6 +2382,7 @@ Use the copy button to put it on the clipboard."
     return settingsBack("Security") + `
       <div class="group">${openState}</div>
       ${readsBlock()}
+      ${stayOpenBlock()}
       ${signIn}${encryption}${profiles}${recoveryPanel()}${backupPanel()}`;
   }
 
@@ -4253,6 +4305,34 @@ passbook oauth connect google:work</pre>
       busy = true; paint();
       try { state = await invoke("set_reads", { mode: wanted }) || state; }
       catch (e) { alert(said(e)); }
+      finally { busy = false; paint(); }
+    });
+    main.querySelectorAll("[data-stayopen]").forEach((b) => b.onclick = async () => {
+      const wanted = b.dataset.stayopen;
+      // Off asks nothing: taking a capability away is never the dangerous
+      // direction, and demanding a password to become SAFER is how a setting
+      // ends up left on.
+      //
+      // On asks for the password AND confirms, because it is the last moment
+      // anybody is asked: afterwards this machine opens the vault without one.
+      let password = "";
+      if (wanted === "on") {
+        password = document.getElementById("so-pw")?.value || "";
+        if (!password) {
+          alert("The vault password is needed once, to wrap the key for the keystore.");
+          return;
+        }
+        if (!confirm("Let this Mac open the vault after a restart?\n\n"
+            + "The opening key goes into the OS keystore, where any program running "
+            + "as you can fetch it \u2014 no password, no prompt. That includes every "
+            + "agent on this machine.")) return;
+      }
+      busy = true; paint();
+      try {
+        vault = await invoke("set_stay_open", { on: wanted === "on", password }) || vault;
+        const field = document.getElementById("so-pw");
+        if (field) field.value = "";
+      } catch (e) { alert(said(e)); }
       finally { busy = false; paint(); }
     });
     main.querySelectorAll("[data-verify]").forEach((b) => b.onclick = () => checkChain());

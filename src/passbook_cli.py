@@ -257,10 +257,24 @@ def _write_values(values, *, overwrite: bool, exact: bool = False,
                 "added": sorted(k for k in sealed if k not in held),
                 "updated": sorted(k for k in sealed if k in held),
                 "kept": [], "sealed": sorted(sealed)}
+    # Two things this has to get right, and the first version got neither.
+    #
+    # It led with the mechanism and then repeated it — "the value could not be
+    # sealed: no broker is running, so nothing could be sealed" — which says the
+    # same thing twice and never says what the reader wants to know first, which
+    # is that their key was NOT written.
+    #
+    # And it buried the fix. `passbook signin` starts a broker when there is
+    # none, so it is the whole answer to both causes; but the reader has no way
+    # to know that from "no broker is running", and would reasonably go hunting
+    # for a broker command instead.
+    detail = str(answer.get("error", "the vault is shut"))
     _fail(
-        "This store is encrypted, and the value could not be sealed: "
-        + str(answer.get("error", "the vault is shut")),
-        "Sign in first, so the new value is stored the same way as the rest:  passbook signin")
+        "Nothing was written. This store is encrypted, so a new value has to be "
+        "encrypted as well — and that needs the vault open.",
+        "    passbook signin\n"
+        "\nThat also starts the broker if one is not running. Then add it again."
+        f"\n\n({detail})")
     return None
 
 
@@ -4388,6 +4402,27 @@ def cmd_policy(args: argparse.Namespace) -> int:
     if module is None:
         return _fail("Access modes are not installed on this machine.")
 
+    if getattr(args, "reads", "") and (args.app or args.key):
+        # --reads is one switch for the whole store: may a caller this broker
+        # did not start receive values at all. There is deliberately no per-app
+        # or per-key variant of it — an app's name is a claim, and a scoped
+        # exemption to sealed reads keyed on a claim is the hole the broker
+        # already removed once. Before this check, the scope flags were dropped
+        # on the floor and the store-wide switch flipped anyway — so a command
+        # that read as touching one key changed the posture of every key on
+        # the machine, and recorded nothing for the app it named.
+        scope = " and ".join(flag for flag, value in
+                             (("--app", args.app), ("--key", args.key)) if value)
+        return _fail(
+            f"--reads cannot be narrowed by {scope}. It is the whole store's switch —\n"
+            "whether ANY caller this broker did not start may receive values — and a\n"
+            "per-app exemption is unsupported on purpose: an app's name is a claim, and\n"
+            "anything could call itself that name to read what the exemption opened.\n"
+            "Nothing was changed.",
+            "Govern who may have a key:      passbook policy --app <app> --key <KEY> --mode always|ask|never\n"
+            "Use a key without printing it:  passbook run --only <KEY> -- <command>\n"
+            "Flip the store-wide switch:     passbook policy --reads open|sealed  (alone)")
+
     if args.learn:
         broker = _broker()
         if broker is None:
@@ -4403,6 +4438,16 @@ def cmd_policy(args: argparse.Namespace) -> int:
     policy = module.read_policy()
 
     if getattr(args, "reads", ""):
+        if args.mode:
+            # The same trap as the scope flags, one branch later: --mode was
+            # silently discarded whenever --reads was present. (--learn is the
+            # exception that works — it consumes --mode above, then falls
+            # through to here to seal what it derived.)
+            return _fail(
+                "--reads and --mode are different switches, and this command was\n"
+                "silently applying only --reads. Nothing was changed.",
+                f"Run them one at a time:  passbook policy --reads {args.reads}\n"
+                f"                         passbook policy --mode {args.mode}")
         # The machine-wide switch: whether a caller this broker did not start
         # may receive a value at all. Written here rather than as its own
         # command because it is a policy, and somebody looking for it will look
@@ -5496,7 +5541,8 @@ def build_parser() -> argparse.ArgumentParser:
     policy_cmd.add_argument("--to", dest="window_to", default="", metavar="HH:MM")
     policy_cmd.add_argument("--days", nargs="+", default=[], metavar="DAY", help="mon tue wed …")
     policy_cmd.add_argument("--reads", choices=["open", "sealed"], default="",
-                            help="whether callers the broker did not start may receive values")
+                            help="the whole store's switch: whether callers the broker did not "
+                                 "start may receive values (cannot be narrowed by --app or --key)")
     policy_cmd.add_argument("--learn", action="store_true",
                             help="derive a starting policy from what the record shows apps have asked for")
     policy_cmd.set_defaults(func=cmd_policy)

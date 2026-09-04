@@ -477,3 +477,40 @@ def test_a_peer_that_says_nothing_about_what_it_withheld_is_not_seeded_at_all():
     plan = sync.plan_push({"A": "1", "B": "2"}, {}, silent)
     assert plan["send"] == {}
     assert plan["cannotTell"] is True
+
+
+def test_a_refused_write_says_the_key_was_not_written_and_gives_one_command(
+        tmp_path, monkeypatch, capsys):
+    """The message a person actually hits when they add a key to a sealed store
+    with the vault shut.
+
+    It used to read: "This store is encrypted, and the value could not be
+    sealed: no broker is running, so nothing could be sealed" — the same fact
+    twice, led by the mechanism, and never saying the thing the reader needs
+    first, which is that their key was NOT written.
+
+    It also buried the fix. `passbook signin` starts a broker when there is
+    none, so it answers both causes; but nothing in "no broker is running" tells
+    a reader that, and they would reasonably go looking for a broker command.
+    """
+    import passbook_cli
+
+    monkeypatch.setenv("HIVE_HOME", str(tmp_path))
+    monkeypatch.delenv("HIVE_ENV_FILES", raising=False)
+    monkeypatch.setattr(passbook_cli, "_sealed_store_present", lambda: True)
+
+    import passbook_broker
+
+    monkeypatch.setattr(passbook_broker, "seal_values",
+                        lambda *a, **k: {"ok": False,
+                                         "error": "no broker is running, so nothing could be sealed"})
+
+    assert passbook_cli.main(["add", "SOME_KEY=value"]) == 1
+    said = capsys.readouterr().err
+
+    assert "Nothing was written" in said, "lead with the outcome, not the mechanism"
+    assert "passbook signin" in said
+    assert "starts the broker" in said, "the reader cannot know signin does this"
+    # The mechanism is kept, but subordinate — it is for diagnosis, not the headline.
+    assert "no broker is running" in said
+    assert said.count("could not be sealed") == 0, "the doubled phrasing is gone"

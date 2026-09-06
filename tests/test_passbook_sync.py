@@ -223,6 +223,78 @@ def test_a_stale_peers_blob_cannot_replace_a_good_local_value():
 
 # ── repairing a peer that holds our ciphertext ─────────────────────────────
 
+def test_bootstrap_recovers_only_the_requested_orphaned_keys():
+    plan = sync.plan_bootstrap(["K"], [
+        ("peer", payload({"K": "recovered", "EXTRA": "unrequested"})),
+    ], policy={})
+    assert plan == {"values": {"K": "recovered"}, "missing": [], "conflicts": []}
+
+
+def test_bootstrap_reports_missing_and_never_accepts_ciphertext_or_empty_values():
+    plan = sync.plan_bootstrap(["V1", "V2", "FUTURE", "EMPTY", "MALFORMED", "ABSENT"], [
+        ("peer", payload({"V1": "hive-sealed:v1:AAAA", "V2": "hive-sealed:v2:BBBB",
+                          "FUTURE": "hive-sealed:v9:CCCC", "EMPTY": "", "MALFORMED": 42})),
+    ], policy={})
+    assert plan["values"] == {}
+    assert plan["missing"] == ["ABSENT", "EMPTY", "FUTURE", "MALFORMED", "V1", "V2"]
+    assert plan["conflicts"] == []
+
+
+def test_bootstrap_respects_reach_and_machine_identity_boundaries():
+    local_only = "HIVEMINDOS_DASHBOARD_DEVICE_TOKEN"
+    policy = {"keys": {"HERE": {"scope": "machine"}, "MINE": {"scope": "workspace"}}}
+    values = {"WIDE": "allowed", "HERE": "held", "MINE": "held", local_only: "held"}
+    plan = sync.plan_bootstrap(values, [("peer", payload(values))], policy=policy)
+    assert plan["values"] == {"WIDE": "allowed"}
+    assert plan["missing"] == sorted(["HERE", "MINE", local_only])
+
+
+def test_bootstrap_identical_values_do_not_need_timestamps():
+    plan = sync.plan_bootstrap(["K"], [
+        ("older", payload({"K": "same"}, {"K": OLDER})),
+        ("unknown", payload({"K": "same"})),
+    ], policy={})
+    assert plan == {"values": {"K": "same"}, "missing": [], "conflicts": []}
+
+
+def test_bootstrap_chooses_the_unique_newest_dated_value():
+    plan = sync.plan_bootstrap(["K"], [
+        ("older", payload({"K": "old"}, {"K": OLDER})),
+        ("newer", payload({"K": "new"}, {"K": NEWER})),
+        ("same-newer", payload({"K": "new"}, {"K": NEWER})),
+    ], policy={})
+    assert plan == {"values": {"K": "new"}, "missing": [], "conflicts": []}
+
+
+@pytest.mark.parametrize("uncertain_age", [None, 0, -1, True, "new", float("nan"),
+                                            float("inf"), NEWER])
+def test_bootstrap_refuses_conflicts_with_unknown_or_tied_ages(uncertain_age):
+    plan = sync.plan_bootstrap(["K", "RESOLVED"], [
+        ("newer", payload({"K": "first", "RESOLVED": "safe"}, {"K": NEWER})),
+        ("uncertain", payload({"K": "different"}, {"K": uncertain_age})),
+    ], policy={})
+    assert plan == {"values": {"RESOLVED": "safe"}, "missing": [], "conflicts": ["K"]}
+
+
+def test_bootstrap_does_not_ignore_an_undated_copy_during_a_conflict():
+    plan = sync.plan_bootstrap(["K"], [
+        ("older", payload({"K": "old"}, {"K": OLDER})),
+        ("newer", payload({"K": "new"}, {"K": NEWER})),
+        ("undated", payload({"K": "old"})),
+    ], policy={})
+    assert plan == {"values": {}, "missing": [], "conflicts": ["K"]}
+
+
+def test_bootstrap_ignores_failed_and_malformed_peer_payloads():
+    plan = sync.plan_bootstrap(["K", "not a key"], [
+        ("failed", payload({"K": "untrusted"}, ok=False)),
+        ("malformed", {"values": ["untrusted"]}),
+        ("empty", None),
+        ("valid", payload({"K": "safe", "not a key": "invalid"})),
+    ], policy={})
+    assert plan == {"values": {"K": "safe"}, "missing": ["not a key"], "conflicts": []}
+
+
 def test_a_peer_holding_our_ciphertext_is_planned_for_repair():
     """259 blobs on each of three live machines, byte-identical to ours."""
     plan = sync.plan_repair(payload({"K": "hive-sealed:v2:AAAA", "FINE": "value"}),

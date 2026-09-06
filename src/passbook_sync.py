@@ -44,6 +44,7 @@ The parts that were already right, kept deliberately intact:
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import time
@@ -379,6 +380,70 @@ def fetch(host: str, port: str, *, address: str = "",
 
 
 # ── the merge ──────────────────────────────────────────────────────────────
+
+def plan_bootstrap(orphaned: Iterable[str],
+                   payloads: Iterable[tuple[str, Mapping[str, Any]]], *,
+                   policy: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Recover peer values for ciphertext whose local vault profile is absent.
+
+    This only plans a recovery; it never opens, writes, or fetches anything.
+    The caller must verify the missing-profile condition and require BOTH
+    `missing` and `conflicts` to be empty before initializing a local vault.
+    Resolved values remain private input to that initialization, never output.
+
+    Only requested names may be recovered, within the same reach rules as
+    ordinary replication. Matching peer values need no ages. Differing values
+    require a known age on every copy and one strictly newest value, so a peer
+    with missing metadata cannot silently lose to another peer's dated copy.
+    """
+    requested = {name for name in orphaned if isinstance(name, str)}
+    allowed, _ = sendable({name: "" for name in requested if KEY_RE.fullmatch(name)},
+                          policy=policy)
+    candidates: dict[str, list[tuple[str, float]]] = {name: [] for name in allowed}
+    for _, payload in payloads:
+        if not isinstance(payload, Mapping) or payload.get("ok") is not True:
+            continue
+        values = payload.get("values")
+        if not isinstance(values, Mapping):
+            continue
+        ages = payload.get("updatedAt")
+        if not isinstance(ages, Mapping):
+            ages = {}
+        for name in allowed:
+            value = values.get(name)
+            if not isinstance(value, str) or not value.strip() or _looks_sealed(value):
+                continue
+            stamp = ages.get(name)
+            try:
+                age = float(stamp) if isinstance(stamp, (int, float)) \
+                    and not isinstance(stamp, bool) else 0.0
+            except OverflowError:
+                age = 0.0
+            if not math.isfinite(age) or age <= 0:
+                age = 0.0
+            candidates[name].append((value, age))
+
+    recovered: dict[str, str] = {}
+    conflicts: list[str] = []
+    for name, copies in sorted(candidates.items()):
+        if not copies:
+            continue
+        unique = {value for value, _ in copies}
+        if len(unique) == 1:
+            recovered[name] = copies[0][0]
+            continue
+        if all(age > 0 for _, age in copies):
+            newest = max(age for _, age in copies)
+            winners = {value for value, age in copies if age == newest}
+            if len(winners) == 1:
+                recovered[name] = winners.pop()
+                continue
+        conflicts.append(name)
+
+    return {"values": recovered,
+            "missing": sorted(requested - recovered.keys() - set(conflicts)),
+            "conflicts": conflicts}
+
 
 def plan_repair(peer_payload: Mapping[str, Any], local_values: Mapping[str, str], *,
                 policy: Mapping[str, Any] | None = None) -> dict[str, Any]:

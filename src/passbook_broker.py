@@ -593,7 +593,12 @@ def _seal_values(payload: Mapping[str, Any], root: Path | None,
     if not isinstance(incoming, dict) or not incoming:
         return {"ok": False, "error": "no values to seal"}
 
-    dek, profile = _held_dek(_here())
+    workspace = str(payload.get("workspace") or "").strip() or _here()
+    try:
+        passbook.workspace_env_path(workspace)
+    except ValueError:
+        return {"ok": False, "error": "invalid workspace"}
+    dek, profile = _held_dek(workspace)
     if dek is None:
         return {"ok": False, "error": "the vault is shut, so nothing can be sealed"}
 
@@ -613,7 +618,7 @@ def _seal_values(payload: Mapping[str, Any], root: Path | None,
 
     try:
         result = passbook.set_values(sealed, overwrite=True, exact=True,
-                                     workspace_id=str(payload.get("workspace") or ""))
+                                     workspace_id=workspace)
     except Exception as error:  # noqa: BLE001 — surface, never crash the daemon
         return {"ok": False, "error": str(error)}
 
@@ -671,7 +676,7 @@ def _signin(payload: Mapping[str, Any], root: Path | None,
         vault_root = passbook_vault.workspace_root(workspace)
     except Exception as error:  # noqa: BLE001
         return {"ok": False, "error": f"no such workspace: {workspace} ({error})"}
-    if root is not None and workspace == _here():
+    if root is not None and workspace == passbook.ROOT_WORKSPACE_ID and vault_root == passbook.root():
         vault_root = root
     profile = str(payload.get("profile") or "").strip() \
         or passbook_vault.active_profile_id(root=vault_root)
@@ -776,12 +781,19 @@ def _opens_how_many(dek: bytes | None, profile: str, root: Path | None) -> int:
         return 0
 
 
-def _vault_status(root: Path | None) -> dict[str, Any]:
+def _vault_status(root: Path | None, workspace: str = "") -> dict[str, Any]:
     try:
         import passbook_vault
     except ImportError:
         return {"ok": True, "supported": False, "unlocked": False}
-    here = _here()
+    here = workspace or _here()
+    if workspace:
+        try:
+            selected = passbook_vault.workspace_root(workspace)
+        except ValueError:
+            return {"ok": False, "error": "invalid workspace"}
+        if root is None or workspace != passbook.ROOT_WORKSPACE_ID or selected != passbook.root():
+            root = selected
     dek, profile = _held_dek(here)
     with _VAULT_LOCK:
         session = _VAULT_STATE.get(here) or {}
@@ -1442,7 +1454,7 @@ def _handle(payload: Mapping[str, Any], root: Path | None = None,
         return {"ok": True, "locked": True, "was_unlocked": was,
                 "workspace": "" if every else target}
     if operation == "vault":
-        return _vault_status(root)
+        return _vault_status(root, str(payload.get("workspace") or "").strip())
     if operation == "spawn":
         return _spawn(payload, root, caller)
     if operation == "proxy":
@@ -2024,9 +2036,12 @@ def signout(*, workspace: str = "", everything: bool = False,
     return answer
 
 
-def vault_status(*, root: Path | None = None) -> dict[str, Any]:
+def vault_status(*, root: Path | None = None, workspace: str = "") -> dict[str, Any]:
     """Locked or open, which profile, how long left, and what the store holds."""
-    answer = _ask({"op": "vault"}, root=root)
+    payload = {"op": "vault"}
+    if workspace:
+        payload["workspace"] = workspace
+    answer = _ask(payload, root=root)
     if answer is None:
         return {"ok": False, "running": False, "unlocked": False,
                 "error": "no broker is running"}

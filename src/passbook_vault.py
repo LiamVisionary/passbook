@@ -63,6 +63,7 @@ import hmac
 import json
 import os
 import secrets
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -88,6 +89,7 @@ __all__ = [
     "DEFAULT_SKIP",
     "PUBLIC_PREFIXES",
     "create_profile",
+    "initialize_store",
     "is_sealed",
     "is_sealed_v1",
     "matches_skip",
@@ -785,6 +787,141 @@ def matches_skip(name: str, patterns: Iterable[str]) -> bool:
         elif name == pattern:
             return True
     return False
+
+
+def initialize_store(
+    password: str, *, root: Path, path: Path, expected: str,
+    recovered: Mapping[str, str] = (),
+) -> dict[str, Any]:
+    """Give an unconfigured workspace its first profile and seal its store.
+
+    The caller obtains any orphaned v2 values from an authorized peer, in
+    memory. They must cover exactly the orphaned names; bootstrap never adds
+    peer-only keys or writes recovered plaintext, even to a temporary file.
+    The wrapped key reaches disk before the ciphertext that needs it.
+    """
+    import passbook
+
+    root, path = Path(root), Path(path)
+    target_vault = vault_path(root)
+
+    def snapshot(target: Path) -> bytes | None:
+        try:
+            return target.read_bytes()
+        except FileNotFoundError:
+            return None
+
+    store_installed = False
+    try:
+        original_store = snapshot(path)
+        stored_text = (original_store or b"").decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+        if stored_text != expected:
+            raise VaultError("The store changed during setup; run `passbook signin` again")
+        original_vault = snapshot(target_vault)
+        try:
+            existing = json.loads(original_vault) if original_vault and original_vault.strip() else {}
+        except (ValueError, UnicodeDecodeError) as error:
+            raise VaultError("The vault file is malformed; setup left it unchanged") from error
+        if (not isinstance(existing, dict)
+                or not isinstance(existing.get("profiles", []), list)
+                or existing.get("version", VAULT_VERSION) != VAULT_VERSION
+                or not isinstance(existing.get("skip", []), list)
+                or any(not isinstance(name, str) for name in existing.get("skip", []))):
+            raise VaultError("The vault file is malformed; setup left it unchanged")
+        if existing.get("profiles") or existing.get("active"):
+            raise VaultError("This workspace already has a profile; sign in to its existing vault")
+
+        current = passbook.parse_env_text(expected)
+        # Inspect every occurrence so a shadowed duplicate cannot leave old
+        # ciphertext behind or hide an unsupported encryption version.
+        orphaned: set[str] = set()
+        for line in expected.splitlines():
+            for name, value in passbook.parse_env_text(line).items():
+                if value.startswith("hive-sealed:"):
+                    if not is_sealed(value):
+                        raise VaultError("The store contains unsupported encrypted values; setup left it unchanged")
+                    orphaned.add(name)
+        recovered = dict(recovered)
+        if set(recovered) != orphaned:
+            raise VaultError("Recovery did not cover exactly the encrypted names; setup left the store unchanged")
+        if any(not isinstance(value, str) or not value.strip()
+               or value.strip().startswith("hive-sealed:") for value in recovered.values()):
+            raise VaultError("Recovery did not return usable credentials; setup left the store unchanged")
+        # A readable later occurrence already defines this name. Replacing it
+        # with a peer value would silently change the effective credential.
+        if any(not is_sealed(current[name]) for name in orphaned):
+            raise VaultError("The store has conflicting duplicate values; setup left it unchanged")
+
+        patterns = set(DEFAULT_SKIP) | set(existing.get("skip", []))
+        skipped = {name for name in current if name not in orphaned and matches_skip(name, patterns)}
+        root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix=".passbook-init-", dir=root) as temporary:
+            staging = Path(temporary)
+            _write_private(vault_path(staging), {**existing, "skip": sorted(patterns)})
+            profile = create_profile("Owner", password=password, root=staging)
+            dek = unlock_with_password(profile["id"], password, root=staging)
+            sealed = {
+                name: seal_value(name, recovered.get(name, value), dek, profile_id=profile["id"])
+                for name, value in current.items() if name not in skipped
+            }
+            rewritten: list[str] = []
+            for line in expected.splitlines():
+                parsed = passbook.parse_env_text(line)
+                name = next(iter(parsed), "")
+                rewritten.append(passbook._format_line(name, sealed[name]) if name in sealed else line)
+            rendered = "\n".join(rewritten)
+            if expected.endswith(("\n", "\r")):
+                rendered += "\n"
+            staged_store = staging / ".env"
+            passbook._atomic_write(staged_store, rendered)
+            new_vault = vault_path(staging).read_bytes()
+            # Keep only the prior empty metadata for a possible rollback. No
+            # original store or recovered secret is ever staged in plaintext.
+            previous_vault = staging / "previous-vault.json"
+            if original_vault is not None:
+                passbook._atomic_write(previous_vault, original_vault.decode("utf-8"))
+
+            stat = vault_path(staging).stat()
+            installed_identity = (stat.st_dev, stat.st_ino)
+            if snapshot(path) != original_store or snapshot(target_vault) != original_vault:
+                raise VaultError("The store or vault changed during setup; run `passbook signin` again")
+            if original_vault is None:
+                # Creating a first vault must never replace another first
+                # vault that appeared after the check above.
+                try:
+                    os.link(vault_path(staging), target_vault)
+                except FileExistsError as error:
+                    raise VaultError("The vault changed during setup; run `passbook signin` again") from error
+            else:
+                os.replace(vault_path(staging), target_vault)
+            try:
+                if snapshot(path) != original_store or snapshot(target_vault) != new_vault:
+                    raise VaultError("The store or vault changed during setup; run `passbook signin` again")
+                os.replace(staged_store, path)
+                store_installed = True
+            except (OSError, VaultError):
+                # Never undo another writer's vault while rolling back ours.
+                stat = target_vault.stat() if target_vault.exists() else None
+                if (stat is not None and (stat.st_dev, stat.st_ino) == installed_identity
+                        and snapshot(target_vault) == new_vault):
+                    if original_vault is None:
+                        target_vault.unlink()
+                    else:
+                        os.replace(previous_vault, target_vault)
+                raise
+
+        _record_seal_change("seal", sorted(sealed), profile_id=profile["id"], root=root,
+                            detail=f"initialized workspace and sealed {len(sealed)} value(s)")
+        return {**profile, "sealed": sorted(sealed), "recovered": sorted(orphaned),
+                "skipped": sorted(skipped)}
+    except VaultError:
+        raise
+    except (OSError, ValueError, TypeError) as error:
+        # Do not include exception text: it may contain an input value.
+        detail = "The workspace could not be initialized; its store was left unchanged"
+        if store_installed:
+            detail = "The workspace was initialized, but setup could not finish cleaning up"
+        raise VaultError(detail) from error
 
 
 def _record_seal_change(op: str, names: list[str], *, profile_id: str, detail: str,

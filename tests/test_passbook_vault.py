@@ -45,6 +45,229 @@ def _profile(root: Path, label: str = "Liam") -> str:
     return vault.create_profile(label, password=PASSWORD, root=root)["id"]
 
 
+def test_initialize_store_seals_recovered_values_without_plaintext_files(root, monkeypatch):
+    path = root / ".env"
+    original = (
+        "# Keep this heading\nTOKEN=hive-sealed:v2:orphan\n"
+        "OTHER=plain\nTOKEN=hive-sealed:v2:orphan\n"
+        "NEXT_PUBLIC_URL=https://example.test\nNEXT_PUBLIC_TOKEN=hive-sealed:v2:orphan\n"
+        "FLAG=1\nEMPTY=\n"
+    )
+    path.write_text(original)
+    vault.set_skip_list(["FLAG", "NEXT_PUBLIC_TOKEN"], root=root)
+    recovered = {"TOKEN": "recovered secret  ", "NEXT_PUBLIC_TOKEN": "kept secret"}
+    writes = []
+    original_write = passbook._atomic_write
+
+    def observe_write(target, text):
+        writes.append(text)
+        return original_write(target, text)
+
+    monkeypatch.setattr(passbook, "_atomic_write", observe_write)
+    profile = vault.initialize_store(PASSWORD, root=root, path=path,
+                                     expected=original, recovered=recovered)
+    assert profile["label"] == "Owner"
+    key = vault.unlock_with_password(profile["id"], PASSWORD, root=root)
+    result = path.read_text()
+    assert result.startswith("# Keep this heading\n")
+    assert len([line for line in result.splitlines() if line.startswith("TOKEN=")]) == 2
+    assert "NEXT_PUBLIC_URL=https://example.test\n" in result
+    assert "FLAG=1\nEMPTY=\n" in result
+    assert vault.unseal_mapping(passbook.parse_env_text(result), key, profile_id=profile["id"]) == {
+        **recovered, "OTHER": "plain", "NEXT_PUBLIC_URL": "https://example.test", "FLAG": "1",
+    }
+    assert all(secret not in written for secret in recovered.values() for written in writes)
+    assert_private(path)
+    assert_private(root / vault.VAULT_FILENAME)
+    assert not any(item.is_dir() for item in root.iterdir())
+
+
+@pytest.mark.parametrize("payload", ["not json", "[]", '{"profiles": {}}',
+                                     '{"profiles": [{"id": "existing"}]}'])
+def test_initialize_store_refuses_existing_or_malformed_vault(root, payload):
+    path = root / ".env"
+    original = path.read_text()
+    vault_path = root / vault.VAULT_FILENAME
+    vault_path.write_text(payload)
+    with pytest.raises(vault.VaultError):
+        vault.initialize_store(PASSWORD, root=root, path=path, expected=original)
+    assert path.read_text() == original
+    assert vault_path.read_text() == payload
+
+
+@pytest.mark.parametrize("current,recovered", [
+    ("TOKEN=hive-sealed:v2:orphan\n", {}),
+    ("TOKEN=hive-sealed:v2:orphan\n", {"TOKEN": ""}),
+    ("TOKEN=hive-sealed:v2:orphan\n", {"TOKEN": "hive-sealed:v2:other"}),
+    ("TOKEN=hive-sealed:v2:orphan\n", {"TOKEN": "value", "EXTRA": "value"}),
+    ("TOKEN=hive-sealed:v1:old\n", {"TOKEN": "value"}),
+    ("TOKEN=hive-sealed:v3:unknown\n", {}),
+    ("TOKEN=hive-sealed:v1:shadowed\nTOKEN=plain\n", {}),
+    ("TOKEN=plain\n", {"TOKEN": "replacement"}),
+])
+def test_initialize_store_refuses_unrecoverable_or_unexpected_values(root, current, recovered):
+    path = root / ".env"
+    path.write_text(current)
+    with pytest.raises(vault.VaultError):
+        vault.initialize_store(PASSWORD, root=root, path=path, expected=current, recovered=recovered)
+    assert path.read_text() == current
+    assert not (root / vault.VAULT_FILENAME).exists()
+
+
+def test_initialize_store_refuses_store_changed_before_start(root):
+    path = root / ".env"
+    original = path.read_text()
+    path.write_text("NEW=value\n")
+    with pytest.raises(vault.VaultError, match="changed"):
+        vault.initialize_store(PASSWORD, root=root, path=path, expected=original)
+    assert path.read_text() == "NEW=value\n"
+    assert not (root / vault.VAULT_FILENAME).exists()
+
+
+@pytest.mark.parametrize("changed_target", ["store", "vault"])
+def test_initialize_store_preserves_concurrent_changes_while_preparing(root, monkeypatch, changed_target):
+    path = root / ".env"
+    original = path.read_text()
+    create = vault.create_profile
+    vault_path = root / vault.VAULT_FILENAME
+
+    def create_and_change(*args, **kwargs):
+        result = create(*args, **kwargs)
+        if changed_target == "store":
+            path.write_text("NEW=concurrent\n")
+        else:
+            vault_path.write_text('{"profiles": [{"id": "concurrent"}]}')
+        return result
+
+    monkeypatch.setattr(vault, "create_profile", create_and_change)
+    with pytest.raises(vault.VaultError, match="changed"):
+        vault.initialize_store(PASSWORD, root=root, path=path, expected=original)
+    if changed_target == "store":
+        assert path.read_text() == "NEW=concurrent\n"
+        assert not vault_path.exists()
+    else:
+        assert path.read_text() == original
+        assert json.loads(vault_path.read_text())["profiles"] == [{"id": "concurrent"}]
+
+
+@pytest.mark.parametrize("original_vault", [None, "", '{"profiles": [], "skip": ["OTHER"]}'])
+def test_initialize_store_rolls_back_only_its_vault_on_failed_store_install(root, monkeypatch, original_vault):
+    path = root / ".env"
+    original = path.read_text()
+    vault_path = root / vault.VAULT_FILENAME
+    if original_vault is not None:
+        vault_path.write_text(original_vault)
+    replace = os.replace
+
+    def fail_store_install(source, destination):
+        if Path(destination) == path:
+            assert len(vault.profiles(root=root)) == 1, "store was installed before its key"
+            raise OSError("simulated disk failure")
+        return replace(source, destination)
+
+    monkeypatch.setattr(os, "replace", fail_store_install)
+    with pytest.raises(vault.VaultError, match="could not be initialized"):
+        vault.initialize_store(PASSWORD, root=root, path=path, expected=original)
+    assert path.read_text() == original
+    if original_vault is None:
+        assert not vault_path.exists()
+    else:
+        assert vault_path.read_text() == original_vault
+    assert not any(item.is_dir() for item in root.iterdir())
+
+
+def test_initialize_store_does_not_rollback_concurrently_replaced_vault(root, monkeypatch):
+    path = root / ".env"
+    original = path.read_text()
+    vault_path = root / vault.VAULT_FILENAME
+    replace = os.replace
+
+    def fail_after_other_vault_write(source, destination):
+        if Path(destination) == path:
+            vault_path.write_text('{"profiles": [{"id": "concurrent"}]}')
+            raise OSError("simulated disk failure")
+        return replace(source, destination)
+
+    monkeypatch.setattr(os, "replace", fail_after_other_vault_write)
+    with pytest.raises(vault.VaultError):
+        vault.initialize_store(PASSWORD, root=root, path=path, expected=original)
+    assert path.read_text() == original
+    assert json.loads(vault_path.read_text())["profiles"] == [{"id": "concurrent"}]
+
+
+def test_initialize_store_does_not_replace_a_concurrently_created_vault(root, monkeypatch):
+    path = root / ".env"
+    original = path.read_text()
+    vault_path = root / vault.VAULT_FILENAME
+    link = os.link
+
+    def create_other_vault_first(source, destination):
+        vault_path.write_text('{"profiles": [{"id": "concurrent"}]}')
+        return link(source, destination)
+
+    monkeypatch.setattr(os, "link", create_other_vault_first)
+    with pytest.raises(vault.VaultError, match="changed"):
+        vault.initialize_store(PASSWORD, root=root, path=path, expected=original)
+    assert path.read_text() == original
+    assert json.loads(vault_path.read_text())["profiles"] == [{"id": "concurrent"}]
+
+
+def test_initialize_store_preserves_store_changed_after_vault_install(root, monkeypatch):
+    path = root / ".env"
+    original = path.read_text()
+    link = os.link
+
+    def change_store_after_vault_install(source, destination):
+        link(source, destination)
+        path.write_text("NEW=concurrent\n")
+
+    monkeypatch.setattr(os, "link", change_store_after_vault_install)
+    with pytest.raises(vault.VaultError, match="changed"):
+        vault.initialize_store(PASSWORD, root=root, path=path, expected=original)
+    assert path.read_text() == "NEW=concurrent\n"
+    assert not (root / vault.VAULT_FILENAME).exists()
+
+
+def test_initialize_store_handles_an_empty_new_workspace(root):
+    workspace_root = root / "workspaces" / "new"
+    path = workspace_root / ".env"
+    profile = vault.initialize_store(PASSWORD, root=workspace_root, path=path, expected="")
+    assert vault.unlock_with_password(profile["id"], PASSWORD, root=workspace_root)
+    assert path.read_text() == ""
+    assert vault.skip_list(root=workspace_root) == sorted(vault.DEFAULT_SKIP)
+    assert (root / ".env").read_text() == "OPENAI_API_KEY=sk-not-a-real-key\nOTHER=plain\n"
+
+
+def test_initialize_store_remembers_public_values_for_later_sealing(root):
+    path = root / ".env"
+    original = "TOKEN=secret\nNEXT_PUBLIC_URL=https://example.test\n"
+    path.write_text(original)
+    profile = vault.initialize_store(PASSWORD, root=root, path=path, expected=original)
+    key = vault.unlock_with_password(profile["id"], PASSWORD, root=root)
+    result = vault.seal_store(key, profile_id=profile["id"], root=root)
+    assert result["skipped"] == ["NEXT_PUBLIC_URL"]
+    assert passbook.parse_env_text(path.read_text())["NEXT_PUBLIC_URL"] == "https://example.test"
+
+
+def test_initialize_store_records_sealing_in_the_workspace_ledger(root):
+    import passbook_stamp
+
+    workspace_root = root / "workspaces" / "team"
+    workspace_root.mkdir(parents=True)
+    path = workspace_root / ".env"
+    original = "TOKEN=hive-sealed:v2:orphan\n"
+    path.write_text(original)
+    profile = vault.initialize_store(PASSWORD, root=workspace_root, path=path, expected=original,
+                                     recovered={"TOKEN": "recovered-secret-value"})
+    records = passbook_stamp.read_stamps(root=workspace_root)
+    assert len(records) == 1
+    assert records[0]["op"] == "seal"
+    assert records[0]["keys"] == ["TOKEN"]
+    assert profile["id"] in records[0]["reason"]
+    assert "recovered-secret-value" not in json.dumps(records)
+    assert passbook_stamp.read_stamps(root=root) == []
+
+
 # ── the headline property ──────────────────────────────────────────────────
 
 

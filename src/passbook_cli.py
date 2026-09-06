@@ -228,7 +228,7 @@ def cmd_check(args: argparse.Namespace) -> int:
 
 
 def _write_values(values, *, overwrite: bool, exact: bool = False,
-                  app: str = "passbook-cli") -> dict | None:
+                  app: str = "passbook-cli", interactive: bool = False) -> dict | None:
     """Write values, keeping a sealed store sealed. None means it was refused.
 
     A store is either encrypted or it is not; half of each is a state nobody
@@ -247,8 +247,20 @@ def _write_values(values, *, overwrite: bool, exact: bool = False,
     except ImportError:
         return passbook.set_values(values, overwrite=overwrite, exact=exact)
 
-    held = set(passbook.key_names())
-    answer = passbook_broker.seal_values(values, app=app)
+    held = passbook._key_names_on_disk(passbook.target_path())
+    kept = sorted(key for key in values if key in held) if not overwrite else []
+    if kept:
+        values = {key: value for key, value in values.items() if key not in held}
+        if not values:
+            return {"path": str(passbook.target_path()), "added": [], "updated": [], "kept": kept}
+    # A terminal add can finish signing in and keep its values in memory.
+    # Piped imports and collector writes must never consume input as a password.
+    if interactive:
+        signin_args = build_parser().parse_args(["signin"])
+        if cmd_signin(signin_args):
+            _fail("Nothing was written.")
+            return None
+    answer = passbook_broker.seal_values(values, app=app, workspace_id=passbook.workspace())
     if answer.get("ok"):
         sealed = answer.get("sealed") or []
         # `set_values` distinguishes these and callers print them; the sealing
@@ -256,7 +268,7 @@ def _write_values(values, *, overwrite: bool, exact: bool = False,
         return {"path": answer.get("path", ""),
                 "added": sorted(k for k in sealed if k not in held),
                 "updated": sorted(k for k in sealed if k in held),
-                "kept": [], "sealed": sorted(sealed)}
+                "kept": kept, "sealed": sorted(sealed)}
     # Two things this has to get right, and the first version got neither.
     #
     # It led with the mechanism and then repeated it — "the value could not be
@@ -434,7 +446,8 @@ def cmd_add(args: argparse.Namespace) -> int:
             "modify", existing, reason="replace an existing credential", app=who):
         return 1
     try:
-        result = _write_values(values, overwrite=args.replace, app=who)
+        result = _write_values(values, overwrite=args.replace, app=who,
+                               interactive=sys.stdin.isatty() and not args.stdin)
         if result is None:
             return 1
     except passbook.ContainerisedHomeError as error:
@@ -2750,7 +2763,16 @@ def _sealed_store_present() -> bool:
     try:
         import passbook_vault
 
-        return bool(passbook_vault.status().get("sealed"))
+        target = passbook.target_path()
+        state = passbook_vault.status(root=target.parent, path=target)
+        skips = passbook_vault.skip_list(root=target.parent)
+        # A newly initialized empty vault (or one holding only public settings)
+        # must encrypt its first secret too. A deliberately unsealed store has
+        # non-exempt plaintext, so its later writes stay readable as requested.
+        only_exempt = all(passbook_vault.matches_skip(name, skips)
+                          for name in state.get("plaintext", []))
+        return bool(state.get("sealed") or (state.get("profiles")
+                    and only_exempt and not state.get("legacy_v1")))
     except Exception:
         return False
 
@@ -3205,8 +3227,130 @@ def cmd_matrix(args: argparse.Namespace) -> int:
     return 0
 
 
+def _signin_bootstrap(module, args: argparse.Namespace, *, root: Path,
+                      store: Path, workspace: str) -> tuple[str, str] | None:
+    """Finish first-run setup, recovering old fleet ciphertext before prompting."""
+    import passbook_broker
+
+    try:
+        expected = store.read_text(encoding="utf-8") if store.exists() else ""
+        raw = passbook.parse_env_text(expected)
+        # read_vault intentionally treats unreadable files as an empty listing;
+        # that is not permission to replace one with a new encryption key.
+        if module.vault_path(root).exists():
+            saved = json.loads(module.vault_path(root).read_text(encoding="utf-8"))
+            if not isinstance(saved, dict) or saved.get("profiles") != []:
+                raise ValueError("The existing vault file is not an empty vault")
+    except (OSError, ValueError, UnicodeError):
+        _fail("This Mac's vault or store could not be read. Nothing was changed.",
+              "Restore the original vault file before signing in.")
+        return None
+
+    if args.device or args.passkey or getattr(args, "recovery", False):
+        _fail("This workspace has no local vault for that sign-in method.",
+              "Set it up with:  passbook signin")
+        return None
+    sealed = [key for key, value in raw.items() if value.startswith("hive-sealed:")]
+    if any(not module.is_sealed(raw[key]) for key in sealed):
+        _fail("This store uses an older encryption format. Nothing was changed.",
+              "Open it on the machine that encrypted it before moving these credentials.")
+        return None
+
+    recovered = {}
+    if sealed:
+        if workspace != passbook.ROOT_WORKSPACE_ID:
+            _fail("This workspace has encrypted credentials but its vault file is missing.",
+                  "Restore this workspace's vault file before signing in.")
+            return None
+        import passbook_fleet
+        import passbook_sync
+        from concurrent.futures import ThreadPoolExecutor
+
+        print("Connecting to your other machines to finish PassBook setup…", flush=True)
+        peers = passbook_fleet.reachable()
+        def fetch(peer):
+            return (peer["host"], passbook_sync.fetch(peer["host"], peer["port"],
+                    address=peer["address"], timeout=5.0) or {})
+        with ThreadPoolExecutor(max_workers=min(8, len(peers)) or 1) as pool:
+            plan = passbook_sync.plan_bootstrap(sealed, pool.map(fetch, peers))
+        if plan["missing"] or plan["conflicts"]:
+            detail = []
+            if plan["missing"]:
+                detail.append("Not available from connected machines: " + ", ".join(plan["missing"]))
+            if plan["conflicts"]:
+                detail.append("Connected machines disagree: " + ", ".join(plan["conflicts"]))
+            _fail("This Mac has encrypted credentials but no local vault. Nothing was changed.",
+                  "Keep a connected Mac with working credentials online and signed in, "
+                  "then run passbook signin here again.\n" + "\n".join(detail))
+            return None
+        recovered = plan["values"]
+
+    # Start the service only once recovery is possible, and check it before
+    # asking for a password or saving anything to the real store.
+    started = passbook_broker.start()
+    if not started.get("ok"):
+        _fail("PassBook could not start its background service. Nothing was changed.",
+              str(started.get("detail") or "Try passbook signin again."))
+        return None
+    print("Choose a password for PassBook on this Mac. This completes setup and signs you in.")
+    try:
+        password = _ask_password("New vault password: ", confirm=True,
+                                 from_stdin=getattr(args, "password_stdin", False))
+        made = module.initialize_store(password, root=root, path=store,
+                                       expected=expected, recovered=recovered)
+    except (EOFError, KeyboardInterrupt):
+        _fail("Cancelled; nothing was written.")
+        return None
+    except (ValueError, module.VaultError) as error:
+        _fail(str(error))
+        return None
+    if recovered:
+        print(f"Recovered {len(recovered)} credential(s) into this Mac's encrypted vault.")
+    else:
+        print("PassBook is set up on this Mac.")
+    return made["id"], password
+
+
 def cmd_signin(args: argparse.Namespace) -> int:
     import passbook_broker
+
+    module = _vault_or_fail()
+    if module is None:
+        return _fail("The vault is not installed on this machine.", "Run:  passbook install")
+    try:
+        workspace = args.workspace or passbook.workspace() or passbook.ROOT_WORKSPACE_ID
+        root = module.workspace_root(workspace)
+        store = passbook.workspace_env_path(workspace)
+        profiles = module.profiles(root=root)
+        profile = args.profile or module.active_profile_id(root=root)
+        if args.duration and args.duration.strip().lower() not in passbook_broker.FOREVER_WORDS:
+            import passbook_access
+
+            passbook_access.parse_duration(args.duration)
+    except (TypeError, AttributeError):
+        return _fail("This workspace's vault file is malformed. Nothing was changed.",
+                     "Restore the original vault file before signing in.")
+    except (ValueError, OSError) as error:
+        return _fail(str(error))
+    if profile and not any(p["id"] == profile for p in profiles):
+        return _fail(f"No such profile: {profile}", "See available profiles:  passbook profile")
+
+    created = None
+    if not profiles:
+        created = _signin_bootstrap(module, args, root=root, store=store, workspace=workspace)
+        if created is None:
+            return 1
+        profile = created[0]
+    elif not profile:
+        return _fail("No active profile is selected.", "Choose one with:  passbook profile use <name>")
+
+    explicit_factor = (args.passkey or args.device or getattr(args, "recovery", False)
+                       or getattr(args, "password_stdin", False))
+    if not created and not explicit_factor and not args.duration:
+        live = passbook_broker.vault_status(workspace=workspace)
+        if live.get("unlocked") and live.get("workspace") == workspace and live.get("profile") == profile:
+            print("Already signed in.")
+            return 0
 
     # Signing in *means* "hold my key in the broker", so a missing broker is a
     # step in that job rather than a reason to refuse it. This sent people away
@@ -3215,20 +3359,21 @@ def cmd_signin(args: argparse.Namespace) -> int:
     if not passbook_broker.running():
         started = passbook_broker.start()
         if not started.get("ok"):
-            return _fail("No broker is running, and one would not start.",
-                         f"Start it by hand:  passbook broker start"
-                         f"   ({started.get('detail', '')})".rstrip())
-        print(f"Started the broker on {started['path']} (pid {started['pid']}).")
-    if args.passkey:
+            return _fail("PassBook could not start its background service.",
+                         str(started.get("detail") or "Try passbook signin again."))
+    if created:
+        answer = passbook_broker.signin(profile=profile, workspace=workspace,
+                                        password=created[1], duration=args.duration)
+    elif args.passkey:
         supplied = sys.stdin.readline().strip()
         if not supplied:
             return _fail("No PRF secret arrived on stdin.")
         answer = passbook_broker.signin(
-            profile=args.profile, workspace=args.workspace, credential_id=args.passkey,
+            profile=profile, workspace=workspace, credential_id=args.passkey,
             prf_secret=base64.urlsafe_b64decode(supplied + "=" * (-len(supplied) % 4)),
             duration=args.duration)
     elif args.device:
-        answer = passbook_broker.signin(profile=args.profile, workspace=args.workspace,
+        answer = passbook_broker.signin(profile=profile, workspace=workspace,
                                         device=True, duration=args.duration)
     elif getattr(args, "recovery", False):
         try:
@@ -3239,7 +3384,7 @@ def cmd_signin(args: argparse.Namespace) -> int:
             return 1
         except ValueError as error:
             return _fail(str(error))
-        answer = passbook_broker.signin(profile=args.profile, workspace=args.workspace,
+        answer = passbook_broker.signin(profile=profile, workspace=workspace,
                                         recovery=code, duration=args.duration)
     else:
         try:
@@ -3249,7 +3394,7 @@ def cmd_signin(args: argparse.Namespace) -> int:
             return 1
         except ValueError as error:
             return _fail(str(error))
-        answer = passbook_broker.signin(profile=args.profile, workspace=args.workspace,
+        answer = passbook_broker.signin(profile=profile, workspace=workspace,
                                         password=password, duration=args.duration)
     if not answer.get("ok"):
         error = answer.get("error", "Sign-in failed.")
@@ -5072,7 +5217,7 @@ def build_parser() -> argparse.ArgumentParser:
     profile_undevice.set_defaults(json=False, func=cmd_profile_untrust_device)
 
 
-    signin = subs.add_parser("signin", help="open the vault so apps can read credentials")
+    signin = subs.add_parser("signin", help="set up or open the vault so apps can use credentials")
     signin.add_argument("--profile", default="", help="which profile; omit for the active one")
     signin.add_argument("--workspace", default="",
                         help="which workspace to open; omit for the active one")

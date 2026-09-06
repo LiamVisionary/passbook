@@ -2134,8 +2134,12 @@ def install_method() -> tuple[str, list[str]]:
     here = str(Path(passbook.__file__).resolve())
     source = os.environ.get("PASSBOOK_SOURCE", f"git+{REPOSITORY}")
 
-    if "/uv/tools/" in here:
-        return "uv tool", ["uv", "tool", "install", "--force", source]
+    if "/uv/tools/" in here.replace("\\", "/"):
+        # Changing Python minor versions removes the old broker's import path.
+        # Use the base runtime: Windows copies its venv launcher, while POSIX
+        # normally symlinks it. The tool tree itself is about to be replaced.
+        return "uv tool", ["uv", "tool", "install", "--force", "--python",
+                           str(Path(getattr(sys, "_base_executable", None) or sys.executable).resolve()), source]
     if "/pipx/venvs/" in here:
         return "pipx", ["pipx", "install", "--force", source]
     # The app carries its own copy under `cli/`, beside a private runtime. That
@@ -3311,6 +3315,40 @@ def _signin_bootstrap(module, args: argparse.Namespace, *, root: Path,
     return made["id"], password
 
 
+def _signin_broker_ready(workspace: str) -> bool:
+    """Recover a legacy broker whose runtime was replaced during an update."""
+    import passbook_broker
+
+    if not passbook_broker.running():
+        return True
+    state = passbook_broker.vault_status(workspace=workspace) or {}
+    if state.get("ok") is True and state.get("supported") is True:
+        return True
+    if state.get("ok") is not True or state.get("supported") is not False:
+        _fail("Could not check PassBook's background service. Nothing was changed.",
+              "Try passbook signin again.")
+        return False
+
+    # v1.2 cannot import its vault after uv replaces its Python environment.
+    # It also predates broker-managed jobs. A modern broker can have live jobs
+    # even when its grants listing is empty, so only this exact legacy response
+    # permits a refresh; missing or failed probes must leave it running.
+    grants = passbook_broker._ask({"op": "grants"})
+    if grants != {"ok": False, "error": "unknown operation"} or grants.get("ok") is not False:
+        _fail("PassBook's background service cannot open the vault. Nothing was changed.",
+              "Finish any running PassBook jobs, then run:  passbook broker restart")
+        return False
+    stopped = passbook_broker.stop()
+    started = passbook_broker.start() if stopped.get("ok") else stopped
+    if started.get("ok"):
+        state = passbook_broker.vault_status(workspace=workspace) or {}
+        if state.get("ok") is True and state.get("supported") is True:
+            return True
+    _fail("PassBook could not refresh its background service. Your vault and credentials were not changed.",
+          str(started.get("detail") or "Try passbook signin again."))
+    return False
+
+
 def cmd_signin(args: argparse.Namespace) -> int:
     import passbook_broker
 
@@ -3334,6 +3372,8 @@ def cmd_signin(args: argparse.Namespace) -> int:
         return _fail(str(error))
     if profile and not any(p["id"] == profile for p in profiles):
         return _fail(f"No such profile: {profile}", "See available profiles:  passbook profile")
+    if not _signin_broker_ready(workspace):
+        return 1
 
     created = None
     if not profiles:

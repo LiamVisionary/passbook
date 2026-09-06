@@ -364,6 +364,8 @@ def test_an_older_broker_is_named_as_the_problem_not_your_typing(monkeypatch):
     monkeypatch.setattr(passbook_broker, "signin", lambda **kw: {
         "ok": False, "error": "'always' is not a duration — try 30m, 2h or 1d"})
     monkeypatch.setattr(passbook_broker, "running", lambda **kw: True)
+    monkeypatch.setattr(passbook_broker, "vault_status", lambda **kw: {
+        "ok": True, "supported": True, "unlocked": False})
     monkeypatch.setattr(_sys, "stdin", io.StringIO("a password\n"))
     monkeypatch.setattr(_sys, "stderr", io.StringIO())
     args = argparse.Namespace(profile="", workspace="", duration="always", passkey="",

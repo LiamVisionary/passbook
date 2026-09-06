@@ -184,7 +184,7 @@ def test_resolution_follows_the_path_it_is_given(tmp_path):
     """
     elsewhere = tmp_path / "bin"
     elsewhere.mkdir()
-    probe = elsewhere / "zzprobe"
+    probe = elsewhere / ("zzprobe.exe" if os.name == "nt" else "zzprobe")
     probe.write_bytes(b"x")
     # Executable, because a PATH lookup only finds what `exec` could run — the
     # same check `shutil.which` makes and the same one the kernel will.

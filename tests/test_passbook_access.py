@@ -39,6 +39,24 @@ def _rules(**apps) -> dict:
     return {"version": access.POLICY_VERSION, "default": {"mode": "always"}, "apps": apps}
 
 
+def test_remembered_approval_is_bound_to_its_workspace(machine):
+    policy = {"default": {"mode": "ask"}, "apps": {}}
+    access.open_session(duration="1h", app="agent", keys=["SAME_KEY"], workspace="alpha")
+    assert access.decide_key("agent", "SAME_KEY", policy, workspace="alpha")["outcome"] == "grant"
+    assert access.decide_key("agent", "SAME_KEY", policy, workspace="beta")["outcome"] == "ask"
+
+
+def test_a_legacy_session_does_not_authorize_a_new_workspace(machine):
+    policy = {"default": {"mode": "ask"}, "apps": {}}
+    access.open_session(duration="1h", app="agent", keys=["SAME_KEY"])
+    path = access.sessions_path()
+    data = json.loads(path.read_text())
+    data["sessions"][0].pop("workspace", None)
+    path.write_text(json.dumps(data))
+    assert access.decide_key("agent", "SAME_KEY", policy, workspace="main")["outcome"] == "grant"
+    assert access.decide_key("agent", "SAME_KEY", policy, workspace="client")["outcome"] == "ask"
+
+
 # ── durations ──────────────────────────────────────────────────────────────
 
 

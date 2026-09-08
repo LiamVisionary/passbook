@@ -10,6 +10,7 @@ partial. Everything else here defends that property's edges.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 import sys
@@ -43,6 +44,66 @@ def root(tmp_path, monkeypatch):
 
 def _profile(root: Path, label: str = "Liam") -> str:
     return vault.create_profile(label, password=PASSWORD, root=root)["id"]
+
+
+@pytest.mark.parametrize("fallback", [False, True])
+def test_scrypt_matches_rfc7914_vector(monkeypatch, fallback):
+    # RFC 7914 section 12, first 32 bytes of the published 64-byte vector.
+    if fallback:
+        monkeypatch.delattr(hashlib, "scrypt", raising=False)
+    assert vault._scrypt(b"", salt=b"", n=16, r=1, p=1, maxmem=vault.SCRYPT_MAXMEM).hex() == (
+        "77d6576238657b203b19ca42c18a0497f16b4844e3074ae8dfdffa3fede21442")
+
+
+@pytest.mark.parametrize("n,r,p,maxmem", [
+    (1, 8, 1, 256 << 20), (3, 8, 1, 256 << 20),
+    (16, 0, 1, 256 << 20), (16, 1, 0, 256 << 20),
+    (16, -1, 1, 256 << 20), (16, 1, -1, 256 << 20),
+    (16.0, 1, 1, 256 << 20), (16, 1.0, 1, 256 << 20),
+    (16, 1, 1.0, 256 << 20),
+    (1 << 16, 1, 1, 256 << 20), (1 << 16, 8, 1, 64 << 20),
+    (16, 1, 1 << 30, 256 << 20), (16, 1, 1, 0),
+])
+def test_scrypt_fallback_refuses_invalid_or_excessive_cost_before_allocation(monkeypatch, n, r, p, maxmem):
+    monkeypatch.delattr(hashlib, "scrypt", raising=False)
+    monkeypatch.setattr(vault, "Scrypt", lambda **kwargs: pytest.fail("must refuse before allocation"))
+    with pytest.raises(ValueError):
+        vault._scrypt(b"fixture", salt=b"synthetic-salt-16", n=n, r=r, p=p, maxmem=maxmem)
+
+
+def test_scrypt_does_not_fallback_after_native_provider_refusal(monkeypatch):
+    def refused(*args, **kwargs):
+        raise ValueError("native memory limit")
+    monkeypatch.setattr(hashlib, "scrypt", refused, raising=False)
+    monkeypatch.setattr(vault, "Scrypt", lambda **kwargs: pytest.fail("a present provider's refusal must stand"))
+    with pytest.raises(ValueError, match="native memory limit"):
+        vault._scrypt(b"fixture", salt=b"synthetic-salt-16", n=16, r=1, p=1, maxmem=vault.SCRYPT_MAXMEM)
+
+
+@pytest.mark.parametrize("fallback_creates", [False, True])
+def test_password_profile_opens_across_scrypt_backends(root, monkeypatch, fallback_creates):
+    native = getattr(hashlib, "scrypt", None)
+    if native is None:
+        pytest.skip("cross-provider test needs the native provider")
+    if fallback_creates:
+        monkeypatch.delattr(hashlib, "scrypt")
+    profile = _profile(root)
+    original = vault.read_vault(root=root)
+    factor = original["profiles"][0]["factors"][0]
+    assert factor["params"]["kdf"] == "scrypt"
+    assert (factor["params"]["n"], factor["params"]["r"], factor["params"]["p"]) == (vault.SCRYPT_N, 8, 1)
+    key = vault.unlock_with_password(profile, PASSWORD, root=root)
+    sealed = vault.seal_value("SYNTHETIC_KEY", "synthetic-value", key, profile_id=profile)
+    if fallback_creates:
+        monkeypatch.setattr(hashlib, "scrypt", native, raising=False)
+    else:
+        monkeypatch.delattr(hashlib, "scrypt")
+    opened = vault.unlock_with_password(profile, PASSWORD, root=root)
+    assert opened == key
+    assert vault.unseal_mapping({"SYNTHETIC_KEY": sealed}, opened, profile_id=profile) == {"SYNTHETIC_KEY": "synthetic-value"}
+    with pytest.raises(vault.InvalidFactor):
+        vault.unlock_with_password(profile, "wrong synthetic password", root=root)
+    assert vault.read_vault(root=root) == original
 
 
 def test_initialize_store_seals_recovered_values_without_plaintext_files(root, monkeypatch):
@@ -843,3 +904,22 @@ def test_one_profile_cannot_read_what_another_sealed(root):
     assert vault.unseal_mapping(raw, their_dek, profile_id=other["id"]) == {}, \
         "the new profile opened something it did not seal"
     assert vault.unseal_mapping(raw, dek, profile_id=owner["id"])["ALPHA"] == "a-value"
+
+
+def test_seal_and_unseal_rewrite_the_explicit_file_and_preserve_other_workspaces(root):
+    original_main = (root / ".env").read_bytes()
+    target = root / "workspaces" / "client" / "credentials.env"
+    target.parent.mkdir(parents=True)
+    original = '# Keep this comment\nSAME_KEY="synthetic client  "\n'
+    target.write_text(original)
+    profile = _profile(target.parent)
+    dek = vault.unlock_with_password(profile, PASSWORD, root=target.parent)
+    result = vault.seal_store(dek, profile_id=profile, root=target.parent, path=target)
+    assert result["sealed"] == ["SAME_KEY"]
+    assert "synthetic client" not in target.read_text()
+    assert (root / ".env").read_bytes() == original_main
+    result = vault.unseal_store(dek, profile_id=profile, root=target.parent, path=target)
+    assert result["opened"] == ["SAME_KEY"]
+    assert passbook.parse_env_text(target.read_text())["SAME_KEY"] == "synthetic client  "
+    assert (root / ".env").read_bytes() == original_main
+    assert not (target.parent / ".env").exists()

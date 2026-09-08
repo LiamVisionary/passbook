@@ -29,6 +29,7 @@ const APPS_FILENAME = 'apps.json';
 const WORKSPACES_MANIFEST = 'workspaces.json';
 const WORKSPACES_DIRNAME = 'workspaces';
 const WORKSPACE_ENV_VAR = 'HIVE_WORKSPACE';
+const WORKSPACE_ID_ENV_VAR = 'HIVE_WORKSPACE_ID';
 const ROOT_WORKSPACE_ID = 'main';
 
 const ROOT_MODE = 0o700;
@@ -72,9 +73,10 @@ export function workspaceManifest(environ = process.env) {
     }
 }
 
-/** The workspace this process acts for. `HIVE_WORKSPACE` beats the manifest. */
+/** HIVE_WORKSPACE, then HIVE_WORKSPACE_ID, then the manifest's active choice. */
 export function workspace(environ = process.env) {
     let name = String(environ[WORKSPACE_ENV_VAR] || '').trim();
+    if (!name) name = String(environ[WORKSPACE_ID_ENV_VAR] || '').trim();
     if (!name) name = String(workspaceManifest(environ).activeWorkspaceId || '').trim();
     if (!name) return '';
     if (!WORKSPACE.test(name)) throw new Error(`${name} is not a valid workspace id`);
@@ -262,7 +264,7 @@ function tighten(target, mode) {
  * Add credentials to the canonical store, preserving everything else.
  * An existing key is kept unless `overwrite`. Returns key NAMES by outcome.
  */
-export function setValues(values, { overwrite = false, workspaceId = '', environ = process.env } = {}) {
+export function setValues(values, { overwrite = false, workspaceId = '', environ = process.env, path = null } = {}) {
     const reason = containerHomeReason(environ);
     if (reason) {
         const error = new Error(
@@ -276,7 +278,7 @@ export function setValues(values, { overwrite = false, workspaceId = '', environ
         if (!KEY.test(key)) throw new Error(`${key} is not a valid environment key`);
     }
 
-    const file = targetPath(workspaceId, environ);
+    const file = path ?? targetPath(workspaceId, environ);
     const existing = read(file);
     const added = [], updated = [], kept = [];
     for (const [key, raw] of Object.entries(values)) {

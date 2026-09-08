@@ -2,7 +2,120 @@
 
 All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
-## [Unreleased]
+## [1.7.0] — 2026-09-08
+
+### 2026-09-08 — Preserve credential boundaries during inheritance and import
+
+- Refuse legacy reads, process injection, and proxy requests for credentials
+  inherited from a managed workspace. Classify the owning store after local
+  overrides, and recognize alternate workspace IDs pointing at the same file.
+  Disconnecting a host does not reopen legacy access; unrelated local keys and
+  genuine local overrides continue to work.
+- Route `link accept` through the same encrypted writer as app and CLI saves.
+  Keep an encrypted receiver encrypted, preserve its selected workspace and
+  replacement policy, and record changes for synchronization. A locked receiver
+  refuses a replacement without consuming the envelope, allowing a later retry.
+  A saved value whose metadata update fails is reported as a partial save.
+- Final local release gate: 1,122 Python 3.12 tests pass, with two Windows-only
+  skips, in 111.86 seconds. Apple Python 3.9 link and onboarding tests pass all
+  64 cases; the inheritance fix passes 396 affected tests on Python 3.12.
+
+### 2026-09-08 — App key replacements participate in fleet sync
+
+- Record a fresh per-key sync timestamp after successful app/CLI additions,
+  replacements, and owner imports, including writes sealed by the broker.
+  Previously the value changed while its old timestamp stayed in place, so
+  newest-wins reconciliation could ignore an edited key indefinitely.
+- Stamp the actual destination workspace and only keys that were written.
+  Locked, invalid, and kept entries do not acquire a newer timestamp. Serialize
+  metadata updates with the existing sidecar lock so concurrent writers retain
+  each other's entries.
+- Report a partial save if the value was stored but its sync timestamp could
+  not be recorded, without exposing values or exception details. This uses the
+  existing sync schedule and permissions; it does not force an immediate push
+  or resolve pre-existing conflicts by guessing which device is authoritative.
+- Validation: the app's `add --stdin --replace` entry path reproduced the
+  missing timestamp before the fix. Regression coverage includes a real locked
+  then unlocked broker, encrypted addition/replacement, receiver selection of
+  the new value, workspace isolation, kept/invalid writes, metadata-write
+  failure reporting, and concurrent timestamps. The complete Python 3.12 suite
+  passes 1,109 tests with two Windows-only skips in 93.59 seconds; the affected
+  Apple Python 3.9 suites pass 211 tests. Included in the 1.7.0 release.
+
+### 2026-09-08 — Apple Python password compatibility
+
+- Fix password vault initialization and encrypted backups on Apple's Python
+  3.9 builds that omit `hashlib.scrypt`. Use the existing cryptography dependency
+  only when that function is absent, with identical scrypt parameters, 32-byte
+  keys, ciphertext formats, and the existing memory ceilings.
+- Verify the RFC 7914 test vector, opening vaults and backups across providers,
+  wrong-password refusal, and invalid or excessive costs before allocation.
+- Honor the host's standard `SSL_CERT_FILE` and `SSL_CERT_DIR` settings for
+  managed HTTPS on Apple LibreSSL, which ignores them while loading default
+  trust. Keep certificate and hostname verification enabled; untrusted or
+  mismatched certificates and invalid trust configuration remain refused.
+
+### 2026-09-08 — Managed application connections
+
+- Connect a verified host to an encrypted workspace with one owner setup flow;
+  preserve the desktop's selected workspace and reuse the first existing store.
+- Add durable operation requests, authenticated owner decisions, scoped agent
+  grants, encrypted key entry, pause/disconnect, and retry-safe HTTPS use.
+- Resume approved background access through its own device factor; install
+  login startup without interrupting the current broker. Report missing startup
+  or locked access accurately and repair removed factors during owner reconnect.
+- Provide safe managed MCP tools and owner-approved encrypted peer snapshots.
+  Refuse plaintext and arbitrary-process tools on managed workspaces.
+- Recover a selected workspace whose encrypted entries arrived without a local
+  vault profile. Stage bounded encrypted peer batches, require both owners'
+  authorization, verify the replacement, and retain original bytes in a private
+  password-encrypted archive before committing the local vault.
+- Support 30-day owner-approved peer update permissions. Pin receiving host and
+  device identities, check fresh signed refresh proofs, and recheck scope and
+  policy on each transfer. Default to exact keys; future keys require separate
+  consent. Keep local changes and source removals, and never automatically
+  overwrite entries an initial snapshot preserved.
+- Preserve committed import receipts across retries and broker restarts. Serialize
+  cooperating credential writers and check ciphertext versions before an incoming
+  update. Document the remaining cross-file crash/reconciliation limit.
+- Preserve explicit workspace context through reads, writes, OAuth refresh,
+  grants, and access receipts. Redact provider echoes in header names and short
+  values as well as ordinary response data.
+- Authorize HivemindOS in the PassBook window with a matching installation
+  code, a chosen workspace, and one password confirmation. Signed, expiring
+  requests keep the password out of the host's result; the native transport
+  bounds output and time, and an expired request can be closed.
+- Replace older receiving permissions when owners renew a device connection.
+  Repeated updates remain conflict-free, local edits stay intact, and retrying
+  a stopped permission cannot reactivate it.
+
+Validation: 1,103 Python tests passed in 91.37 seconds with isolated home, store,
+and GPG directories; two Windows-only tests were skipped on macOS. This adds
+193 passing tests over the 910-test baseline. The additional Apple Python 3.9
+run passed 1,094 tests, skipped ten, and retained one debugger-control failure
+that also reproduces in the unchanged checkout: its ordinary Python process
+cannot be attached by the debugger, so that interpreter cannot demonstrate the
+hardening difference. The vault, backup, and managed HTTPS tests pass on both
+interpreters; the three TLS refusal cases send no credentials to the provider.
+Installed-wheel setup and the real HivemindOS/WebKit → CLI → broker → HTTPS path
+were exercised with synthetic credentials. This evidence was collected from the 1.7.0 development builds.
+An installed development wheel also passed isolated setup, broker startup,
+authorization, encrypted key creation, reconnect, and disconnect on a physical
+Apple M2 Max. An approved HTTPS request ran through its real broker with provider
+authentication, response redaction, and idempotent replay. Untrusted certificates
+and wrong hostnames were refused before credentials were sent. Both temporary
+brokers and their directory were removed; no real store, keychain, login service,
+or global certificate settings were used.
+Real CLI tests also cover two isolated brokers, 70-key multipart recovery, and a
+subsequent password-free encrypted key rotation. Host fleet transport and OS
+isolation from unrestricted same-user agents remain separate delivery gates.
+Both authorization UI surfaces passed through real owner routes and the broker;
+native IPC and operating-system app activation were simulated. Rust checks
+compiled the native bridge and its tests; a packaged app, real push delivery,
+and keystore access across login or reboot were not verified.
+Deletion propagation, bidirectional conflict resolution, automatic lease renewal,
+and forced replacement of a running older broker are not implemented; see
+`docs/MANAGED_PROTOCOL.md`.
 
 ### A revealed credential is drawn, and the window it is drawn in cannot be captured
 

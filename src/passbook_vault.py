@@ -19,7 +19,7 @@ that can happen: forget the data key, and the store on disk is inert again.
 
 ## Portable on purpose
 
-Everything here is `hashlib` and AES-GCM. There is no Security.framework, no
+Everything here is portable scrypt and AES-GCM. There is no Security.framework, no
 DPAPI, no libsecret in the critical path, because the vault has to open the same
 way on macOS, Windows, Linux and eventually iOS — and because a probe showed
 that an unsigned interpreter cannot persist biometric-guarded key material on
@@ -28,7 +28,7 @@ would have made the floor different on every OS and missing on one of them.
 
 So the two factors that matter are portable by construction:
 
-  password   `hashlib.scrypt` — standard library, identical everywhere
+  password   scrypt — hashlib, or cryptography when Python omits it
   passkey    a WebAuthn PRF secret — the same passkey works in a browser on
              macOS, Windows and Linux, in the app's webview, and on iOS
 
@@ -70,8 +70,10 @@ from typing import Any, Iterable, Mapping
 
 try:
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 except ImportError:  # pragma: no cover — reported through `available()`
     AESGCM = None  # type: ignore[assignment]
+    Scrypt = None  # type: ignore[assignment]
 
 __all__ = [
     "PREFIX",
@@ -257,6 +259,28 @@ def _unwrap(blob: str, kek: bytes, *, profile_id: str, factor_id: str) -> bytes:
         raise InvalidFactor("That did not open the vault") from error
 
 
+def _scrypt(password: bytes, *, salt: bytes, n: int, r: int, p: int, maxmem: int) -> bytes:
+    """The same 32-byte scrypt key on Python builds without hashlib.scrypt."""
+    if hasattr(hashlib, "scrypt"):
+        # A present provider's validation or memory refusal must not fall back.
+        return hashlib.scrypt(password, salt=salt, n=n, r=r, p=p,
+                              dklen=32, maxmem=maxmem)
+    if (any(type(value) is not int for value in (n, r, p, maxmem))
+            or n < 2 or n & (n - 1) or r < 1 or p < 1
+            or not 0 < maxmem <= (1 << 31) - 1):
+        raise ValueError("Invalid scrypt parameters")
+    # Match OpenSSL's scrypt_alg bounds before cryptography allocates: its
+    # Scrypt API has no maxmem argument. B + V/X/T = 128*r*(p+n+2).
+    # https://github.com/openssl/openssl/blob/openssl-3.0.18/providers/implementations/kdfs/scrypt.c
+    if (n >= 1 << 64 or p * r > (1 << 30) - 1
+            or (16 * r <= 63 and n >= 1 << (16 * r))
+            or 128 * p * r > (1 << 31) - 1
+            or 128 * r * (n + p + 2) > maxmem):
+        raise ValueError("scrypt memory limit exceeded")
+    _require_crypto()
+    return Scrypt(salt=salt, length=32, n=n, r=r, p=p).derive(password)
+
+
 def _password_kek(password: str, params: Mapping[str, Any]) -> bytes:
     """Derive a key-encryption key from a password. No pepper, no secret salt.
 
@@ -267,13 +291,12 @@ def _password_kek(password: str, params: Mapping[str, Any]) -> bytes:
     salt = _unb64(str(params.get("salt", "")))
     if len(salt) < 16:
         raise VaultError("This factor has no usable salt")
-    return hashlib.scrypt(
+    return _scrypt(
         password.encode("utf-8"),
         salt=salt,
         n=int(params.get("n", SCRYPT_N)),
         r=int(params.get("r", SCRYPT_R)),
         p=int(params.get("p", SCRYPT_P)),
-        dklen=32,
         maxmem=SCRYPT_MAXMEM,
     )
 
@@ -638,13 +661,15 @@ def unlock_with_passkey(
     raise InvalidFactor("That passkey is not enrolled on this profile")
 
 
-def unlock_with_device(profile_id: str = "", *, root: Path | None = None) -> bytes:
+def unlock_with_device(profile_id: str = "", *, root: Path | None = None, factor_id: str = "") -> bytes:
     """Open the vault using this machine's keystore, if a device factor exists."""
     import passbook_keystore
 
     vault = read_vault(root=root)
     profile = _find_profile(vault, profile_id)
     for factor in _factors_of(profile, "device"):
+        if factor_id and factor.get("id") != factor_id:
+            continue
         held = passbook_keystore.fetch(f"passbook-vault-{profile['id']}-{factor['id']}")
         if not held:
             continue
@@ -792,6 +817,17 @@ def matches_skip(name: str, patterns: Iterable[str]) -> bool:
 def initialize_store(
     password: str, *, root: Path, path: Path, expected: str,
     recovered: Mapping[str, str] = (),
+    before_commit=None,
+) -> dict[str, Any]:
+    import passbook
+    with passbook.store_lock(path):
+        return _initialize_store(password, root=root, path=path, expected=expected,
+                                 recovered=recovered, before_commit=before_commit)
+
+
+def _initialize_store(
+    password: str, *, root: Path, path: Path, expected: str,
+    recovered: Mapping[str, str] = (), before_commit=None,
 ) -> dict[str, Any]:
     """Give an unconfigured workspace its first profile and seal its store.
 
@@ -875,6 +911,14 @@ def initialize_store(
             staged_store = staging / ".env"
             passbook._atomic_write(staged_store, rendered)
             new_vault = vault_path(staging).read_bytes()
+            staged_values = passbook.parse_env_text(staged_store.read_text(encoding="utf-8"))
+            expected_values = {name: recovered.get(name, value) for name, value in current.items()}
+            verified = {name: unseal_value(name, value, dek, profile_id=profile["id"])
+                        if name not in skipped else value for name, value in staged_values.items()}
+            if verified != expected_values:
+                raise VaultError("The replacement store could not be verified; setup left it unchanged")
+            if before_commit is not None:
+                before_commit(new_vault, staged_store.read_bytes())
             # Keep only the prior empty metadata for a possible rollback. No
             # original store or recovered secret is ever staged in plaintext.
             previous_vault = staging / "previous-vault.json"
@@ -989,7 +1033,7 @@ def seal_store(
                 "already_sealed": sorted(n for n, v in current.items() if is_sealed(v))}
     passbook.set_values(
         {n: seal_value(n, v, dek, profile_id=profile_id) for n, v in plain.items()},
-        overwrite=True,
+        overwrite=True, path=target, exact=True,
     )
     left = sorted(exempt)
     detail = (f"Sealed {len(plain)} value(s) under profile {profile_id}."
@@ -1057,7 +1101,7 @@ def unseal_store(
         # store had a trailing space inside a quoted OAuth client id, and a
         # rollback that quietly trimmed it would be a migration that edits
         # credentials — which is a migration nobody should trust.
-        passbook.set_values(opened, overwrite=True, exact=True)
+        passbook.set_values(opened, overwrite=True, exact=True, path=target)
     _record_seal_change("unseal", sorted(opened), profile_id=profile_id,
                         detail=f"opened {len(opened)} value(s) back to plaintext", root=root)
     return {"ok": not stuck, "opened": sorted(opened), "stuck": sorted(stuck),

@@ -121,11 +121,14 @@ def touch_meta(store: Path, keys: Iterable[str], *, when: float | None = None) -
     names = [str(k) for k in keys if str(k)]
     if not names:
         return
-    updated = read_meta(store)
-    stamp = time.time() if when is None else float(when)
-    for name in names:
-        updated[name] = stamp
-    write_meta(store, updated)
+    import passbook
+
+    with passbook.store_lock(meta_path(store)):
+        updated = read_meta(store)
+        stamp = time.time() if when is None else float(when)
+        for name in names:
+            updated[name] = stamp
+        write_meta(store, updated)
 
 
 # ── the policy gate: the reason this module exists ─────────────────────────

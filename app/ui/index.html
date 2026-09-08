@@ -975,6 +975,7 @@
 <div id="ask" hidden data-tauri-drag-region></div>
 <div id="drop" hidden></div>
 
+<script src="/authorize.js"></script>
 <script>
 (() => {
   const invoke = window.__TAURI__?.core?.invoke;
@@ -3205,7 +3206,7 @@ passbook oauth connect google:work</pre>
   function gateShouldShow() {
     // A request on screen carries its own unlock step, and the sign-in
     // sheet underneath it would mean approving something unread.
-    if (askShouldShow() || impShouldShow() || impView.done) return false;
+    if (authorization.active() || askShouldShow() || impShouldShow() || impView.done) return false;
     // The passkey offer comes AFTER a successful sign-in, which is the one
     // moment it can succeed — and the same moment the gate would otherwise
     // decide it is no longer needed and take the offer down with it.
@@ -3858,6 +3859,7 @@ passbook oauth connect google:work</pre>
    *  so the five second repaint took the import sheet down mid-decision and
    *  dropped the sign-in gate on top of it. One function decides now. */
   function paintSheet() {
+    if (authorization.paint()) return;
     if (impShouldShow() || impView.done) { paintImport(); return; }
     paintAsk();
   }
@@ -4857,6 +4859,8 @@ passbook oauth connect google:work</pre>
     };
   }
 
+  const authorization = window.createPassbookAuthorization({ invoke, container: ask, esc, repaint: paint });
+
   async function boot() {
     if (!invoke) {
       main.innerHTML = `<h2>PassBook</h2><p class="lede err">This window could not reach
@@ -4884,10 +4888,12 @@ passbook oauth connect google:work</pre>
       // A link that launched this window fired its event before there was a
       // window to hear it, so the first question is always "is one waiting?".
       await loadAsk();
+      await authorization.load();
       wireDrop();
       const events = window.__TAURI__?.event;
       if (events?.listen) {
         events.listen("passbook://ask", () => loadAsk());
+        events.listen("passbook://authorize", () => authorization.load());
         events.listen("passbook://ask-refused", (e) => {
           notice = String(e?.payload || "That link could not be read.");
           paint();

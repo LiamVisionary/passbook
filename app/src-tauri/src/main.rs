@@ -1359,6 +1359,7 @@ fn key_history(name: String) -> Result<Value, String> {
 /// and only to a request that asked for this host. They contain no credential:
 /// the store is read over IPC by the process that needs it, never over this.
 mod ask;
+mod authorize;
 mod veil;
 
 mod ui {
@@ -1367,6 +1368,7 @@ mod ui {
     use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 
     const INDEX: &[u8] = include_bytes!("../../ui/index.html");
+    const AUTHORIZE: &[u8] = include_bytes!("../../ui/authorize.js");
     const MARK: &[u8] = include_bytes!("../../ui/mark.png");
 
     /// The port this window prefers, and why it is not simply left to the OS.
@@ -1546,6 +1548,7 @@ mod ui {
 
         let (status, kind, body): (&str, &str, &[u8]) = match path {
             "/" | "/index.html" => ("200 OK", "text/html; charset=utf-8", INDEX),
+            "/authorize.js" => ("200 OK", "text/javascript; charset=utf-8", AUTHORIZE),
             "/mark.png" => ("200 OK", "image/png", MARK),
             _ => ("404 Not Found", "text/plain", b"not here"),
         };
@@ -1745,6 +1748,13 @@ fn pending() -> &'static std::sync::Mutex<Option<ask::Ask>> {
 
 /// Remember a request and wake the window.
 fn remember_ask(app: &tauri::AppHandle, url: &str) {
+    if authorize::remember(url) {
+        let _ = app.emit("passbook://authorize", ());
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.unminimize(); let _ = window.show(); let _ = window.set_focus();
+        }
+        return;
+    }
     // Distinct per request, so approving cannot be replayed against whatever
     // arrived afterwards.
     let id = format!("{:x}", std::time::SystemTime::now()
@@ -1799,6 +1809,18 @@ fn dismiss_ask() {
     if let Ok(mut slot) = pending().lock() {
         *slot = None;
     }
+}
+
+#[tauri::command(async)]
+fn pending_authorization() -> Result<Option<Value>, String> { authorize::inspect() }
+
+#[tauri::command(async)]
+fn dismiss_authorization(id: String) -> Result<(), String> { authorize::dismiss(&id) }
+
+#[tauri::command(async)]
+fn decide_authorization(id: String, decision: String, workspace: String, create_workspace: bool,
+                        background: bool, consent: bool, password: String) -> Result<Value, String> {
+    authorize::decide(id, decision, workspace, create_workspace, background, consent, password)
 }
 
 /// Store a set of keys in one go, and clear the request that asked for them.
@@ -2055,7 +2077,8 @@ fn main() {
             forget_machine, verify_record, vault_create_workspace, vault_add_passkey,
             vault_signin_passkey, biometric_status, vault_signin_device, vault_trust_device,
             set_key_projects, set_confirmation,
-            pending_ask, dismiss_ask, apply_ask, inspect_env, import_env
+            pending_ask, dismiss_ask, apply_ask, inspect_env, import_env,
+            pending_authorization, dismiss_authorization, decide_authorization
         ])
         .run(tauri::generate_context!())
         .expect("PassBook failed to start");

@@ -409,6 +409,7 @@ def complete_login(
 
 def exchange_refresh(
     grant: Mapping[str, Any], refresh_token: str, *,
+    client_secret: str | None = None,
     root: Path | None = None, opener: Callable[..., Any] | None = None,
 ) -> dict[str, str]:
     """Renew a grant. Returns the values to store; does not store them."""
@@ -418,7 +419,7 @@ def exchange_refresh(
         "grant_type": "refresh_token",
         "refresh_token": refresh_token,
         "client_id": grant.get("client_id", ""),
-        "client_secret": _client_secret(grant),
+        "client_secret": _client_secret(grant) if client_secret is None else client_secret,
         "scope": grant.get("scope", ""),
     }, opener=opener)
     return _token_values(grant, tokens, previous_refresh=refresh_token)

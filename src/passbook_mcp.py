@@ -62,6 +62,18 @@ from typing import Any, Callable, Mapping
 
 import passbook
 
+
+def _managed_client():
+    try:
+        import passbook_managed_client
+        return passbook_managed_client if passbook_managed_client.configured() else None
+    except ImportError:
+        return None
+
+
+def _managed_store(state):
+    return (Path(state.get("root") or passbook.root()) / "passbook-managed.json").exists()
+
 __all__ = ["PROTOCOL_VERSION", "SERVER_NAME", "handle", "serve"]
 
 SERVER_NAME = "passbook"
@@ -428,7 +440,7 @@ def _tool_run_with_credentials(arguments: Mapping[str, Any],
         "op": "spawn", "app": _client_name(state), "command": command, "keys": keys,
         "cwd": str(arguments.get("cwd") or ""),
         "reason": str(arguments.get("reason") or "")[:200],
-        "project": passbook.project(),
+        "project": passbook.project(), "workspace": passbook.workspace() or "main",
     }, root=state.get("root")) or {}
     return answer or {"ok": False, "error": "the broker did not answer"}
 
@@ -450,7 +462,7 @@ def _tool_proxy_request(arguments: Mapping[str, Any],
         "headers": arguments.get("headers") or {},
         "body": arguments.get("body"),
         "reason": str(arguments.get("reason") or "")[:200],
-        "project": passbook.project(),
+        "project": passbook.project(), "workspace": passbook.workspace() or "main",
     }, root=state.get("root")) or {}
     return answer or {"ok": False, "error": "the broker did not answer"}
 
@@ -606,11 +618,12 @@ def handle(message: Mapping[str, Any], state: dict[str, Any]) -> dict[str, Any] 
             "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
             "instructions": (
                 "This machine shares one credential store between its apps, and you "
-                "can read from it. Call `list_credentials` to see what exists — names "
-                "and groups only, no values, no approval spent. Call `get_credential` "
-                "for one value when you actually need it; it is checked against the "
-                "owner's policy and leaves a receipt naming you. Never ask for "
-                "everything, and never print a value into your reply or into a file."
+                "can use named keys. Call `list_credentials` for names only. "
+                "Never print a value. Prefer `credential_use` when the host provides "
+                "a managed connection; approvals and secure key entry happen in the "
+                "host app. Resume with the same idempotencyKey. Never ask for values "
+                "in chat or call plaintext-reading tools. Legacy process injection "
+                "is for trusted programs and does not isolate arbitrary agent code."
             ),
         })
 
@@ -621,11 +634,19 @@ def handle(message: Mapping[str, Any], state: dict[str, Any]) -> dict[str, Any] 
         return _result(request_id, {})
 
     if method == "tools/list":
+        client = _managed_client()
+        if client or _managed_store(state):
+            safe = [tool for tool in TOOLS if tool["name"] not in {"get_credential", "get_oauth_token", "run_with_credentials", "proxy_request"}]
+            return _result(request_id, {"tools": safe + (client.TOOLS if client else [])})
         return _result(request_id, {"tools": TOOLS})
 
     if method == "tools/call":
         name = str(params.get("name") or "")
-        handler = HANDLERS.get(name)
+        client = _managed_client()
+        if (client or _managed_store(state)) and name in {"get_credential", "get_oauth_token", "run_with_credentials", "proxy_request"}:
+            return _result(request_id, _content({"ok": False, "code": "managed-connection-required",
+                "error": "Use credential_use through your connected host app. This workspace does not give credentials to agent processes."}))
+        handler = ({"credential_use": client.use, "credential_status": client.status}.get(name) if client else None) or HANDLERS.get(name)
         if handler is None:
             return _error(request_id, -32602, f"no such tool: {name}")
         arguments = params.get("arguments") if isinstance(params.get("arguments"), dict) else {}

@@ -11,6 +11,29 @@ will ask.
 
 ## Task: put this project on PassBook
 
+### When acting as an agent in a connected host
+
+Use `credential_use` from the host's MCP server or configured `passbook mcp`.
+Supply key names, the exact HTTPS destination, task and account, an explanation,
+and an idempotency key. Keep the same idempotency key when resuming the same
+operation. The owner reviews access, adds a missing key, or unlocks it in the
+host app. Never ask them to paste a value into chat or run broker commands.
+
+`credential_status` reports the authenticated agent's requests. An awaiting,
+locked, absent, denied, or disconnected result describes a different state;
+never repair one by reading the store, forging another agent's identity, or
+creating a second copy of the key. A denied request is not a sign-in problem.
+
+Managed workspaces refuse raw reads and arbitrary process injection. Do not
+call `get_credential`, `passbook get`, or use `run` as an extraction workaround.
+Environment injection with output redaction remains a compatibility feature for
+trusted programs; it cannot contain arbitrary agent code. The host must isolate
+agent code from its own signing identity, keystore, files, and process memory.
+
+The integration steps below are for a **trusted application or connector** that
+needs credentials internally. They are not instructions to load secrets into
+an agent runtime. See [the managed host contract](MANAGED_PROTOCOL.md).
+
 This machine keeps **one** credential store that every PassBook app shares. Your
 job is to make this project use it, and to make sure it never creates a private
 one.
@@ -53,10 +76,10 @@ adopts it. Nothing forks, so nothing ever has to be merged.
 3. Read credentials from the process environment as normal
    (`os.environ["OPENAI_API_KEY"]`). Do not read the file yourself.
 
-4. Delete any private `.env` bootstrap this project already has, and any code
-   that writes credentials somewhere else. If the project holds keys that are
-   not in the shared store yet, pass them once as `seed=` — existing keys are
-   never overwritten.
+4. Remove redundant credential mirrors only after the owner has authorized
+   migration and the replacement path is verified. Keep intentional project
+   overrides. Never migrate by printing values; use the trusted application's
+   internal import path. Existing keys are never overwritten implicitly.
 
 5. Tell the difference between a key that is **missing** and one that is
    **locked**. `passbook check` says which:

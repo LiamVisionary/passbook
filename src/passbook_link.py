@@ -60,7 +60,7 @@ import os
 import secrets
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterable, Mapping, NamedTuple
+from typing import Any, Callable, Iterable, Mapping, NamedTuple
 
 import passbook
 
@@ -374,6 +374,7 @@ def grant(
     days: int = DEFAULT_GRANT_DAYS,
     root: Path | None = None,
     stores: Iterable[str | Path] | None = None,
+    resolve_values: Callable[[list[str]], Mapping[str, str]] | None = None,
 ) -> dict[str, Any]:
     """Run on the OWNING machine. Approve a device for named keys and seal them.
 
@@ -384,6 +385,10 @@ def grant(
     Returns the grant and a sealed envelope. Keys the store does not hold are
     reported as missing rather than silently dropped — a link that quietly
     delivers two of three keys is worse than one that fails.
+
+    A managed host may supply an already-authorized, workspace-scoped resolver.
+    It remains responsible for its key policy; this never skips peer identity
+    verification or falls back to a legacy read when that resolver refuses.
     """
     crypto = _require_crypto()
     serialization, x25519, AESGCM = crypto.serialization, crypto.x25519, crypto.AESGCM
@@ -406,10 +411,19 @@ def grant(
     if peer["did"] == me["did"]:
         raise LinkError("That pairing token is this machine's own.")
 
-    available_values = passbook.request(
-        wanted, app="passbook-link", reason=f"link to {peer['did']}",
-        workspace_id=workspace or passbook.workspace(), stores=stores,
-    )
+    if resolve_values is None:
+        available_values = passbook.request(
+            wanted, app="passbook-link", reason=f"link to {peer['did']}",
+            workspace_id=workspace or passbook.workspace(), stores=stores,
+        )
+    else:
+        resolved = resolve_values(wanted)
+        if not isinstance(resolved, Mapping):
+            raise LinkError("The authorized store did not return usable credentials.")
+        available_values = {key: resolved[key] for key in wanted if key in resolved}
+        if any(not isinstance(value, str) or not value.strip() or value.strip().startswith("hive-sealed:")
+               for value in available_values.values()):
+            raise LinkError("The authorized store did not return usable credentials.")
     missing = [key for key in wanted if key not in available_values]
     if missing:
         raise LinkError(f"Not in this machine's store: {', '.join(missing)}.")
@@ -464,7 +478,8 @@ def grant(
     state["issued"] = [item for item in state["issued"] if item.get("aud") != peer["did"]]
     state["issued"].append({**body, "fingerprint": peer["fingerprint"], "revoked": False})
     _write_grants(state, root)
-    _record("link", wanted, granted=True, reason=f"granted to {peer['fingerprint']}")
+    _record("link", wanted, granted=True, reason=f"granted to {peer['fingerprint']}",
+            root=root, workspace=workspace or passbook.workspace())
 
     return {
         "grant": body,
@@ -533,14 +548,13 @@ def known_issuer(did: str, *, root: Path | None = None) -> bool:
     return any(item.get("iss") == str(did) for item in _read_grants(root).get("accepted", []))
 
 
-def accept(
+def _open_accepted(
     envelope: str,
     *,
     confirm_fingerprint: str = "",
     root: Path | None = None,
-    overwrite: bool = False,
-) -> dict[str, Any]:
-    """Run on the JOINING machine. Open an envelope and write the keys in.
+) -> tuple[dict[str, Any], dict[str, str]]:
+    """Internal verification/decryption shared by single and staged acceptance.
 
     Every check that could fail closed does: the signature must verify against
     the issuing DID, the issuer must be one this machine has confirmed, the
@@ -552,6 +566,8 @@ def accept(
     envelope of their OWN keys to it — keys pointing at a proxy that logs every
     prompt. Accepting an envelope is therefore as much a trust decision as
     granting one, and it gets the same fingerprint.
+
+    This does not write credentials or consume the envelope's nonce.
     """
     crypto = _require_crypto()
     x25519, AESGCM = crypto.x25519, crypto.AESGCM
@@ -606,17 +622,43 @@ def accept(
     values = {key: value for key, value in opened.get("keys", {}).items() if key in permitted}
     if not values:
         raise LinkError("That envelope carried nothing this grant permits.")
+    return body, values
+
+
+def _commit_acceptance(body: Mapping[str, Any], keys: Iterable[str], *, root: Path | None,
+                       workspace: str) -> None:
+    state = _read_grants(root)
+    if not any(item.get("nonce") == body.get("nonce") for item in state["accepted"]):
+        state["accepted"].append({"iss": body["iss"], "nonce": body["nonce"], "exp": body["exp"],
+                                  "keys": sorted(keys), "at": _stamp(_now())})
+        _write_grants(state, root)
+        _record("link", sorted(keys), granted=True, reason=f"accepted from {body['iss']}",
+                root=root, workspace=workspace)
+
+
+def accept(envelope: str, *, confirm_fingerprint: str = "", root: Path | None = None,
+           overwrite: bool = False,
+           write_values: Callable[[dict[str, str]], Mapping[str, Any]] | None = None) -> dict[str, Any]:
+    """Verify a peer envelope, then write and consume it only after success.
+
+    Managed writers own their encrypted target and overwrite policy. They
+    return the normal set_values result plus an optional workspace name.
+    """
+    body, values = _open_accepted(envelope, confirm_fingerprint=confirm_fingerprint, root=root)
 
     # Lands in the receiver's ACTIVE workspace store, not machine-wide — a
     # borrowed key should be no broader on arrival than the scope that asked
     # for it.
-    written = passbook.set_values(values, overwrite=overwrite)
-    state["accepted"].append({
-        "iss": body["iss"], "nonce": body["nonce"], "exp": body["exp"],
-        "keys": sorted(values), "at": _stamp(_now()),
-    })
-    _write_grants(state, root)
-    _record("link", sorted(values), granted=True, reason=f"accepted from {body['iss']}")
+    if write_values is None:
+        written = passbook.set_values(values, overwrite=overwrite)
+    else:
+        if any(not isinstance(value, str) or not value.strip() or value.strip().startswith("hive-sealed:")
+               for value in values.values()):
+            raise LinkError("That envelope did not contain usable credentials.")
+        written = write_values(values)
+        if not isinstance(written, Mapping) or not {"added", "kept", "updated", "path"} <= written.keys():
+            raise LinkError("The receiving store did not confirm that the keys were saved.")
+    _commit_acceptance(body, values, root=root, workspace=str(written.get("workspace", passbook.workspace())))
 
     return {
         "from": body["iss"],
@@ -625,7 +667,7 @@ def accept(
         "kept": written["kept"],
         "updated": written["updated"],
         "path": written["path"],
-        "workspace": passbook.workspace(),
+        "workspace": written.get("workspace", passbook.workspace()),
         "expires": body["exp"],
     }
 
@@ -772,11 +814,13 @@ def revoke(did: str, *, root: Path | None = None) -> dict[str, Any]:
     }
 
 
-def _record(op: str, keys: Iterable[str], *, granted: bool, reason: str) -> None:
+def _record(op: str, keys: Iterable[str], *, granted: bool, reason: str,
+            root: Path | None = None, workspace: str = "") -> None:
     """Stamp a link event. A missing ledger must never break a link."""
     try:
         import passbook_stamp
 
-        passbook_stamp.stamp(op=op, keys=keys, app="passbook-link", granted=granted, reason=reason)
+        passbook_stamp.stamp(op=op, keys=keys, app="passbook-link", granted=granted, reason=reason,
+                             root=root, workspace=workspace)
     except Exception:  # noqa: BLE001 — a receipt is never worth failing the operation for
         pass

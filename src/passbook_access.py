@@ -1265,6 +1265,7 @@ def open_session(
     app: str = "",
     reason: str = "",
     approved_by: str = "owner",
+    workspace: str = "",
     root: Path | None = None,
 ) -> dict[str, Any]:
     """Hold the door open for a stated period. Returns the unlock, no values.
@@ -1284,6 +1285,7 @@ def open_session(
         "duration_seconds": seconds,
         "keys": sorted({str(key).strip() for key in keys if str(key).strip()}),
         "app": str(app).strip(),
+        "workspace": workspace or passbook.workspace() or passbook.ROOT_WORKSPACE_ID,
         "reason": str(reason)[:200],
         "approved_by": str(approved_by)[:64],
     }
@@ -1311,9 +1313,15 @@ def close_session(session_id: str = "", *, root: Path | None = None) -> dict[str
     return {"ok": closed > 0, "closed": closed, "remaining": len(kept)}
 
 
-def session_covers(app: str, key: str, *, root: Path | None = None) -> dict[str, Any] | None:
+def session_covers(app: str, key: str, *, root: Path | None = None,
+                   workspace: str = "") -> dict[str, Any] | None:
     """The unlock that covers this key for this app, if any is open."""
+    workspace = workspace or passbook.workspace() or passbook.ROOT_WORKSPACE_ID
     for item in sessions(root=root):
+        # Records from before workspace binding describe the original machine
+        # store. Absence is never permission to cross into a new workspace.
+        if (item.get("workspace") or passbook.ROOT_WORKSPACE_ID) != workspace:
+            continue
         if item.get("app") and item["app"] != str(app):
             continue
         named = item.get("keys") or []
@@ -1405,7 +1413,7 @@ def decide_key(app: str, key: str, policy: Mapping[str, Any], *, root: Path | No
     if mode == "never":
         return {"outcome": "refuse", "mode": mode, "why": "never allowed for this app"}
 
-    unlock = session_covers(app, key, root=root)
+    unlock = session_covers(app, key, root=root, workspace=workspace)
     if unlock:
         return {"outcome": "grant", "mode": mode, "why": f"unlocked for {describe_duration(unlock['remaining_seconds'])} more",
                 "session": unlock["id"]}

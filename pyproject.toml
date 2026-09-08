@@ -16,7 +16,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "passbook"
-version = "1.6.2"
+version = "1.7.0"
 description = "One credential store per machine, shared by every app that opts in."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -47,13 +47,16 @@ passbook-approve = "passbook_cli:main"
 passbook-brief = "passbook_cli:main"
 passbook-broker = "passbook_cli:main"
 passbook-check = "passbook_cli:main"
+passbook-connect = "passbook_cli:main"
 passbook-delete = "passbook_cli:main"
+passbook-disconnect = "passbook_cli:main"
 passbook-get = "passbook_cli:main"
 passbook-grants = "passbook_cli:main"
 passbook-guard = "passbook_cli:main"
 passbook-harden = "passbook_cli:main"
 passbook-history = "passbook_cli:main"
 passbook-install = "passbook_cli:main"
+passbook-integration = "passbook_cli:main"
 passbook-link = "passbook_cli:main"
 passbook-mcp = "passbook_cli:main"
 passbook-oauth = "passbook_cli:main"
@@ -121,12 +124,24 @@ py-modules = [
     "passbook_broker",
     "passbook_catalog",
     "passbook_cli",
+    "passbook_connect",
     "passbook_fleet",
     "passbook_grant",
     "passbook_harden",
     "passbook_identity",
+    "passbook_integrations",
     "passbook_keystore",
     "passbook_link",
+    "passbook_managed_cli",
+    "passbook_managed_authorize",
+    "passbook_managed_client",
+    "passbook_managed_http",
+    "passbook_managed_lease",
+    "passbook_managed_peer",
+    "passbook_managed_recovery",
+    "passbook_managed_service",
+    "passbook_managed_store",
+    "passbook_managed_use",
     "passbook_mcp",
     "passbook_oauth",
     "passbook_peer",
@@ -138,4 +153,4 @@ py-modules = [
 ]
 
 [tool.setuptools.data-files]
-"share/passbook" = ["docs/SPEC.md", "docs/SIGNING.md", "docs/AGENT_PROMPT.md", "src/passbook.mjs"]
+"share/passbook" = ["docs/SPEC.md", "docs/SIGNING.md", "docs/AGENT_PROMPT.md", "docs/MANAGED_PROTOCOL.md", "src/passbook.mjs"]

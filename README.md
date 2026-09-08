@@ -53,6 +53,12 @@ you see here, you can do from a terminal.
 - [What it does not claim](#what-it-does-not-claim)
 - [Reference](#reference)
 
+PassBook 1.7.0 adds a managed host protocol for durable
+workspace connections, agent approvals, and credential-use tools. See the
+[implemented protocol and its security limits](docs/MANAGED_PROTOCOL.md) and
+[remaining acceptance criteria](docs/MANAGED_INTEGRATIONS.md). Host applications
+must integrate this protocol to provide their setup and approval experience.
+
 ---
 
 ## Install

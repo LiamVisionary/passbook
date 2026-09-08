@@ -36,6 +36,115 @@ pytestmark = pytest.mark.skipif(
 CLI = Path(__file__).resolve().parents[1] / "bin" / "passbook"
 
 
+def test_authorized_adapters_keep_a_link_encrypted_and_workspace_scoped(machines, monkeypatch):
+    import passbook_vault as vault
+
+    monkeypatch.setattr(vault, "SCRYPT_N", 1 << 12)
+    owner, joiner = machines["owner"], machines["joiner"]
+    target = joiner / "workspaces" / "hivemindos" / ".env"
+    # The broker supplies its already-authorized scoped resolver. Linking must
+    # not retry a refusal through an ambient legacy credential read.
+    monkeypatch.setattr(passbook, "request", lambda *a, **k: pytest.fail("ambient credential read"))
+    pair = passbook_link.pairing_token(root=joiner)
+    grant = passbook_link.grant(
+        pair["token"], ["LENT"], confirm_fingerprint=pair["fingerprint"],
+        root=owner, workspace="hivemindos",
+        resolve_values=lambda wanted: {"LENT": "synthetic-peer-value", "UNREQUESTED": "withheld"},
+    )
+    observed = []
+
+    def encrypted_writer(values):
+        observed.append(sorted(values))
+        vault.initialize_store("synthetic-password", root=target.parent, path=target, expected="")
+        profile = vault.active_profile_id(root=target.parent)
+        dek = vault.unlock_with_password(profile, "synthetic-password", root=target.parent)
+        sealed = {key: vault.seal_value(key, value, dek, profile_id=profile) for key, value in values.items()}
+        result = passbook.set_values(sealed, path=target, environ={"HIVE_HOME": str(joiner)}, overwrite=False)
+        return {**result, "workspace": "hivemindos"}
+
+    with machines["at"]("bystander"):
+        result = passbook_link.accept(
+            grant["envelope"], confirm_fingerprint=grant["issuer_fingerprint"], root=joiner,
+            write_values=encrypted_writer,
+        )
+    assert result["workspace"] == "hivemindos"
+    assert result["keys"] == ["LENT"]
+    assert observed == [["LENT"]]
+    assert "synthetic-peer-value" not in target.read_text()
+    stored = passbook.parse_env_text(target.read_text())["LENT"]
+    assert vault.is_sealed(stored)
+    profile = vault.active_profile_id(root=target.parent)
+    dek = vault.unlock_with_password(profile, "synthetic-password", root=target.parent)
+    assert vault.unseal_value("LENT", stored, dek, profile_id=profile) == "synthetic-peer-value"
+    assert not (machines["bystander"] / ".env").exists()
+    assert not (joiner / ".env").exists()
+    import passbook_stamp
+    for device in (owner, joiner):
+        rows = [json.loads(line) for line in passbook_stamp.proof_path(device).read_text().splitlines()]
+        assert rows[-1]["workspace"] == "hivemindos"
+        assert rows[-1]["keys"] == ["LENT"]
+
+
+@pytest.mark.parametrize("value", [None, "", "hive-sealed:v2:unusable", 12])
+def test_authorized_resolver_must_return_usable_requested_values(machines, value):
+    pair = passbook_link.pairing_token(root=machines["joiner"])
+    with pytest.raises(passbook_link.LinkError):
+        passbook_link.grant(
+            pair["token"], ["LENT"], confirm_fingerprint=pair["fingerprint"],
+            root=machines["owner"], resolve_values=lambda wanted: {"LENT": value},
+        )
+    assert not (machines["owner"] / passbook_link.GRANTS_FILENAME).exists()
+
+
+def test_failed_encrypted_writer_does_not_consume_the_envelope(machines):
+    pair = passbook_link.pairing_token(root=machines["joiner"])
+    grant = passbook_link.grant(
+        pair["token"], ["LENT"], confirm_fingerprint=pair["fingerprint"],
+        root=machines["owner"], resolve_values=lambda wanted: {"LENT": "synthetic-value"},
+    )
+    calls = []
+
+    def unavailable_writer(values):
+        calls.append(sorted(values))
+        raise OSError("synthetic storage unavailable")
+
+    with pytest.raises(OSError):
+        passbook_link.accept(
+            grant["envelope"], confirm_fingerprint=grant["issuer_fingerprint"],
+            root=machines["joiner"], write_values=unavailable_writer,
+        )
+    assert not passbook_link.known_issuer(grant["grant"]["iss"], root=machines["joiner"])
+    result = passbook_link.accept(
+        grant["envelope"], confirm_fingerprint=grant["issuer_fingerprint"], root=machines["joiner"],
+        write_values=lambda values: {"added": sorted(values), "updated": [], "kept": [], "path": "synthetic"},
+    )
+    assert result["keys"] == ["LENT"]
+    assert calls == [["LENT"]]
+    with pytest.raises(passbook_link.LinkError, match="already been used"):
+        passbook_link.accept(grant["envelope"], root=machines["joiner"], write_values=unavailable_writer)
+
+
+def test_adapters_do_not_bypass_either_fingerprint_check(machines):
+    pair = passbook_link.pairing_token(root=machines["joiner"])
+
+    def forbidden(*args):
+        pytest.fail("unverified peer reached credential adapter")
+
+    with pytest.raises(passbook_link.LinkError, match="fingerprint"):
+        passbook_link.grant(
+            pair["token"], ["LENT"], confirm_fingerprint="invalid", root=machines["owner"],
+            resolve_values=forbidden,
+        )
+    grant = passbook_link.grant(
+        pair["token"], ["LENT"], confirm_fingerprint=pair["fingerprint"], root=machines["owner"],
+        resolve_values=lambda wanted: {"LENT": "synthetic-value"},
+    )
+    with pytest.raises(passbook_link.LinkError, match="fingerprint"):
+        passbook_link.accept(
+            grant["envelope"], root=machines["joiner"], confirm_fingerprint="invalid", write_values=forbidden,
+        )
+
+
 @pytest.fixture
 def machines(tmp_path, monkeypatch):
     """Three isolated machines: an owner, a joiner, and a bystander."""
@@ -43,6 +152,7 @@ def machines(tmp_path, monkeypatch):
     made = {name: tmp_path / name for name in ("owner", "joiner", "bystander")}
     for path in made.values():
         path.mkdir()
+    monkeypatch.setenv("HIVE_HOME", str(made["bystander"]))
 
     @contextlib.contextmanager
     def at(name: str):
@@ -372,6 +482,152 @@ def test_the_cli_link_flow_never_prints_a_value(machines):
         assert "a-value-nobody-should-see" not in stream
     with machines["at"]("joiner"):
         assert passbook.key_names() == ["LENT"]
+
+
+@pytest.fixture
+def sealed_receiver(machines, monkeypatch, request):
+    """The CLI talks to an actual broker holding this isolated receiver's key."""
+    import passbook_broker as broker
+    import passbook_sync as sync
+    import passbook_vault as vault
+
+    home = machines["joiner"]
+    workspace = getattr(request, "param", "main")
+    for name in ("HIVE_WORKSPACE", "HIVE_WORKSPACE_ID", "HIVE_ENV_FILES", "HIVE_ENV_FILE",
+                 "PASSBOOK_BROKER_SOCKET", "PASSBOOK_APP"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("HIVE_HOME", str(home))
+    monkeypatch.setenv("HIVE_WORKSPACE_ID", "main")
+    monkeypatch.setenv("PASSBOOK_NO_NOTIFY", "1")
+    monkeypatch.setattr(vault, "SCRYPT_N", 1 << 12)
+    target = passbook.target_path(workspace_id=workspace)
+    password = "synthetic-link-owner-password"
+    profile = vault.create_profile("Receiver", password=password, root=target.parent)
+    dek = vault.unlock_with_password(profile["id"], password, root=target.parent)
+    original = "synthetic-original-local-credential"
+    sealed = vault.seal_value("LOCAL_ONLY", original, dek, profile_id=profile["id"])
+    passbook.set_values({"LOCAL_ONLY": sealed}, path=target, exact=True)
+    sync.touch_meta(target, ["LOCAL_ONLY"], when=123.0)
+    assert broker.start(root=home)["ok"]
+    monkeypatch.setenv("HIVE_WORKSPACE_ID", workspace)
+    assert broker.signin(profile=profile["id"], password=password, workspace=workspace, root=home)["ok"]
+
+    def offer(values):
+        pair = passbook_link.pairing_token(root=home)
+        return passbook_link.grant(pair["token"], values,
+            confirm_fingerprint=pair["fingerprint"], root=machines["owner"],
+            resolve_values=lambda keys: values)
+
+    def accept(offer, *options):
+        return subprocess.run([sys.executable, str(CLI), "link", "accept", offer["envelope"],
+            "--confirm", offer["issuer_fingerprint"], *options],
+            input="", capture_output=True, text=True, timeout=30, env=dict(os.environ))
+
+    try:
+        yield {"home": home, "workspace": workspace, "target": target, "password": password,
+               "profile": profile["id"], "dek": dek, "original": original,
+               "offer": offer, "accept": accept}
+    finally:
+        broker.stop(root=home)
+
+
+@pytest.mark.parametrize("sealed_receiver", ["main", "project-a"], indirect=True)
+@pytest.mark.parametrize("replace", [False, True])
+def test_cli_accept_encrypts_in_receiver_workspace_and_preserves_replace_policy(sealed_receiver, replace):
+    import passbook_sync as sync
+    import passbook_vault as vault
+
+    machine = sealed_receiver
+    before = passbook.parse_env_text(machine["target"].read_text())
+    offer = machine["offer"]({"LENT": "synthetic-peer-new", "LOCAL_ONLY": "synthetic-peer-replacement"})
+    done = machine["accept"](offer, *(["--replace"] if replace else []))
+    assert done.returncode == 0, done.stderr
+    raw = passbook.parse_env_text(machine["target"].read_text())
+    assert all(vault.is_sealed(value) for value in raw.values())
+    assert vault.unseal_value("LENT", raw["LENT"], machine["dek"],
+        profile_id=machine["profile"]) == "synthetic-peer-new"
+    expected = "synthetic-peer-replacement" if replace else machine["original"]
+    assert vault.unseal_value("LOCAL_ONLY", raw["LOCAL_ONLY"], machine["dek"],
+        profile_id=machine["profile"]) == expected
+    assert (raw["LOCAL_ONLY"] == before["LOCAL_ONLY"]) is (not replace)
+    meta = sync.read_meta(machine["target"])
+    assert meta["LENT"] > 123
+    assert (meta["LOCAL_ONLY"] > 123) if replace else (meta["LOCAL_ONLY"] == 123)
+    assert ("replaced: LOCAL_ONLY" if replace else "already set, unchanged: LOCAL_ONLY") in done.stdout
+    assert "synthetic-peer" not in machine["target"].read_text() + done.stdout + done.stderr
+    if machine["workspace"] != "main":
+        assert not (machine["home"] / ".env").exists()
+        assert not sync.meta_path(machine["home"] / ".env").exists()
+    assert passbook_link.known_issuer(offer["grant"]["iss"], root=machine["home"])
+
+
+def test_cli_accept_locked_receiver_refuses_without_consuming_then_retries_same_envelope(sealed_receiver):
+    import passbook_broker as broker
+    import passbook_sync as sync
+    import passbook_vault as vault
+
+    machine = sealed_receiver
+    offer = machine["offer"]({"LENT": "synthetic-peer-new"})
+    before, meta = machine["target"].read_bytes(), sync.read_meta(machine["target"])
+    assert broker.signout(workspace=machine["workspace"], root=machine["home"])["ok"]
+    refused = machine["accept"](offer)
+    assert refused.returncode == 1
+    assert "Nothing was written" in refused.stderr and "passbook signin" in refused.stderr
+    assert "accepted from" not in refused.stdout
+    assert machine["target"].read_bytes() == before
+    assert sync.read_meta(machine["target"]) == meta
+    assert not passbook_link.known_issuer(offer["grant"]["iss"], root=machine["home"])
+    assert broker.signin(password=machine["password"], workspace=machine["workspace"], root=machine["home"])["ok"]
+    accepted = machine["accept"](offer)
+    assert accepted.returncode == 0, accepted.stderr
+    raw = passbook.parse_env_text(machine["target"].read_text())
+    assert vault.is_sealed(raw["LENT"])
+    assert vault.unseal_value("LENT", raw["LENT"], machine["dek"],
+        profile_id=machine["profile"]) == "synthetic-peer-new"
+    replayed = machine["accept"](offer)
+    assert replayed.returncode == 1 and "already been used" in replayed.stderr
+
+
+def test_cli_accept_keeps_existing_sealed_key_even_while_receiver_is_locked(sealed_receiver):
+    import passbook_broker as broker
+    import passbook_sync as sync
+
+    machine = sealed_receiver
+    before, meta = machine["target"].read_bytes(), sync.read_meta(machine["target"])
+    offer = machine["offer"]({"LOCAL_ONLY": "synthetic-peer-replacement"})
+    assert broker.signout(workspace=machine["workspace"], root=machine["home"])["ok"]
+    done = machine["accept"](offer)
+    assert done.returncode == 0, done.stderr
+    assert "already set, unchanged: LOCAL_ONLY" in done.stdout
+    assert machine["target"].read_bytes() == before
+    assert sync.read_meta(machine["target"]) == meta
+    assert passbook_link.known_issuer(offer["grant"]["iss"], root=machine["home"])
+
+
+def test_cli_accept_reports_saved_but_unrecorded_metadata_without_consuming(sealed_receiver, monkeypatch, capsys):
+    import passbook_cli as cli
+    import passbook_sync as sync
+    import passbook_vault as vault
+
+    machine = sealed_receiver
+    offer = machine["offer"]({"LENT": "synthetic-peer-new"})
+    def unavailable(*args, **kwargs):
+        raise OSError("synthetic metadata unavailable")
+    monkeypatch.setattr(sync, "touch_meta", unavailable)
+    code = cli.main(["link", "accept", offer["envelope"], "--confirm", offer["issuer_fingerprint"]])
+    output = capsys.readouterr()
+    assert code == 1
+    assert "Saved on this device" in output.err
+    assert "Nothing was written" not in output.err
+    assert "accepted from" not in output.out
+    raw = passbook.parse_env_text(machine["target"].read_text())
+    assert vault.is_sealed(raw["LENT"])
+    assert not passbook_link.known_issuer(offer["grant"]["iss"], root=machine["home"])
+    # The original encrypted envelope can still complete the explicitly
+    # requested replacement after metadata is writable again.
+    retried = machine["accept"](offer, "--replace")
+    assert retried.returncode == 0, retried.stderr
+    assert sync.read_meta(machine["target"])["LENT"] > 123
 
 
 # ── accepting is a trust decision too ──────────────────────────────────────

@@ -303,18 +303,21 @@ _PENDING_LOCK = threading.Lock()
 def pending() -> list[dict[str, Any]]:
     """Requests waiting on a person. Key names, never values."""
     with _PENDING_LOCK:
-        return [{key: value for key, value in item.items() if key != "event"}
+        return [{key: value for key, value in item.items() if key != "event" and not key.startswith("_")}
                 for item in _PENDING.values()]
 
 
 def _queue(app: str, keys: list[str], reason: str,
-           kind: str = "read") -> tuple[str, threading.Event]:
+           kind: str = "read", *, workspace: str = "", project: str = "",
+           root: Path | None = None) -> tuple[str, threading.Event]:
     request_id = secrets.token_hex(4)
     event = threading.Event()
     with _PENDING_LOCK:
         _PENDING[request_id] = {
             "id": request_id, "app": app, "keys": sorted(keys), "reason": reason,
             "kind": kind,
+            "workspace": workspace or _here(root), "project": project,
+            "_root": str(store_root(root)),
             "asked": access._stamp(access._now()), "decision": "", "event": event,
         }
     notify(kind, app, sorted(keys))
@@ -405,7 +408,8 @@ def resolve(request_id: str, *, approve: bool, remember: str = "", approved_by: 
     if approve and remember:
         unlock = access.open_session(
             duration=remember, keys=item["keys"], app=item["app"],
-            reason=f"approved: {item['reason']}"[:200], approved_by=approved_by)
+            reason=f"approved: {item['reason']}"[:200], approved_by=approved_by,
+            workspace=item["workspace"], root=Path(item["_root"]))
     event.set()
     return {"ok": True, "decision": item["decision"], "session": (unlock or {}).get("id", "")}
 
@@ -422,13 +426,15 @@ def _await_decision(request_id: str, event: threading.Event) -> str:
 # ── serving ────────────────────────────────────────────────────────────────
 
 
-def _record(op: str, keys: Iterable[str], *, app: str, granted: bool, reason: str) -> None:
+def _record(op: str, keys: Iterable[str], *, app: str, granted: bool, reason: str,
+            workspace: str = "", root: Path | None = None) -> None:
     """Stamp a decision. The reason this whole thing exists, so it is not optional
     in the sense of being skipped — only in the sense of being absent entirely."""
     try:
         import passbook_stamp
 
-        passbook_stamp.stamp(op=op, keys=keys, app=app, granted=granted, reason=reason)
+        passbook_stamp.stamp(op=op, keys=keys, app=app, granted=granted, reason=reason,
+                             workspace=workspace or _here(root), root=root)
     except ValueError:
         # An op the ledger does not know is a bug here, not a runtime condition,
         # and swallowing it silently drops the row a later audit would look for.
@@ -484,9 +490,28 @@ def _here(root: Path | None = None) -> str:
     import passbook
 
     try:
-        return passbook.workspace() or passbook.ROOT_WORKSPACE_ID
+        source = {**os.environ, "HIVE_HOME": str(root)} if root is not None else os.environ
+        return passbook.workspace(source) or passbook.ROOT_WORKSPACE_ID
     except Exception:  # noqa: BLE001 — an unreadable manifest is not locked
         return passbook.ROOT_WORKSPACE_ID
+
+
+def _workspace_environ(workspace: str = "", root: Path | None = None) -> dict[str, str]:
+    """A per-request binding. Never change the threaded daemon's environment."""
+    source = dict(os.environ)
+    if root is not None:
+        source["HIVE_HOME"] = str(root)
+    name = str(workspace or "").strip() or passbook.workspace(source) or passbook.ROOT_WORKSPACE_ID
+    passbook.workspace_env_path(name, source)  # validate before any lookup
+    source["HIVE_WORKSPACE"] = name
+    source["HIVE_WORKSPACE_ID"] = name
+    return source
+
+
+def _child_context(payload: Mapping[str, Any], workspace: str, root: Path | None) -> dict[str, str]:
+    extra = dict(payload.get("env")) if isinstance(payload.get("env"), Mapping) else {}
+    extra.update(HIVE_HOME=str(store_root(root)), HIVE_WORKSPACE=workspace, HIVE_WORKSPACE_ID=workspace)
+    return extra
 
 
 def _vault_root(workspace: str = "") -> Path | None:
@@ -556,14 +581,23 @@ def _held_dek(workspace: str = "") -> tuple[bytes | None, str]:
         return bytes(session["dek"]), str(session.get("profile", ""))
 
 
-def _unsealer(values: dict[str, str]) -> dict[str, str]:
+def _unsealer(values: dict[str, str], workspace: str = "") -> dict[str, str]:
     """Installed into `passbook` so every read through this process can open."""
     try:
         import passbook_vault
     except ImportError:
-        return values
-    dek, profile = _held_dek(_here())
-    return passbook_vault.unseal_mapping(values, dek, profile_id=profile)
+        passbook_vault = None
+    if passbook_vault is not None:
+        dek, profile = _held_dek(workspace or _here())
+        values = passbook_vault.unseal_mapping(values, dek, profile_id=profile)
+    if any(value.startswith("hive-sealed:v1:") for value in values.values()):
+        try:
+            import passbook_seal
+
+            values = passbook_seal.unseal_all(values)
+        except Exception:  # noqa: BLE001 — a legacy store stays shut without its factor
+            pass
+    return {name: value for name, value in values.items() if not value.startswith("hive-sealed:")}
 
 
 def _seal_values(payload: Mapping[str, Any], root: Path | None,
@@ -593,9 +627,9 @@ def _seal_values(payload: Mapping[str, Any], root: Path | None,
     if not isinstance(incoming, dict) or not incoming:
         return {"ok": False, "error": "no values to seal"}
 
-    workspace = str(payload.get("workspace") or "").strip() or _here()
+    workspace = str(payload.get("workspace") or "").strip() or _here(root)
     try:
-        passbook.workspace_env_path(workspace)
+        source = _workspace_environ(workspace, root)
     except ValueError:
         return {"ok": False, "error": "invalid workspace"}
     dek, profile = _held_dek(workspace)
@@ -618,12 +652,12 @@ def _seal_values(payload: Mapping[str, Any], root: Path | None,
 
     try:
         result = passbook.set_values(sealed, overwrite=True, exact=True,
-                                     workspace_id=workspace)
+                                     workspace_id=workspace, environ=source)
     except Exception as error:  # noqa: BLE001 — surface, never crash the daemon
         return {"ok": False, "error": str(error)}
 
     _record("write", sorted(sealed), app=app, granted=True,
-            reason=f"sealed {len(sealed)} value(s) on write")
+            reason=f"sealed {len(sealed)} value(s) on write", workspace=workspace, root=root)
     return {"ok": True, "sealed": sorted(sealed), "path": result.get("path", "")}
 
 
@@ -649,11 +683,12 @@ def _confirm(payload: Mapping[str, Any], root: Path | None,
     app = str(payload.get("app") or "unknown")
     keys = sorted({str(k).strip() for k in (payload.get("keys") or []) if str(k).strip()})
     reason = str(payload.get("reason") or "")[:200]
-    request_id, event = _queue(app, keys, reason, kind=kind)
+    workspace = str(payload.get("workspace") or "") or _here(root)
+    request_id, event = _queue(app, keys, reason, kind=kind, workspace=workspace, root=root)
     decision = _await_decision(request_id, event)
     granted = decision == "approve"
     _record("approve" if granted else "denied", keys or ["*"], app=app, granted=granted,
-            reason=f"{kind}: {decision}")
+            reason=f"{kind}: {decision}", workspace=workspace, root=root)
     if decision == "timeout":
         return {"ok": False, "decision": "timeout",
                 "error": "Nobody answered in time, so nothing was changed."}
@@ -671,13 +706,12 @@ def _signin(payload: Mapping[str, Any], root: Path | None,
     # The workspace decides which vault this is about. `root` is the machine's
     # store directory and stays what it always was; a workspace's own vault
     # sits beside its own `.env`, which for `main` is the same place.
-    workspace = str(payload.get("workspace") or "").strip() or _here()
+    workspace = str(payload.get("workspace") or "").strip() or _here(root)
     try:
-        vault_root = passbook_vault.workspace_root(workspace)
+        source = _workspace_environ(workspace, root)
+        vault_root = passbook_vault.workspace_root(workspace, source)
     except Exception as error:  # noqa: BLE001
         return {"ok": False, "error": f"no such workspace: {workspace} ({error})"}
-    if root is not None and workspace == passbook.ROOT_WORKSPACE_ID and vault_root == passbook.root():
-        vault_root = root
     profile = str(payload.get("profile") or "").strip() \
         or passbook_vault.active_profile_id(root=vault_root)
     if not profile:
@@ -713,7 +747,9 @@ def _signin(payload: Mapping[str, Any], root: Path | None,
                 root=vault_root)
             factor = "passkey"
         elif payload.get("device"):
-            dek = passbook_vault.unlock_with_device(profile, root=vault_root)
+            selected_factor = str(payload.get("device_factor") or "")
+            dek = passbook_vault.unlock_with_device(profile, root=vault_root,
+                    **({"factor_id": selected_factor} if selected_factor else {}))
             factor = "device"
         elif payload.get("recovery"):
             dek = passbook_vault.unlock_with_recovery(profile, str(payload["recovery"]),
@@ -725,7 +761,7 @@ def _signin(payload: Mapping[str, Any], root: Path | None,
         # A failed sign-in is exactly the row an audit wants, and the reason is
         # safe to record: it names a factor, never a secret.
         _record("signin", ["*"], app=str(payload.get("app") or "passbook"), granted=False,
-                reason=f"refused: {error}")
+                reason=f"refused: {error}", workspace=workspace, root=root)
         return {"ok": False, "error": str(error)}
 
     with _VAULT_LOCK:
@@ -745,14 +781,16 @@ def _signin(payload: Mapping[str, Any], root: Path | None,
     span = access.describe_duration(seconds) if seconds else "until it is locked"
     _record("signin", ["*"], app=str(payload.get("app") or "passbook"), granted=True,
             reason=f"{factor} sign-in to {workspace} for {span} "
-                   f"[{(caller or {}).get('status', 'unknown')} caller]")
+                   f"[{(caller or {}).get('status', 'unknown')} caller]",
+            workspace=workspace, root=root)
     return {"ok": True, "profile": profile, "factor": factor, "workspace": workspace,
             "expires_in": seconds,
             "detail": f"Signed in for {span}." if seconds
                       else "Signed in. It stays open until you lock it or the broker stops."}
 
 
-def _opens_how_many(dek: bytes | None, profile: str, root: Path | None) -> int:
+def _opens_how_many(dek: bytes | None, profile: str, root: Path | None,
+                    path: Path | None = None) -> int:
     """How many of the sealed values this session's key can actually open.
 
     "Unlocked" only ever meant "a data key is held here", and that is not the
@@ -770,7 +808,7 @@ def _opens_how_many(dek: bytes | None, profile: str, root: Path | None) -> int:
         import passbook
         import passbook_vault
 
-        target = passbook.env_path() if root is None else Path(root) / ".env"
+        target = path if path is not None else (passbook.env_path() if root is None else Path(root) / ".env")
         raw = passbook.parse_env_text(target.read_text(encoding="utf-8"))
         sealed = {name: value for name, value in raw.items()
                   if passbook_vault.is_sealed(value)}
@@ -786,14 +824,13 @@ def _vault_status(root: Path | None, workspace: str = "") -> dict[str, Any]:
         import passbook_vault
     except ImportError:
         return {"ok": True, "supported": False, "unlocked": False}
-    here = workspace or _here()
-    if workspace:
-        try:
-            selected = passbook_vault.workspace_root(workspace)
-        except ValueError:
-            return {"ok": False, "error": "invalid workspace"}
-        if root is None or workspace != passbook.ROOT_WORKSPACE_ID or selected != passbook.root():
-            root = selected
+    try:
+        source = _workspace_environ(workspace, root)
+        here = source["HIVE_WORKSPACE"]
+        target = passbook.workspace_env_path(here, source)
+        root = target.parent
+    except ValueError:
+        return {"ok": False, "error": "invalid workspace"}
     dek, profile = _held_dek(here)
     with _VAULT_LOCK:
         session = _VAULT_STATE.get(here) or {}
@@ -803,12 +840,12 @@ def _vault_status(root: Path | None, workspace: str = "") -> dict[str, Any]:
         # tiles rather than making somebody click one to find out.
         open_now = sorted(name for name, held in _VAULT_STATE.items()
                           if not (held.get("expires") and time.time() >= held["expires"]))
-    state = passbook_vault.status(root=root)
+    state = passbook_vault.status(root=root, path=target)
     return {"ok": True, "supported": True, "unlocked": dek is not None, "profile": profile,
             "workspace": here, "unlocked_workspaces": open_now,
             "factor": factor, "expires_in": max(0, int(expires - time.time())) if expires else 0,
             # Not "is a key held" but "does the key held here open anything".
-            "opens": _opens_how_many(dek, profile, root),
+            "opens": _opens_how_many(dek, profile, root, target),
             "sealed_count": len(state["sealed"]),
             "store": {k: state[k] for k in ("sealed", "legacy_v1", "plaintext", "fully_sealed", "detail")},
             "profiles": state["profiles"], "active": state["active"]}
@@ -826,44 +863,59 @@ def _vault_status(root: Path | None, workspace: str = "") -> dict[str, Any]:
 # learns that anything happened.
 
 _REFRESH_LOCK = threading.Lock()
-_REFRESHING: dict[str, threading.Event] = {}
+_REFRESHING: dict[tuple[str, str], threading.Event] = {}
 
 
-def _refresh_if_needed(wanted: Iterable[str], root: Path | None) -> list[str]:
-    """Renew any grant whose access token was asked for and is about to die."""
+def _refresh_if_needed(wanted: Iterable[str], root: Path | None, *, workspace: str = "") -> list[str]:
+    """Renew requested grants in the store which owns their access token."""
     try:
         import passbook_oauth
     except ImportError:
         return []
 
-    asked = {str(key) for key in wanted}
+    source = _workspace_environ(workspace, root)
+    selected = passbook.workspace_env_path(source["HIVE_WORKSPACE"], source)
+    remaining = {str(key) for key in wanted}
     renewed: list[str] = []
-    for grant in passbook_oauth.read_grants(root=root).get("grants", []):
-        if not isinstance(grant, dict) or not grant.get("key_prefix"):
-            continue
+    # The selected store wins over inherited main values, including a locked
+    # override. Never refresh the inherited account behind that override.
+    for path in reversed(passbook._scoped_paths(source)):
         try:
-            keys = passbook_oauth.grant_keys(grant)
-        except passbook_oauth.GrantError:
+            names = set(passbook.parse_env_text(path.read_text(encoding="utf-8")))
+        except (OSError, UnicodeError):
             continue
-        if keys["access_token"] not in asked:
-            continue
-        if _renew_one(grant, keys, root):
-            renewed.append(grant.get("id", ""))
+        asked = remaining & names
+        remaining -= names
+        owner = source["HIVE_WORKSPACE"] if path == selected else passbook.ROOT_WORKSPACE_ID
+        for grant in passbook_oauth.read_grants(root=path.parent).get("grants", []):
+            if not isinstance(grant, dict) or not grant.get("key_prefix"):
+                continue
+            try:
+                keys = passbook_oauth.grant_keys(grant)
+            except passbook_oauth.GrantError:
+                continue
+            if keys["access_token"] in asked and _renew_one(grant, keys, root, workspace=owner):
+                renewed.append(grant.get("id", ""))
     return renewed
 
 
-def _renew_one(grant: Mapping[str, Any], keys: Mapping[str, str], root: Path | None) -> bool:
+def _renew_one(grant: Mapping[str, Any], keys: Mapping[str, str], root: Path | None,
+               *, workspace: str = "") -> bool:
     import passbook_oauth
 
     identifier = str(grant.get("id") or "")
+    source = _workspace_environ(workspace, root)
+    workspace = source["HIVE_WORKSPACE"]
+    target = passbook.workspace_env_path(workspace, source)
+    refresh_id = (str(target), identifier)
     # One refresh per grant at a time. Two agents asking at once would otherwise
     # both spend the refresh token, and a provider that rotates them invalidates
     # the loser — disconnecting a grant that was working a second ago.
     with _REFRESH_LOCK:
-        running = _REFRESHING.get(identifier)
+        running = _REFRESHING.get(refresh_id)
         if running is None:
             running = threading.Event()
-            _REFRESHING[identifier] = running
+            _REFRESHING[refresh_id] = running
             leader = True
         else:
             leader = False
@@ -872,25 +924,34 @@ def _renew_one(grant: Mapping[str, Any], keys: Mapping[str, str], root: Path | N
         return False
 
     try:
-        values = {name: value for name, value in passbook.load().items() if name in set(keys.values())}
+        values = _resolve_values(keys.values(), workspace=workspace, root=root)
         if not passbook_oauth.needs_refresh(grant, values):
             return False
         refresh_token = values.get(keys["refresh_token"], "")
-        fresh = passbook_oauth.exchange_refresh(grant, refresh_token, root=root)
-        passbook.set_values(fresh, overwrite=True)
+        secret_key = str(grant.get("client_secret_key") or "")
+        secret = _resolve_values([secret_key], workspace=workspace, root=root).get(secret_key, "")
+        fresh = passbook_oauth.exchange_refresh(grant, refresh_token, root=target.parent,
+                                                client_secret=secret)
+        raw = passbook.parse_env_text(target.read_text(encoding="utf-8"))
+        if any(value.startswith("hive-sealed:") for value in raw.values()) or _held_dek(workspace)[0]:
+            result = _seal_values({"workspace": workspace, "values": fresh, "app": "passbook-oauth"}, root, None)
+            if not result.get("ok"):
+                raise RuntimeError(str(result.get("error") or "could not seal renewed sign-in"))
+        else:
+            passbook.set_values(fresh, overwrite=True, workspace_id=workspace, environ=source)
         _record("refresh", [keys["access_token"]], app="passbook-oauth", granted=True,
-                reason=f"renewed {identifier}")
+                reason=f"renewed {identifier}", workspace=workspace, root=root)
         return True
     except Exception as error:  # noqa: BLE001 — a dead grant must not fail the read
         # The caller still gets whatever is stored; a stale token failing at the
         # provider is a better outcome than the whole request erroring here, and
         # the row says which grant needs signing in again.
         _record("refresh", [keys.get("access_token", "*")], app="passbook-oauth", granted=False,
-                reason=f"{identifier}: {str(error)[:120]}")
+                reason=f"{identifier}: {str(error)[:120]}", workspace=workspace, root=root)
         return False
     finally:
         with _REFRESH_LOCK:
-            _REFRESHING.pop(identifier, None)
+            _REFRESHING.pop(refresh_id, None)
         running.set()
 
 
@@ -948,11 +1009,13 @@ def _pinned_note(verdict: Mapping[str, Any]) -> str:
 
 
 def _remember_grant(token: str, *, app: str, keys: Iterable[str], command: Sequence[str],
-                    pid: int | None, values: Mapping[str, str] | None = None) -> None:
+                    pid: int | None, values: Mapping[str, str] | None = None,
+                    workspace: str = "", project: str = "") -> None:
     with _GRANT_LOCK:
         _reap_grants()
         _GRANTS[token] = {
             "app": app, "keys": sorted(set(keys)), "pid": pid,
+            "workspace": workspace or _here(), "project": project,
             "command": _safe_command(command, values),
             "created": time.time(),
         }
@@ -980,6 +1043,8 @@ def live_grants() -> list[dict[str, Any]]:
         _reap_grants()
         return [
             {"app": row["app"], "keys": row["keys"], "pid": row["pid"],
+             "workspace": row.get("workspace") or passbook.ROOT_WORKSPACE_ID,
+             "project": row.get("project", ""),
              "command": row["command"], "age_seconds": round(time.time() - row["created"], 1)}
             for row in _GRANTS.values()
         ]
@@ -1011,10 +1076,48 @@ def _use_refusal(key: str, *, guarded_key: bool) -> str:
             f"Run what needs it with `passbook run -- <command>` instead.")
 
 
-def _resolve_values(keys: Iterable[str]) -> dict[str, str]:
+def _resolve_values(keys: Iterable[str], *, workspace: str = "", root: Path | None = None) -> dict[str, str]:
     """Open exactly these keys, here, inside the broker. Never sent onward."""
-    available = passbook.load()
+    import passbook_integrations
+
+    source = _workspace_environ(workspace, root)
+    workspace = source["HIVE_WORKSPACE"]
+    selected = passbook.workspace_env_path(workspace, source)
+    available: dict[str, str] = {}
+    for path in passbook._scoped_paths(source):
+        try:
+            raw = passbook.parse_env_text(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError):
+            continue
+        # A locked workspace override must mask the inherited key, not fall
+        # back to an unrelated account in the machine store.
+        for name in raw:
+            available.pop(name, None)
+        owner = workspace if path == selected else passbook.ROOT_WORKSPACE_ID
+        if passbook_integrations.managed_workspace(owner, store_root(root)):
+            continue
+        available.update(_unsealer(raw, owner))
+    if workspace == passbook.ROOT_WORKSPACE_ID:
+        # Preserve standalone process overrides. A different workspace must
+        # not inherit credentials from the daemon's own startup environment.
+        available.update({name: value for name, value in source.items() if value})
     return {key: available[key] for key in keys if available.get(key)}
+
+
+def _managed_owned_names(workspace: str, root: Path | None) -> set[str]:
+    """Effective names owned by managed stores, after local overrides."""
+    import passbook_integrations
+
+    source = _workspace_environ(workspace, root)
+    selected = passbook.workspace_env_path(source["HIVE_WORKSPACE"], source)
+    protected: set[str] = set()
+    for path in passbook._scoped_paths(source):
+        names = passbook._key_names_on_disk(path)
+        protected.difference_update(names)
+        owner = source["HIVE_WORKSPACE"] if path == selected else passbook.ROOT_WORKSPACE_ID
+        if passbook_integrations.managed_workspace(owner, store_root(root)):
+            protected.update(names)
+    return protected
 
 
 def _decide_many(keys: Iterable[str], *, app: str, policy: Mapping[str, Any],
@@ -1026,8 +1129,12 @@ def _decide_many(keys: Iterable[str], *, app: str, policy: Mapping[str, Any],
     would have honoured. An `ask` here is answered exactly as it is there —
     a person, once, for the whole batch.
     """
+    protected = _managed_owned_names(workspace, root)
     allowed, refused, asked = [], [], []
     for key in keys:
+        if key in protected:
+            refused.append((key, "This key's owning workspace requires a verified connection."))
+            continue
         verdict = access.decide_key(app, key, policy, root=root,
                                     workspace=workspace, project=project)
         if verdict["outcome"] == "grant":
@@ -1037,8 +1144,9 @@ def _decide_many(keys: Iterable[str], *, app: str, policy: Mapping[str, Any],
         else:
             asked.append(key)
     if asked:
-        request_id, event = _queue(app, asked, reason)
-        _record("ask", asked, app=app, granted=False, reason=reason or "waiting on approval")
+        request_id, event = _queue(app, asked, reason, workspace=workspace, project=project, root=root)
+        _record("ask", asked, app=app, granted=False, reason=reason or "waiting on approval",
+                workspace=workspace, root=root)
         decision = _await_decision(request_id, event)
         if decision == "approve":
             allowed.extend(asked)
@@ -1143,6 +1251,11 @@ def _spawn(payload: Mapping[str, Any], root: Path | None,
     except ImportError:
         return {"ok": False, "error": "grants are not installed on this machine"}
 
+    try:
+        workspace = _workspace_environ(str(payload.get("workspace") or ""), root)["HIVE_WORKSPACE"]
+    except ValueError:
+        return {"ok": False, "error": "invalid workspace"}
+    project = str(payload.get("project") or "")
     app = str(payload.get("app") or "").strip() or "unknown"
     command = [str(part) for part in (payload.get("command") or []) if str(part) != ""]
     if not command:
@@ -1160,14 +1273,13 @@ def _spawn(payload: Mapping[str, Any], root: Path | None,
     pinned = _pin_gate(app, command, policy, payload)
     if not pinned["allowed"]:
         _record("denied", sorted(wanted) or ["*"], app=app, granted=False,
-                reason=_pin_reason(app, pinned))
+                reason=_pin_reason(app, pinned), workspace=workspace, root=root)
         return {"ok": False, "error": pinned["why"], "denied": sorted(wanted),
                 "why": {key: pinned["why"] for key in sorted(wanted)}}
 
     allowed, refused = _decide_many(
         wanted, app=app, policy=policy, root=root,
-        workspace=str(payload.get("workspace") or ""),
-        project=str(payload.get("project") or ""), reason=reason)
+        workspace=workspace, project=project, reason=reason)
 
     # The second bound, and the one a plain read never needed: a guarded key
     # goes into the commands its owner named and no others. Without this, spawn
@@ -1180,35 +1292,37 @@ def _spawn(payload: Mapping[str, Any], root: Path | None,
             key if verdict["allowed"] else (key, verdict["why"]))
     allowed = keeping
 
-    values = _resolve_values(allowed)
+    values = _resolve_values(allowed, workspace=workspace, root=root)
     missing = [key for key in allowed if key not in values]
     if allowed:
-        _refresh_if_needed(allowed, root)
-        values = _resolve_values(allowed)
+        _refresh_if_needed(allowed, root, workspace=workspace)
+        values = _resolve_values(allowed, workspace=workspace, root=root)
 
     token = base64.urlsafe_b64encode(os.urandom(18)).decode("ascii").rstrip("=")
     answer = passbook_grant.spawn(
         command, values, app=app, cwd=str(payload.get("cwd") or ""),
-        extra_env=payload.get("env") if isinstance(payload.get("env"), Mapping) else None,
+        extra_env=_child_context(payload, workspace, root),
         timeout=float(payload.get("timeout") or passbook_grant.DEFAULT_TIMEOUT),
         detach=bool(payload.get("detach")), grant=token)
 
     if answer.get("ok"):
         _remember_grant(token, app=app, keys=values, command=command,
-                        pid=answer.get("pid"), values=values)
+                        pid=answer.get("pid"), values=values, workspace=workspace, project=project)
         # `use`, not `read`: the distinction the whole module exists for. A row
         # saying `read` would claim the caller received these, which is the one
         # thing that did not happen.
         _record("use", sorted(values) or ["*"], app=app, granted=True,
                 reason=f"{reason}: {' '.join(_safe_command(command, values))[:120]}"
-                       + _pinned_note(pinned))
+                       + _pinned_note(pinned), workspace=workspace, root=root)
     if refused:
         _record("denied", [key for key, _ in refused], app=app, granted=False,
-                reason="; ".join(sorted({why for _, why in refused}))[:200])
+                reason="; ".join(sorted({why for _, why in refused}))[:200],
+                workspace=workspace, root=root)
 
     answer["denied"] = sorted(key for key, _ in refused)
     answer["why"] = {key: why for key, why in refused}
     answer["missing"] = sorted(missing)
+    answer["workspace"] = workspace
     return answer
 
 
@@ -1226,6 +1340,11 @@ def _proxy(payload: Mapping[str, Any], root: Path | None,
     except ImportError:
         return {"ok": False, "error": "grants are not installed on this machine"}
 
+    try:
+        workspace = _workspace_environ(str(payload.get("workspace") or ""), root)["HIVE_WORKSPACE"]
+    except ValueError:
+        return {"ok": False, "error": "invalid workspace"}
+    project = str(payload.get("project") or "")
     app = str(payload.get("app") or "").strip() or "unknown"
     url = str(payload.get("url") or "")
     headers = payload.get("headers") if isinstance(payload.get("headers"), Mapping) else {}
@@ -1243,8 +1362,7 @@ def _proxy(payload: Mapping[str, Any], root: Path | None,
     policy = read_policy(root)
     allowed, refused = _decide_many(
         wanted, app=app, policy=policy, root=root,
-        workspace=str(payload.get("workspace") or ""),
-        project=str(payload.get("project") or ""), reason=reason)
+        workspace=workspace, project=project, reason=reason)
 
     keeping = []
     for key in allowed:
@@ -1255,7 +1373,8 @@ def _proxy(payload: Mapping[str, Any], root: Path | None,
 
     if refused:
         _record("denied", [key for key, _ in refused], app=app, granted=False,
-                reason="; ".join(sorted({why for _, why in refused}))[:200])
+                reason="; ".join(sorted({why for _, why in refused}))[:200],
+                workspace=workspace, root=root)
         # Unlike a spawn, a partial proxy is not worth attempting: the request
         # would go out with `{{KEY}}` sitting in a header, reach the far end as
         # a malformed credential, and come back as an auth error nobody can
@@ -1263,15 +1382,17 @@ def _proxy(payload: Mapping[str, Any], root: Path | None,
         return {"ok": False, "error": "refused", "denied": sorted(k for k, _ in refused),
                 "why": {key: why for key, why in refused}}
 
-    _refresh_if_needed(allowed, root)
-    values = _resolve_values(allowed)
+    _refresh_if_needed(allowed, root, workspace=workspace)
+    values = _resolve_values(allowed, workspace=workspace, root=root)
     answer = passbook_grant.proxy(
         {"url": url, "method": payload.get("method"), "headers": headers, "body": body},
         values, timeout=float(payload.get("timeout") or 30.0))
     if answer.get("ok"):
         host = urllib.parse.urlparse(url).hostname or "?"
         _record("use", sorted(values) or ["*"], app=app, granted=True,
-                reason=f"{reason}: {payload.get('method') or 'GET'} {host}")
+                reason=f"{reason}: {payload.get('method') or 'GET'} {host}",
+                workspace=workspace, root=root)
+    answer["workspace"] = workspace
     return answer
 
 
@@ -1305,6 +1426,12 @@ def _spawn_streaming(payload: Mapping[str, Any], root: Path | None,
         send({"t": "end", "ok": False, "error": "grants are not installed on this machine"})
         return
 
+    try:
+        workspace = _workspace_environ(str(payload.get("workspace") or ""), root)["HIVE_WORKSPACE"]
+    except ValueError:
+        send({"t": "end", "ok": False, "error": "invalid workspace"})
+        return
+    project = str(payload.get("project") or "")
     app = str(payload.get("app") or "").strip() or "unknown"
     command = [str(part) for part in (payload.get("command") or []) if str(part) != ""]
     if not command:
@@ -1318,7 +1445,7 @@ def _spawn_streaming(payload: Mapping[str, Any], root: Path | None,
     pinned = _pin_gate(app, command, policy, payload)
     if not pinned["allowed"]:
         _record("denied", sorted(wanted) or ["*"], app=app, granted=False,
-                reason=_pin_reason(app, pinned))
+                reason=_pin_reason(app, pinned), workspace=workspace, root=root)
         send({"t": "end", "ok": False, "error": pinned["why"],
               "denied": sorted(wanted),
               "why": {key: pinned["why"] for key in sorted(wanted)}})
@@ -1326,8 +1453,7 @@ def _spawn_streaming(payload: Mapping[str, Any], root: Path | None,
 
     allowed, refused = _decide_many(
         wanted, app=app, policy=policy, root=root,
-        workspace=str(payload.get("workspace") or ""),
-        project=str(payload.get("project") or ""), reason=reason)
+        workspace=workspace, project=project, reason=reason)
     keeping = []
     for key in allowed:
         verdict = passbook_grant.command_allowed(key, command, policy)
@@ -1336,14 +1462,15 @@ def _spawn_streaming(payload: Mapping[str, Any], root: Path | None,
     allowed = keeping
 
     if allowed:
-        _refresh_if_needed(allowed, root)
-    values = _resolve_values(allowed)
+        _refresh_if_needed(allowed, root, workspace=workspace)
+    values = _resolve_values(allowed, workspace=workspace, root=root)
     token = base64.urlsafe_b64encode(os.urandom(18)).decode("ascii").rstrip("=")
 
     if refused:
         _record("denied", [key for key, _ in refused], app=app, granted=False,
-                reason="; ".join(sorted({why for _, why in refused}))[:200])
-    send({"t": "begin", "keys": sorted(values),
+                reason="; ".join(sorted({why for _, why in refused}))[:200],
+                workspace=workspace, root=root)
+    send({"t": "begin", "keys": sorted(values), "workspace": workspace,
           "denied": sorted(key for key, _ in refused),
           "why": {key: why for key, why in refused},
           "redacted": passbook_grant.redactions_for(values)})
@@ -1379,7 +1506,7 @@ def _spawn_streaming(payload: Mapping[str, Any], root: Path | None,
     started: list = []
     answer = passbook_grant.stream(
         command, values, app=app, cwd=str(payload.get("cwd") or ""),
-        extra_env=payload.get("env") if isinstance(payload.get("env"), Mapping) else None,
+        extra_env=_child_context(payload, workspace, root),
         grant=token, stdout=_Frames("out"), stderr=_Frames("err"),
         caller_present=_caller_present,
         on_child=lambda child: (_watch_child(child), started.append(child)))
@@ -1390,24 +1517,55 @@ def _spawn_streaming(payload: Mapping[str, Any], root: Path | None,
         _forget_child(child)
     if answer.get("ok"):
         _remember_grant(token, app=app, keys=values, command=command, pid=None,
-                        values=values)
+                        values=values, workspace=workspace, project=project)
         _record("use", sorted(values) or ["*"], app=app, granted=True,
                 reason=f"{reason}: {' '.join(_safe_command(command, values))[:120]}"
-                       + _pinned_note(pinned))
-    send({"t": "end", **answer})
+                       + _pinned_note(pinned), workspace=workspace, root=root)
+    send({"t": "end", **answer, "workspace": workspace})
+
+
+def _managed_refusal(payload: Mapping[str, Any], root: Path | None) -> dict[str, Any] | None:
+    import passbook_integrations
+    selected = _workspace_environ(str(payload.get("workspace") or ""), root)
+    workspace = selected["HIVE_WORKSPACE"]
+    if not passbook_integrations.managed_workspace(workspace, store_root(root)):
+        return None
+    keys = [str(key) for key in (payload.get("keys") or passbook.key_names(selected))]
+    why = "This workspace uses verified connections. Request access through your connected app."
+    _record("denied", keys or ["*"], app=str(payload.get("app") or "unknown"),
+            granted=False, reason=why, workspace=workspace, root=root)
+    # A read refusal is a reply, not a missing broker. Returning ok=false here
+    # would trigger legacy clients' plaintext-file fallback.
+    return {"ok": payload.get("op") == "request", "granted": {}, "denied": keys,
+            "why": {key: why for key in keys}, "error": why, "code": "managed-connection-required"}
 
 
 def _handle(payload: Mapping[str, Any], root: Path | None = None,
             caller: Mapping[str, Any] | None = None) -> dict[str, Any]:
     operation = str(payload.get("op") or "").strip().lower()
     if operation == "ping":
-        return {"ok": True, "pid": os.getpid(), "spec_version": SPEC_VERSION}
+        return {"ok": True, "pid": os.getpid(), "spec_version": SPEC_VERSION,
+                "managed_integrations": 1}
+    if operation == "managed":
+        import passbook_integrations
+        return passbook_integrations.handle(payload, store_root(root), sys.modules[__name__])
+    if operation in {"status", "unlock", "seal_values", "confirm", "signin", "vault",
+                     "spawn", "proxy", "request"}:
+        try:
+            selected = _workspace_environ(str(payload.get("workspace") or ""), root)
+        except ValueError:
+            return {"ok": False, "error": "invalid workspace"}
+        payload = {**payload, "workspace": selected["HIVE_WORKSPACE"]}
+    if operation in {"request", "spawn", "proxy", "unlock"}:
+        refusal = _managed_refusal(payload, root)
+        if refusal is not None:
+            return refusal
     if operation == "status":
         # Names only, like every other status surface in this standard.
         policy = read_policy(root)
         _ = caller
         return {"ok": True, "default": policy["default"], "apps": sorted(policy["apps"]),
-                "keys": passbook.key_names(), "workspace": passbook.workspace(),
+                "keys": passbook.key_names(selected), "workspace": selected["HIVE_WORKSPACE"],
                 "sessions": access.sessions(root=root), "pending": pending()}
     if operation == "pending":
         return {"ok": True, "pending": pending()}
@@ -1422,11 +1580,13 @@ def _handle(payload: Mapping[str, Any], root: Path | None = None,
                 duration=str(payload.get("duration") or "1h"),
                 keys=payload.get("keys") or [], app=str(payload.get("app") or ""),
                 reason=str(payload.get("reason") or ""),
-                approved_by=str(payload.get("by") or "owner"), root=root)
+                approved_by=str(payload.get("by") or "owner"), root=root,
+                workspace=str(payload["workspace"]))
         except ValueError as error:
             return {"ok": False, "error": str(error)}
         _record("unlock", unlock["keys"] or ["*"], app=unlock["app"] or "any app",
-                granted=True, reason=f"unlocked for {access.describe_duration(unlock['duration_seconds'])}")
+                granted=True, reason=f"unlocked for {access.describe_duration(unlock['duration_seconds'])}",
+                workspace=unlock["workspace"], root=root)
         return {"ok": True, "session": unlock}
     if operation == "lock":
         closed = access.close_session(str(payload.get("id") or ""), root=root)
@@ -1445,12 +1605,14 @@ def _handle(payload: Mapping[str, Any], root: Path | None = None,
         # loop over workspaces would leave a window where some are still open.
         wanted = str(payload.get("workspace") or "").strip()
         every = bool(payload.get("all")) or (not wanted and bool(payload.get("everything")))
-        target = "" if every else (wanted or _here())
+        target = "" if every else (wanted or _here(root))
+        import passbook_integrations
+        passbook_integrations.pause_workspace(target, store_root(root))
         with _VAULT_LOCK:
             was = _forget_dek("" if every else target)
         if was:
             _record("signout", ["*"], app="passbook", granted=True,
-                    reason=f"locked {'every workspace' if every else target}")
+                    reason=f"locked {'every workspace' if every else target}", workspace=target, root=root)
         return {"ok": True, "locked": True, "was_unlocked": was,
                 "workspace": "" if every else target}
     if operation == "vault":
@@ -1480,8 +1642,12 @@ def _handle(payload: Mapping[str, Any], root: Path | None = None,
     asking_project = str(payload.get("project") or "")
     wanted = [str(key).strip() for key in (payload.get("keys") or []) if str(key).strip()]
 
+    protected = _managed_owned_names(asking_workspace, root)
     allowed, refused, asked = [], [], []
     for key in wanted:
+        if key in protected:
+            refused.append((key, "This key's owning workspace requires a verified connection."))
+            continue
         verdict = access.decide_key(app, key, policy, root=root,
                                     workspace=asking_workspace, project=asking_project)
         if verdict["outcome"] == "grant":
@@ -1494,8 +1660,9 @@ def _handle(payload: Mapping[str, Any], root: Path | None = None,
     if asked:
         # One prompt for the whole batch. Asking per key would train anyone into
         # approving without reading, which is worse than not asking at all.
-        request_id, event = _queue(app, asked, reason)
-        _record("ask", asked, app=app, granted=False, reason=reason or "waiting on approval")
+        request_id, event = _queue(app, asked, reason, workspace=asking_workspace, project=asking_project, root=root)
+        _record("ask", asked, app=app, granted=False, reason=reason or "waiting on approval",
+                workspace=asking_workspace, root=root)
         decision = _await_decision(request_id, event)
         if decision == "approve":
             allowed.extend(asked)
@@ -1536,7 +1703,9 @@ def _handle(payload: Mapping[str, Any], root: Path | None = None,
                 # A grant-backed caller gets exactly what its grant covers and
                 # nothing more. Widening here would make the token a credential
                 # of its own — steal it once, read the whole store forever.
-                if key in placed["keys"]:
+                if (placed.get("workspace") or passbook.ROOT_WORKSPACE_ID) != asking_workspace:
+                    refused.append((key, "the grant belongs to a different workspace"))
+                elif key in placed["keys"]:
                     keeping.append(key)
                 else:
                     refused.append((key, f"{key} is not part of the grant this process was started with"))
@@ -1554,22 +1723,23 @@ def _handle(payload: Mapping[str, Any], root: Path | None = None,
     if allowed:
         # Before reading: renew any sign-in among these keys that is about to
         # expire, so what the caller receives actually works.
-        _refresh_if_needed(allowed, root)
-    available = passbook.load()
-    granted = {key: available[key] for key in allowed if available.get(key)}
+        _refresh_if_needed(allowed, root, workspace=asking_workspace)
+    granted = _resolve_values(allowed, workspace=asking_workspace, root=root)
     missing = [key for key in allowed if key not in granted]
 
     if allowed:
-        _record("read", allowed, app=app, granted=not missing, reason=reason)
+        _record("read", allowed, app=app, granted=not missing, reason=reason,
+                workspace=asking_workspace, root=root)
     if refused:
         # A refusal is the interesting row: an app asked for something its policy
         # does not cover, which is either a policy to widen or a dependency doing
         # something nobody asked it to.
         _record("denied", [key for key, _ in refused], app=app, granted=False,
-                reason="; ".join(sorted({why for _, why in refused}))[:200])
+                reason="; ".join(sorted({why for _, why in refused}))[:200],
+                workspace=asking_workspace, root=root)
 
     return {"ok": True, "granted": granted, "denied": sorted(key for key, _ in refused),
-            "missing": sorted(missing),
+            "missing": sorted(missing), "workspace": asking_workspace,
             "why": {key: why for key, why in refused}}
 
 
@@ -1596,7 +1766,11 @@ def _serve_one(connection: socket.socket, root: Path | None) -> None:
             # Answers in frames rather than one object, and for as long as the
             # child runs. It writes to the connection itself and there is
             # nothing left to send afterwards.
-            _spawn_streaming(payload, root, _caller(connection), connection)
+            refusal = _managed_refusal(payload, root)
+            if refusal:
+                connection.sendall((json.dumps({"t": "end", **refusal}) + "\n").encode("utf-8"))
+            else:
+                _spawn_streaming(payload, root, _caller(connection), connection)
             return
         answer = _handle(payload, root, _caller(connection))
     except (OSError, ValueError, UnicodeDecodeError):
@@ -1847,7 +2021,7 @@ def _ask(payload: Mapping[str, Any], *, root: Path | None = None, timeout: float
 
 
 def spawn_streaming(command: Sequence[str], keys: Iterable[str], *, app: str,
-                    cwd: str = "", reason: str = "", project: str = "",
+                    cwd: str = "", reason: str = "", project: str = "", workspace: str = "",
                     out=None, err=None, root: Path | None = None) -> dict[str, Any] | None:
     """Have the broker run a command, writing its scrubbed output here as it comes.
 
@@ -1861,6 +2035,7 @@ def spawn_streaming(command: Sequence[str], keys: Iterable[str], *, app: str,
     payload = {
         "op": "spawn", "stream": True, "app": app, "command": list(command),
         "keys": list(keys), "reason": reason, "project": project,
+        "workspace": workspace or _here(root),
         # The child belongs where the caller is standing, not where the daemon
         # was started. Without these it runs in the broker's cwd with the
         # broker's PATH, which breaks every relative path and every tool
@@ -1937,7 +2112,7 @@ def request_through_broker(
         here = ""
     answer = _ask({
         "op": "request", "app": app, "keys": list(keys),
-        "reason": reason, "workspace": workspace_id, "project": here,
+        "reason": reason, "workspace": workspace_id or _here(root), "project": here,
         # Proof of birth, not of identity: a process the broker spawned carries
         # the token it was spawned with, and gets answered from that grant's key
         # set. Everything else is an unplaced caller and, in sealed mode, is
@@ -1958,7 +2133,7 @@ def seal_values(values: Mapping[str, str], *, app: str = "passbook",
     and a caller must treat that as "could not seal" rather than "did not need
     to" — writing the plaintext instead is exactly the bug this exists to stop.
     """
-    answer = _ask({"op": "seal_values", "app": app, "workspace": workspace_id,
+    answer = _ask({"op": "seal_values", "app": app, "workspace": workspace_id or _here(root),
                    "values": dict(values)}, root=root, timeout=30.0)
     if answer is None:
         return {"ok": False, "error": "no broker is running, so nothing could be sealed"}
@@ -1966,7 +2141,7 @@ def seal_values(values: Mapping[str, str], *, app: str = "passbook",
 
 
 def confirm_change(kind: str, keys: Iterable[str], *, app: str, reason: str = "",
-                   root: Path | None = None) -> dict[str, Any]:
+                   workspace: str = "", root: Path | None = None) -> dict[str, Any]:
     """Ask the person to approve a change. Returns the decision, or None-ish.
 
     A broker that is not running means confirmation cannot be obtained. That is
@@ -1975,7 +2150,7 @@ def confirm_change(kind: str, keys: Iterable[str], *, app: str, reason: str = ""
     """
     answer = _ask({
         "op": "confirm", "kind": kind, "app": app,
-        "keys": [str(k) for k in keys], "reason": reason,
+        "keys": [str(k) for k in keys], "reason": reason, "workspace": workspace or _here(root),
     }, root=root, timeout=_approval_timeout() + 5.0)
     if answer is None:
         return {"ok": False, "decision": "unavailable",
@@ -2002,7 +2177,8 @@ def signin(
     what returns is a yes or a no. A caller therefore cannot cache the key, leak
     it, or pass it on, because it never had it.
     """
-    payload: dict[str, Any] = {"op": "signin", "profile": profile, "app": app}
+    payload: dict[str, Any] = {"op": "signin", "profile": profile, "app": app,
+                               "workspace": workspace or _here(root)}
     if workspace:
         payload["workspace"] = workspace
     if duration:
@@ -2025,7 +2201,7 @@ def signin(
 def signout(*, workspace: str = "", everything: bool = False,
             root: Path | None = None) -> dict[str, Any]:
     """Lock a workspace, or every one. The keys are dropped and overwritten."""
-    payload: dict[str, Any] = {"op": "signout"}
+    payload: dict[str, Any] = {"op": "signout", "workspace": workspace or _here(root)}
     if everything:
         payload["all"] = True
     elif workspace:
@@ -2038,7 +2214,7 @@ def signout(*, workspace: str = "", everything: bool = False,
 
 def vault_status(*, root: Path | None = None, workspace: str = "") -> dict[str, Any]:
     """Locked or open, which profile, how long left, and what the store holds."""
-    payload = {"op": "vault"}
+    payload = {"op": "vault", "workspace": workspace or _here(root)}
     if workspace:
         payload["workspace"] = workspace
     answer = _ask(payload, root=root)

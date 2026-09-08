@@ -444,6 +444,37 @@ def test_hive_workspace_overrides_the_manifests_active_choice(hive, monkeypatch)
     assert passbook.workspace() == "two"
 
 
+def test_hivemind_workspace_id_is_a_pin_with_the_same_node_precedence(hive, monkeypatch):
+    _manifest(hive, active="main", entries=[{"id": "main"}, {"id": "client", "inherit": False}])
+    monkeypatch.delenv("HIVE_WORKSPACE", raising=False)
+    monkeypatch.setenv("HIVE_WORKSPACE_ID", "client")
+    passbook.set_values({"CLIENT_ONLY": "synthetic-client"})
+    assert passbook.workspace() == "client"
+    assert passbook.workspace_pinned()
+    assert passbook.workspace_env_path("client").is_file()
+    script = f"""
+        import {{ workspace, load }} from {json.dumps(NODE_TWIN_URL)};
+        process.stdout.write(JSON.stringify({{ workspace: workspace(), hasClient: load().CLIENT_ONLY === 'synthetic-client' }}));
+    """
+    answer = subprocess.run([_node(), "--input-type=module", "-e", script],
+                            capture_output=True, text=True, check=True)
+    assert json.loads(answer.stdout) == {"workspace": "client", "hasClient": True}
+    monkeypatch.setenv("HIVE_WORKSPACE", "main")
+    assert passbook.workspace() == "main"
+    answer = subprocess.run([_node(), "--input-type=module", "-e", script],
+                            capture_output=True, text=True, check=True)
+    assert json.loads(answer.stdout) == {"workspace": "main", "hasClient": False}
+
+
+def test_an_explicit_request_workspace_survives_a_missing_broker(hive, monkeypatch):
+    _manifest(hive, active="main", entries=[{"id": "client", "inherit": False}])
+    passbook.set_values({"SAME_KEY": "synthetic-main"}, workspace_id="main")
+    passbook.set_values({"SAME_KEY": "synthetic-client"}, workspace_id="client")
+    monkeypatch.setattr(passbook, "_ask_broker", lambda *a, **k: None)
+    assert passbook.request(["SAME_KEY"], app="test", workspace_id="client") == {
+        "SAME_KEY": "synthetic-client"}
+
+
 def test_an_invalid_workspace_id_is_refused(hive, monkeypatch):
     monkeypatch.setenv("HIVE_WORKSPACE", "../escape")
     with pytest.raises(ValueError, match="not a valid workspace id"):
@@ -782,6 +813,75 @@ def test_add_reads_key_value_lines_from_stdin(hive):
 
     assert done.returncode == 0
     assert sorted(_stored(hive)) == ["PB_ONE", "PB_TWO"]
+
+
+def test_app_add_and_replace_publish_their_change_age(hive):
+    import passbook_sync as sync
+
+    store = hive / ".env"
+    added = _cli("add", "--stdin", hive_home=hive, stdin="PB_EDIT=synthetic-first\n")
+    assert added.returncode == 0, added.stderr
+    assert sync.read_meta(store).get("PB_EDIT", 0) > 0
+    sync.touch_meta(store, ["PB_EDIT", "UNRELATED"], when=100)
+    replaced = _cli("add", "--stdin", "--replace", hive_home=hive,
+                    stdin="PB_EDIT=synthetic-replacement\n")
+    assert replaced.returncode == 0, replaced.stderr
+    metadata = sync.read_meta(store)
+    assert metadata["PB_EDIT"] > 100
+    assert metadata["UNRELATED"] == 100
+    plan = sync.plan_pull({"PB_EDIT": "synthetic-first"}, {"PB_EDIT": 100},
+        [("source", {"values": _stored(hive), "updatedAt": metadata})])
+    assert plan["apply"] == {"PB_EDIT": "synthetic-replacement"}
+    assert "synthetic-replacement" not in replaced.stdout + replaced.stderr
+    assert "synthetic-replacement" not in sync.meta_path(store).read_text()
+
+
+def test_app_kept_and_invalid_writes_do_not_refresh_change_age(hive):
+    import passbook_sync as sync
+
+    passbook.set_values({"PB_EDIT": "synthetic-first"})
+    store = hive / ".env"
+    sync.touch_meta(store, ["PB_EDIT"], when=100)
+    before = sync.meta_path(store).read_bytes()
+    kept = _cli("add", "--stdin", hive_home=hive, stdin="PB_EDIT=synthetic-other\n")
+    assert kept.returncode == 0
+    refused = _cli("add", "--stdin", "--replace", hive_home=hive,
+                   stdin="9INVALID=synthetic-other\n")
+    assert refused.returncode != 0
+    assert sync.meta_path(store).read_bytes() == before
+    assert _stored(hive) == {"PB_EDIT": "synthetic-first"}
+
+
+def test_app_replace_stamps_only_its_selected_workspace(hive):
+    import passbook_sync as sync
+
+    passbook.ensure(app="test")
+    (hive / "workspaces.json").write_text(json.dumps({
+        "activeWorkspaceId": "main", "workspaces": [{"id": "main"}, {"id": "client"}]}))
+    main, client = passbook.workspace_env_path("main"), passbook.workspace_env_path("client")
+    for workspace, store in (("main", main), ("client", client)):
+        passbook.set_values({"PB_EDIT": "synthetic-first"}, workspace_id=workspace)
+        sync.touch_meta(store, ["PB_EDIT"], when=100)
+    changed = _cli("add", "--stdin", "--replace", hive_home=hive,
+                   stdin="PB_EDIT=synthetic-client-new\n", env={"HIVE_WORKSPACE_ID": "client"})
+    assert changed.returncode == 0, changed.stderr
+    assert sync.read_meta(client)["PB_EDIT"] > 100
+    assert sync.read_meta(main)["PB_EDIT"] == 100
+
+
+def test_app_reports_a_saved_value_whose_sync_age_could_not_be_recorded(hive):
+    import passbook_sync as sync
+
+    # A directory at the sidecar's path allows the value save but refuses the
+    # metadata rename. Exercise the exit status consumed by the native app.
+    sync.meta_path(hive / ".env").mkdir(parents=True)
+    result = _cli("add", "--stdin", "--replace", hive_home=hive,
+                  stdin="PB_EDIT=synthetic-secret-must-not-be-in-error\n")
+    assert result.returncode != 0
+    assert _stored(hive)["PB_EDIT"] == "synthetic-secret-must-not-be-in-error"
+    error = result.stderr
+    assert "Saved on this device" in error and "could not be recorded for sync" in error
+    assert "synthetic-secret-must-not-be-in-error" not in error
 
 
 def test_add_refuses_a_bare_key_when_it_cannot_prompt(hive):

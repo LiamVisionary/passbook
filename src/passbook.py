@@ -23,9 +23,12 @@ and diagnostic surface returns key NAMES.
 from __future__ import annotations
 
 import json
+import contextlib
+import hashlib
 import os
 import re
 import tempfile
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
@@ -58,6 +61,7 @@ SPEC_VERSION = 1
 
 ROOT_ENV_VAR = "HIVE_HOME"
 WORKSPACE_ENV_VAR = "HIVE_WORKSPACE"
+WORKSPACE_ID_ENV_VAR = "HIVE_WORKSPACE_ID"
 DEFAULT_ROOT_NAME = ".hivemindos"
 ENV_FILENAME = ".env"
 APPS_FILENAME = "apps.json"
@@ -121,12 +125,15 @@ def workspace_manifest(environ: Mapping[str, str] | None = None) -> dict[str, An
 def workspace(environ: Mapping[str, str] | None = None) -> str:
     """The workspace this process acts for.
 
-    `HIVE_WORKSPACE` overrides the manifest's active workspace, so one agent can
+    `HIVE_WORKSPACE`, then HivemindOS's `HIVE_WORKSPACE_ID`, override the
+    manifest's active workspace, so one agent can
     be pinned to a client's workspace without changing what the desktop app
     shows anyone else.
     """
     source = os.environ if environ is None else environ
     name = str(source.get(WORKSPACE_ENV_VAR, "")).strip()
+    if not name:
+        name = str(source.get(WORKSPACE_ID_ENV_VAR, "")).strip()
     if not name:
         name = str(workspace_manifest(environ).get("activeWorkspaceId") or "").strip()
     if not name:
@@ -245,7 +252,8 @@ def workspace_pinned(environ: Mapping[str, str] | None = None) -> bool:
     process goes on acting for the workspace it was pinned to.
     """
     source = os.environ if environ is None else environ
-    return bool(str(source.get(WORKSPACE_ENV_VAR, "")).strip())
+    return any(str(source.get(name, "")).strip()
+               for name in (WORKSPACE_ENV_VAR, WORKSPACE_ID_ENV_VAR))
 
 
 def workspace_label(name: str, environ: Mapping[str, str] | None = None) -> str:
@@ -485,6 +493,11 @@ def request(
     """
     wanted = [str(key).strip() for key in keys if str(key).strip()]
     source = os.environ if environ is None else environ
+    if workspace_id:
+        # Keep explicit scope when no broker is available, without changing
+        # the process environment shared by concurrent callers.
+        workspace_env_path(workspace_id, source)
+        source = {**source, WORKSPACE_ENV_VAR: workspace_id}
 
     # A broker, when one is running, is the whole point of asking rather than
     # helping yourself: it records the request and holds the app to its policy.
@@ -732,13 +745,80 @@ def _tighten(path: Path, mode: int) -> None:
         pass
 
 
+_STORE_LOCKS = threading.local()
+
+
+@contextlib.contextmanager
+def store_lock(path: Path):
+    """Serialize cooperating writers of one store, including other processes."""
+    path = Path(path)
+    lock_path = path.with_name(path.name + ".lock")
+    name = str(lock_path.resolve())
+    held = getattr(_STORE_LOCKS, "held", set())
+    if name in held:
+        yield
+        return
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if lock_path.is_symlink():
+        raise ValueError("The credential store lock cannot be opened safely")
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    try:
+        if os.name == "nt":
+            import msvcrt
+            if os.fstat(fd).st_size == 0:
+                os.write(fd, b"\0")
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        _STORE_LOCKS.held = held | {name}
+        try:
+            yield
+        finally:
+            _STORE_LOCKS.held = held
+            if os.name == "nt":
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
 def set_values(
+    values: Mapping[str, str], *, overwrite: bool = False, workspace_id: str = "",
+    environ: Mapping[str, str] | None = None, exact: bool = False, path: Path | None = None,
+    expected_versions: Mapping[str, str | None] | None = None,
+) -> dict[str, Any]:
+    """Write under the store lock; optional versions hash ciphertext only."""
+    reason = container_home_reason(environ)
+    if reason:
+        raise ContainerisedHomeError(f"Refusing to write the hive env: {reason}")
+    target = Path(path) if path is not None else target_path(workspace_id, environ)
+    with store_lock(target):
+        expected_store = None
+        if expected_versions is not None:
+            expected_store = target.read_bytes() if target.exists() else b""
+            raw = parse_env_text(expected_store.decode("utf-8"))
+            for key, expected in expected_versions.items():
+                value = raw.get(key)
+                actual = hashlib.sha256(value.encode()).hexdigest() if value and value.startswith("hive-sealed:") else None
+                if (expected is None and key in raw) or expected is not None and actual != expected:
+                    raise ValueError("A credential changed locally; the incoming snapshot was not written")
+        return _set_values(values, overwrite=overwrite, workspace_id=workspace_id, environ=environ,
+                           exact=exact, path=target, expected_store=expected_store)
+
+
+def _set_values(
     values: Mapping[str, str],
     *,
     overwrite: bool = False,
     workspace_id: str = "",
     environ: Mapping[str, str] | None = None,
     exact: bool = False,
+    path: Path | None = None,
+    expected_store: bytes | None = None,
 ) -> dict[str, Any]:
     """Add credentials to the store this scope writes to, preserving the rest.
 
@@ -746,6 +826,8 @@ def set_values(
     ordering and unrelated keys survive. Returns key NAMES by outcome, and the
     `path` written — worth surfacing, because "which store did that land in"
     is the question a workspace makes ambiguous.
+
+    `path` binds an internal vault rewrite to the same file it inspected.
 
     Values are trimmed, because the usual caller is a person pasting a key and
     a stray newline is not part of it. `exact=True` turns that off for callers
@@ -763,7 +845,7 @@ def set_values(
         if not _KEY.match(key):
             raise ValueError(f"{key!r} is not a valid environment key")
 
-    path = target_path(workspace_id, environ)
+    path = Path(path) if path is not None else target_path(workspace_id, environ)
     existing = _read(path)
     # Whether a key is already in the file is a question about NAMES, and
     # `_read` answers with values — dropping any it cannot open. A process
@@ -802,25 +884,40 @@ def set_values(
         return raw if exact else raw.strip()
 
     replacing = {key: _text(key) for key in updated}
+    replaced = set()
     rewritten: list[str] = []
     for raw_line in lines:
         stripped = raw_line.strip()
         body = stripped[len("export ") :].strip() if stripped.startswith("export ") else stripped
         key = body.split("=", 1)[0].strip() if "=" in body else ""
         if key in replacing:
-            rewritten.append(_format_line(key, replacing.pop(key)))
+            rewritten.append(_format_line(key, replacing[key]))
+            replaced.add(key)
         else:
             rewritten.append(raw_line)
     for key, value in replacing.items():
-        rewritten.append(_format_line(key, value))
+        if key not in replaced:
+            rewritten.append(_format_line(key, value))
     for key in added:
         rewritten.append(_format_line(key, _text(key)))
 
+    if expected_store is not None and (path.read_bytes() if path.exists() else b"") != expected_store:
+        raise ValueError("A credential changed locally; the incoming snapshot was not written")
     _atomic_write(path, "\n".join(rewritten).rstrip("\n") + "\n")
     return {"path": str(path), "added": sorted(added), "updated": sorted(updated), "kept": sorted(kept)}
 
 
 def remove_values(
+    keys: Iterable[str], *, workspace_id: str = "", environ: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    reason = container_home_reason(environ)
+    if reason:
+        raise ContainerisedHomeError(f"Refusing to write the hive env: {reason}")
+    with store_lock(target_path(workspace_id, environ)):
+        return _remove_values(keys, workspace_id=workspace_id, environ=environ)
+
+
+def _remove_values(
     keys: Iterable[str],
     *,
     workspace_id: str = "",

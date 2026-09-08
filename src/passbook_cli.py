@@ -227,9 +227,27 @@ def cmd_check(args: argparse.Namespace) -> int:
     return 0 if not refused else 1
 
 
+def _record_write_age(result: dict) -> dict | None:
+    """Make an owner save visible to sync, without aging keys that were kept."""
+    changed = result.get("added", []) + result.get("updated", [])
+    if not changed:
+        return result
+    try:
+        import passbook_sync
+
+        passbook_sync.touch_meta(Path(result["path"]), changed)
+    except (ImportError, OSError, ValueError):
+        # The value is already saved. Do not claim either a complete failure or
+        # a successful sync, and do not print an exception that may contain data.
+        _fail("Saved on this device, but the change could not be recorded for sync.",
+              "Check that PassBook can write to this workspace, then save the key again.")
+        return None
+    return result
+
+
 def _write_values(values, *, overwrite: bool, exact: bool = False,
                   app: str = "passbook-cli", interactive: bool = False) -> dict | None:
-    """Write values, keeping a sealed store sealed. None means it was refused.
+    """Save and record the change age; None means a reported incomplete write.
 
     A store is either encrypted or it is not; half of each is a state nobody
     chose and nothing reports. Before this, writing to a sealed store put
@@ -241,11 +259,11 @@ def _write_values(values, *, overwrite: bool, exact: bool = False,
     that anybody can read.
     """
     if not _sealed_store_present():
-        return passbook.set_values(values, overwrite=overwrite, exact=exact)
+        return _record_write_age(passbook.set_values(values, overwrite=overwrite, exact=exact))
     try:
         import passbook_broker
     except ImportError:
-        return passbook.set_values(values, overwrite=overwrite, exact=exact)
+        return _record_write_age(passbook.set_values(values, overwrite=overwrite, exact=exact))
 
     held = passbook._key_names_on_disk(passbook.target_path())
     kept = sorted(key for key in values if key in held) if not overwrite else []
@@ -265,10 +283,10 @@ def _write_values(values, *, overwrite: bool, exact: bool = False,
         sealed = answer.get("sealed") or []
         # `set_values` distinguishes these and callers print them; the sealing
         # path has to say the same thing or a new key reads as "replaced".
-        return {"path": answer.get("path", ""),
+        return _record_write_age({"path": answer.get("path", ""),
                 "added": sorted(k for k in sealed if k not in held),
                 "updated": sorted(k for k in sealed if k in held),
-                "kept": kept, "sealed": sorted(sealed)}
+                "kept": kept, "sealed": sorted(sealed)})
     # Two things this has to get right, and the first version got neither.
     #
     # It led with the mechanism and then repeated it — "the value could not be
@@ -3634,8 +3652,24 @@ def cmd_link_accept(args: argparse.Namespace) -> int:
             except (EOFError, KeyboardInterrupt):
                 print(file=sys.stderr)
                 return _fail("Cancelled; nothing was stored.")
+    class IncompleteWrite(Exception):
+        pass
+
+    def write_values(values):
+        result = _write_values(values, overwrite=args.replace, exact=True,
+                               app=caller("passbook-link", args))
+        if result is None:
+            # The writer already distinguishes refusal from a saved value
+            # whose sync metadata failed. Preserve that diagnostic and leave
+            # the envelope unconsumed in either case.
+            raise IncompleteWrite
+        return result
+
     try:
-        result = module.accept(blob, confirm_fingerprint=confirm, overwrite=args.replace)
+        result = module.accept(blob, confirm_fingerprint=confirm, overwrite=args.replace,
+                               write_values=write_values)
+    except IncompleteWrite:
+        return 1
     except module.LinkError as error:
         return _fail(str(error))
     except passbook.ContainerisedHomeError as error:
@@ -4874,7 +4908,8 @@ def cmd_broker_run(args: argparse.Namespace) -> int:
     if module is None:
         return _fail("The broker is not installed on this machine.")
     try:
-        module.serve(open_with_device=getattr(args, "open_with_device", False))
+        module.serve(root=Path(args.root).expanduser() if getattr(args, "root", None) else None,
+                     open_with_device=getattr(args, "open_with_device", False))
     except RuntimeError as error:
         return _fail(str(error))
     except KeyboardInterrupt:
@@ -5768,6 +5803,7 @@ def build_parser() -> argparse.ArgumentParser:
     broker_restart.set_defaults(json=False, func=cmd_broker_restart)
 
     broker_run = broker_subs.add_parser("run", help="run in the foreground, for launchd or systemd")
+    broker_run.add_argument("--root", help="credential store used by this background service")
     broker_run.add_argument("--open-with-device", action="store_true",
                             dest="open_with_device",
                             help="open the vault at start using this machine's "
@@ -5791,6 +5827,16 @@ def build_parser() -> argparse.ArgumentParser:
     install.add_argument("--no-runtime", action="store_true",
                          help="do not provision a private interpreter for sealing and linking")
     install.set_defaults(func=cmd_install)
+
+    from passbook_connect import add_commands as add_connection_commands
+    add_connection_commands(subs)
+    integration = subs.add_parser("integration", help="serve a verified application connection")
+    integration.add_argument("--json", action="store_true", help="exchange JSON on stdin and stdout")
+    integration.add_argument("--identity-env", default="", help="protected installation identity variable used by this host")
+    def integration_command(args):
+        from passbook_managed_cli import integration as serve_integration
+        return serve_integration(args)
+    integration.set_defaults(func=integration_command)
 
     return parser
 
@@ -5818,7 +5864,7 @@ def main(argv: list[str] | None = None) -> int:
     # thing to have writing into agent config files. A daemon quietly editing
     # ~/.claude/CLAUDE.md minutes after the terminal closed is exactly the
     # behaviour that makes people uninstall something.
-    _SILENT = {"brief", "broker", "mcp"}
+    _SILENT = {"brief", "broker", "mcp", "integration", "connect", "disconnect"}
     if not os.environ.get("PASSBOOK_NO_BRIEF") and not (argv and argv[0] in _SILENT):
         brief = _brief()
         if brief is not None:

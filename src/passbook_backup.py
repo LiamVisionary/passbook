@@ -31,7 +31,6 @@ What this module will not do:
 from __future__ import annotations
 
 import base64
-import hashlib
 import json
 import os
 import shutil
@@ -39,6 +38,8 @@ import subprocess
 import time
 from pathlib import Path
 from typing import Any, Iterable, Mapping
+
+from passbook_vault import _scrypt
 
 MARKER = "passbook-export:v1"
 GPG_MARKER = "-----BEGIN PGP MESSAGE-----"
@@ -105,8 +106,8 @@ def encrypt(values: Mapping[str, str], passphrase: str, **meta: Any) -> str:
         raise BackupError("An export passphrase must be at least 8 characters")
     AESGCM = _aesgcm()
     salt = os.urandom(16)
-    kek = hashlib.scrypt(passphrase.encode("utf-8"), salt=salt, n=SCRYPT_N,
-                         r=SCRYPT_R, p=SCRYPT_P, dklen=32, maxmem=SCRYPT_MAXMEM)
+    kek = _scrypt(passphrase.encode("utf-8"), salt=salt, n=SCRYPT_N,
+                  r=SCRYPT_R, p=SCRYPT_P, maxmem=SCRYPT_MAXMEM)
     nonce = os.urandom(12)
     payload = json.dumps(body(values, **meta), separators=(",", ":")).encode("utf-8")
     sealed = AESGCM(kek).encrypt(nonce, payload, MARKER.encode("ascii"))
@@ -134,10 +135,10 @@ def decrypt(text: str, passphrase: str) -> dict[str, Any]:
     salt = _unb64(str(kdf.get("salt", "")))
     if len(salt) < 16:
         raise BackupError("This export has no usable salt")
-    kek = hashlib.scrypt(
+    kek = _scrypt(
         passphrase.encode("utf-8"), salt=salt,
         n=int(kdf.get("n", SCRYPT_N)), r=int(kdf.get("r", SCRYPT_R)),
-        p=int(kdf.get("p", SCRYPT_P)), dklen=32, maxmem=SCRYPT_MAXMEM)
+        p=int(kdf.get("p", SCRYPT_P)), maxmem=SCRYPT_MAXMEM)
     raw = _unb64(str(envelope.get("body", "")))
     if len(raw) < 13:
         raise BackupError("This export's body is truncated")

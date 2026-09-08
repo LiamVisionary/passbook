@@ -10,6 +10,7 @@ parts that stop that being a quiet mistake.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import shutil
 import stat
@@ -27,6 +28,27 @@ import passbook_backup as backup  # noqa: E402
 
 PASSPHRASE = "a-long-enough-passphrase"
 VALUES = {"ALPHA_KEY": "one", "BETA_KEY": "two with spaces", "GAMMA_KEY": "three"}
+
+
+@pytest.mark.parametrize("fallback_creates", [False, True])
+def test_encrypted_export_opens_across_scrypt_backends(monkeypatch, fallback_creates):
+    native = getattr(hashlib, "scrypt", None)
+    if native is None:
+        pytest.skip("cross-provider test needs the native provider")
+    if fallback_creates:
+        monkeypatch.delattr(hashlib, "scrypt")
+    text = backup.encrypt(VALUES, PASSPHRASE)
+    envelope = json.loads(text.partition("\n")[2])
+    assert envelope["cipher"] == "AES-256-GCM"
+    assert {key: envelope["kdf"][key] for key in ("name", "n", "r", "p")} == {
+        "name": "scrypt", "n": backup.SCRYPT_N, "r": backup.SCRYPT_R, "p": backup.SCRYPT_P}
+    if fallback_creates:
+        monkeypatch.setattr(hashlib, "scrypt", native, raising=False)
+    else:
+        monkeypatch.delattr(hashlib, "scrypt")
+    assert backup.keys_of(backup.decrypt(text, PASSPHRASE)) == VALUES
+    with pytest.raises(backup.BackupError, match="does not open"):
+        backup.decrypt(text, "wrong synthetic passphrase")
 
 
 def test_an_encrypted_export_round_trips():

@@ -63,7 +63,10 @@
     "allow-dismiss-ask",
     "allow-apply-ask",
     "allow-inspect-env",
-    "allow-import-env"
+    "allow-import-env",
+    "allow-pending-authorization",
+    "allow-dismiss-authorization",
+    "allow-decide-authorization"
   ],
   "remote": {
     "urls": [

@@ -2,7 +2,10 @@
 """The local host adapter derives authority; input cannot nominate a signer."""
 import io
 import json
+import os
+import subprocess
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -59,3 +62,49 @@ def test_unconnected_state_falls_back_only_to_names_without_reusing_unsigned_bod
     code, result = run(monkeypatch, capsys, {"action": "state", "body": {}})
     assert code == 0 and result["state"] == "unconfigured"
     assert "signature" in sent[0] and sent[1] == {"op": "managed", "action": "state"}
+
+
+def test_real_cli_waits_for_managed_work_beyond_the_connection_probe_timeout(tmp_path, monkeypatch):
+    """Recovery and provider requests can legitimately take more than two seconds."""
+    import passbook_broker as broker
+
+    root = tmp_path / "delayed-broker"
+    root.mkdir()
+    for name in ("HOME", "USERPROFILE", "HIVE_HOME"):
+        monkeypatch.setenv(name, str(root))
+    for name in ("HIVE_WORKSPACE", "HIVE_WORKSPACE_ID", "HIVE_ENV_FILES", "APP_SANDBOX_CONTAINER_ID"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("PASSBOOK_NO_NOTIFY", "1")
+    monkeypatch.setenv("PASSBOOK_KEYSTORE", "none")
+    source = Path(cli.__file__).parent
+    script = """
+import sys, time
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import passbook_broker as broker
+original = broker._handle
+def delayed(payload, *args, **kwargs):
+    if payload.get('op') == 'managed':
+        time.sleep(broker.CONNECT_TIMEOUT + 0.3)
+    return original(payload, *args, **kwargs)
+broker._handle = delayed
+broker.serve(root=Path(sys.argv[2]))
+"""
+    process = subprocess.Popen([sys.executable, "-c", script, str(source), str(root)],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=dict(os.environ))
+    try:
+        deadline = time.monotonic() + 10
+        while not broker.running(root=root) and time.monotonic() < deadline and process.poll() is None:
+            time.sleep(0.05)
+        assert broker.running(root=root), "the isolated delayed broker did not start"
+        done = subprocess.run([sys.executable, str(source / "passbook_cli.py"), "integration", "--json"],
+                              input=json.dumps({"op": "managed", "action": "state"}),
+                              text=True, capture_output=True, timeout=10, env=dict(os.environ))
+        assert not done.stderr
+        reply = json.loads(done.stdout)
+        assert done.returncode == 0 and reply["ok"] and reply["state"] == "unconfigured", reply
+    finally:
+        broker.stop(root=root)
+        if process.poll() is None:
+            process.terminate()
+        process.communicate(timeout=10)

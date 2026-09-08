@@ -11,6 +11,7 @@ import pytest
 
 sys.path[:0] = [str(Path(__file__).resolve().parents[1] / "src"), str(Path(__file__).resolve().parent)]
 from test_passbook_integrations import Installation, PASSWORD
+from test_passbook_managed_service import windows_newlines  # noqa: F401
 import passbook
 import passbook_backup as backup
 import passbook_broker as broker
@@ -26,7 +27,7 @@ LOCAL_PASSWORD = "synthetic-new-local-password"
 
 
 @pytest.fixture
-def pending(tmp_path, monkeypatch):
+def pending(tmp_path, monkeypatch, request):
     root = tmp_path / "receiver"
     root.mkdir()
     for name in ("HOME", "USERPROFILE", "HIVE_HOME"):
@@ -42,6 +43,8 @@ def pending(tmp_path, monkeypatch):
                 + "\r\nNEXT_PUBLIC_FLAG=synthetic-config\r\n").encode()
     path.write_bytes(original)
     metadata = b'{"version":2,"profiles":[],"skip":["NEXT_PUBLIC_*"],"ownerNote":"synthetic-preserved"}'
+    if getattr(request, "param", "") == "crlf":
+        metadata = metadata.replace(b'{', b'{\r\n  ').replace(b'}', b'\r\n}\r\n')
     vault.vault_path(root).write_bytes(metadata)
     timestamps = root / ".env.meta.json"
     timestamps.write_text('{"API_KEY":123}')
@@ -147,6 +150,44 @@ def test_recovery_resume_repairs_acceptance_fence_after_interrupted_commit(pendi
     assert p["app"].connect(**p["body"])["state"] == "ready"
     with pytest.raises(link.LinkError, match="already"):
         link._open_accepted(p["grant"]["envelope"], confirm_fingerprint=p["grant"]["issuer_fingerprint"], root=p["root"])
+
+
+@pytest.mark.parametrize("pending", ["crlf"], indirect=True)
+def test_recovery_resumes_interrupted_vault_install_with_exact_crlf_metadata(pending, monkeypatch, windows_newlines):
+    p = pending
+    replace = os.replace
+
+    class InterruptedCommit(BaseException):
+        pass
+
+    def interrupt_store_install(source, destination):
+        if Path(destination) == p["path"]:
+            raise InterruptedCommit
+        return replace(source, destination)
+
+    monkeypatch.setattr(os, "replace", interrupt_store_install)
+    with pytest.raises(InterruptedCommit):
+        p["app"].connect(**p["body"])
+    assert p["path"].read_bytes() == p["original"]
+    assert vault.active_profile_id(root=p["root"])
+    assert not link.known_issuer(link.envelope_issuer(p["grant"]["envelope"])["did"], root=p["root"])
+    monkeypatch.setattr(os, "replace", replace)
+    initialize = vault.initialize_store
+    restored = []
+
+    def verify_restored(*args, **kwargs):
+        restored.append(vault.vault_path(p["root"]).read_bytes())
+        assert restored[-1] == p["metadata"]
+        return initialize(*args, **kwargs)
+
+    monkeypatch.setattr(vault, "initialize_store", verify_restored)
+    result = p["app"].connect(**p["body"])
+    assert result.get("ok") and result.get("state") == "ready", result
+    assert restored == [p["metadata"]]
+    profile = vault.active_profile_id(root=p["root"])
+    dek = vault.unlock_with_password(profile, LOCAL_PASSWORD, root=p["root"])
+    stored = passbook.parse_env_text(p["path"].read_text())
+    assert vault.unseal_value("API_KEY", stored["API_KEY"], dek, profile_id=profile) == VALUE
 
 
 def test_recovery_parts_require_the_saved_installation_and_are_idempotent(pending):

@@ -221,7 +221,7 @@ def install_managed_service(*, root: Path | None = None, install: bool = True,
             if previous_task and _definition_root(previous_task, "win32") != plan["root"]:
                 raise ServiceError("This startup task belongs to another store; it was left unchanged.", "service-conflict")
         if old != plan["content"]:
-            passbook._atomic_write(plan["path"], plan["content"].decode())
+            passbook._atomic_write(plan["path"], plan["content"].decode(), newline="")
             written = True
         system = plan["platform"]
         if system == "linux":
@@ -258,7 +258,7 @@ def install_managed_service(*, root: Path | None = None, install: bool = True,
                             rollback_ok = rollback_ok and cleanup.returncode == 0
                     plan["path"].unlink(missing_ok=True)
                 else:
-                    passbook._atomic_write(plan["path"], old.decode())
+                    passbook._atomic_write(plan["path"], old.decode(), newline="")
                     if registered and plan["platform"] == "win32":
                         cleanup = _run(["schtasks", "/Create", "/TN", LABEL, "/XML", str(plan["path"]), "/F"], required=False)
                         rollback_ok = rollback_ok and cleanup.returncode == 0

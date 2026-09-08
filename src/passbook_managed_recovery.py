@@ -226,7 +226,7 @@ def _recover(body: Mapping[str, Any], ident: str, root: Path, tx: Transaction) -
             if original is None:
                 vault.vault_path(path.parent).unlink()
             else:
-                passbook._atomic_write(vault.vault_path(path.parent), base64.b64decode(original).decode("utf-8"))
+                passbook._atomic_write(vault.vault_path(path.parent), base64.b64decode(original).decode("utf-8"), newline="")
             snapshot = _snapshot(root, row["workspace"])
     if any(snapshot[key] != row[key] for key in ("storeDigest", "vaultDigest", "manifestDigest")):
         raise ManagedError("This workspace changed during recovery. Its files were preserved.", "recovery-changed")

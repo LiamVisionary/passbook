@@ -1,6 +1,6 @@
 # Managed host contract
 
-Available in PassBook 1.7.0. Host applications must implement this contract
+Available in PassBook 1.7.1. Host applications must implement this contract
 to expose managed setup, approvals, and automatic peer updates.
 This optional layer leaves the standalone Python/JavaScript store contract intact.
 

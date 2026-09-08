@@ -1,6 +1,6 @@
 # Managed integrations and agent access
 
-Status: PassBook 1.7.0 implements the managed protocol described below. The
+Status: PassBook 1.7.1 implements the managed protocol described below. The
 full host experience remains an acceptance target, not a claim that every
 capability below has shipped in every host application. The implemented
 wire contract and its limits are recorded in [MANAGED_PROTOCOL.md](MANAGED_PROTOCOL.md).

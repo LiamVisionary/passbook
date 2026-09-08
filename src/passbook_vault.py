@@ -923,7 +923,7 @@ def _initialize_store(
             # original store or recovered secret is ever staged in plaintext.
             previous_vault = staging / "previous-vault.json"
             if original_vault is not None:
-                passbook._atomic_write(previous_vault, original_vault.decode("utf-8"))
+                passbook._atomic_write(previous_vault, original_vault.decode("utf-8"), newline="")
 
             stat = vault_path(staging).stat()
             installed_identity = (stat.st_dev, stat.st_ino)

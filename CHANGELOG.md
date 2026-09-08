@@ -2,7 +2,25 @@
 
 All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
-## [1.7.0] — 2026-09-08
+## [1.7.1] — 2026-09-08
+
+### 2026-09-08 — Cross-platform release verification
+
+- Preserve exact service-definition bytes during installation and rollback on
+  Windows. Newline translation previously defeated repeated-install detection
+  and could change the original file when rolling back. Ordinary credential
+  writes keep their existing newline behavior.
+- Apply the same exact-byte preservation to original vault metadata during
+  failed installation and interrupted recovery, including existing CRLF files.
+- Give managed operations a bounded 35-second response deadline instead of the
+  two-second broker availability probe. Password-based recovery and HTTPS calls
+  could otherwise finish after their caller had already reported a false
+  disconnection. The native authorization transport retains its 40-second bound.
+- The 1.7.0 build remained a draft after Windows CI found these issues; 1.7.1
+  supersedes it without changing the existing source tag.
+- Validation: the local candidate passes 1,127 tests with two Windows-only
+  skips in 112.27 seconds. Real CLI recovery and a delayed broker pass 17
+  focused tests; Windows newline emulation also verifies the rollback paths.
 
 ### 2026-09-08 — Preserve credential boundaries during inheritance and import
 
@@ -16,7 +34,7 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
   replacement policy, and record changes for synchronization. A locked receiver
   refuses a replacement without consuming the envelope, allowing a later retry.
   A saved value whose metadata update fails is reported as a partial save.
-- Final local release gate: 1,122 Python 3.12 tests pass, with two Windows-only
+- Initial local release gate: 1,122 Python 3.12 tests pass, with two Windows-only
   skips, in 111.86 seconds. Apple Python 3.9 link and onboarding tests pass all
   64 cases; the inheritance fix passes 396 affected tests on Python 3.12.
 
@@ -40,7 +58,7 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
   the new value, workspace isolation, kept/invalid writes, metadata-write
   failure reporting, and concurrent timestamps. The complete Python 3.12 suite
   passes 1,109 tests with two Windows-only skips in 93.59 seconds; the affected
-  Apple Python 3.9 suites pass 211 tests. Included in the 1.7.0 release.
+  Apple Python 3.9 suites pass 211 tests. Included in the 1.7.1 release.
 
 ### 2026-09-08 — Apple Python password compatibility
 

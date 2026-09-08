@@ -16,6 +16,19 @@ import passbook_managed_service as service
 
 
 @pytest.fixture
+def windows_newlines(monkeypatch):
+    """Exercise Windows text writes even when the gate runs on a POSIX host."""
+    fdopen = service.passbook.os.fdopen
+
+    def translated(handle, mode="r", *args, **kwargs):
+        if "b" not in mode and kwargs.get("newline") is None:
+            kwargs["newline"] = "\r\n"
+        return fdopen(handle, mode, *args, **kwargs)
+
+    monkeypatch.setattr(service.passbook.os, "fdopen", translated)
+
+
+@pytest.fixture
 def machine(tmp_path, monkeypatch):
     home, root = tmp_path / "user home", tmp_path / "selected store"
     home.mkdir()
@@ -72,7 +85,7 @@ def test_disabled_install_does_no_work(machine):
     assert list(machine["home"].iterdir()) == []
 
 
-def test_install_is_idempotent_and_does_not_bootout_an_existing_broker(machine):
+def test_install_is_idempotent_and_does_not_bootout_an_existing_broker(machine, windows_newlines):
     args = {"root": machine["root"], "program": ["/tools/passbook"]}
     first = service.install_managed_service(**args)
     assert first["ok"] and first["installed"] and first["deferred"]
@@ -135,9 +148,11 @@ def test_uninstall_is_idempotent_and_leaves_vault_and_other_agents_alone(machine
 
 def test_systemd_arguments_escape_specifiers_and_environment_expansion(machine, monkeypatch):
     monkeypatch.setattr(service, "_system", lambda: "linux")
-    plan = service.managed_service_plan(root=machine["root"].parent / 'a%name $HOME "quoted"', program=["/bin/passbook"])
+    root = machine["root"].parent / "a%name $HOME"
+    plan = service.managed_service_plan(root=root, program=["/bin/passbook", '--label="quoted"'])
     text = plan["content"].decode()
     assert "a%%name $$HOME" in text and '\\"quoted\\"' in text
+    assert service._definition_root(plan["content"], "linux") == str(root.resolve())
 
 
 def test_unsupported_platform_has_no_side_effects(machine, monkeypatch):
@@ -171,14 +186,34 @@ def test_windows_installs_queries_and_removes_only_its_owned_task(machine, monke
     assert task["content"] is None
 
 
-def test_existing_startup_file_is_restored_when_an_update_fails(machine, monkeypatch):
+def test_existing_startup_file_is_restored_when_an_update_fails(machine, monkeypatch, windows_newlines):
     assert service.install_managed_service(root=machine["root"], program=["/old/passbook"])["ok"]
     path = service.managed_service_plan(root=machine["root"])["path"]
-    original = path.read_bytes()
+    # Older Windows installs wrote CRLF. Rollback must preserve even that
+    # existing representation byte-for-byte, without turning CRLF into CRCRLF.
+    original = path.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+    path.write_bytes(original)
     monkeypatch.setattr(broker, "start", lambda **kwargs: {"ok": False})
     answer = service.install_managed_service(root=machine["root"], program=["/new/passbook"])
     assert not answer["ok"] and answer["rolledBack"]
     assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize("platform", ["darwin", "linux", "win32"])
+def test_service_definition_bytes_match_rendering_with_windows_newlines(machine, monkeypatch, windows_newlines, platform):
+    monkeypatch.setattr(service, "_system", lambda: platform)
+    plan = service.managed_service_plan(root=machine["root"])
+    answer = service.install_managed_service(root=machine["root"])
+    assert answer["ok"], answer
+    assert plan["path"].read_bytes() == plan["content"]
+
+
+def test_service_exact_writes_do_not_change_ordinary_atomic_write_newlines(tmp_path, windows_newlines):
+    ordinary, exact = tmp_path / "ordinary", tmp_path / "exact"
+    service.passbook._atomic_write(ordinary, "first\nsecond\r\n")
+    assert ordinary.read_bytes() == b"first\r\nsecond\r\r\n"
+    service.passbook._atomic_write(exact, "first\nsecond\r\n", newline="")
+    assert exact.read_bytes() == b"first\nsecond\r\n"
 
 
 def test_registered_windows_task_for_another_root_is_preserved_even_without_local_xml(machine, monkeypatch):

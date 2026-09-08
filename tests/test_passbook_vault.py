@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _platform import assert_private  # noqa: E402
+from test_passbook_managed_service import windows_newlines  # noqa: E402, F401
 
 import passbook  # noqa: E402
 import passbook_vault as vault  # noqa: E402
@@ -120,9 +121,9 @@ def test_initialize_store_seals_recovered_values_without_plaintext_files(root, m
     writes = []
     original_write = passbook._atomic_write
 
-    def observe_write(target, text):
+    def observe_write(target, text, **kwargs):
         writes.append(text)
-        return original_write(target, text)
+        return original_write(target, text, **kwargs)
 
     monkeypatch.setattr(passbook, "_atomic_write", observe_write)
     profile = vault.initialize_store(PASSWORD, root=root, path=path,
@@ -211,13 +212,14 @@ def test_initialize_store_preserves_concurrent_changes_while_preparing(root, mon
         assert json.loads(vault_path.read_text())["profiles"] == [{"id": "concurrent"}]
 
 
-@pytest.mark.parametrize("original_vault", [None, "", '{"profiles": [], "skip": ["OTHER"]}'])
-def test_initialize_store_rolls_back_only_its_vault_on_failed_store_install(root, monkeypatch, original_vault):
+@pytest.mark.parametrize("original_vault", [None, "", '{"profiles": [], "skip": ["OTHER"]}',
+                                         '{\r\n  "profiles": [],\r\n  "skip": ["OTHER"]\r\n}\r\n'])
+def test_initialize_store_rolls_back_only_its_vault_on_failed_store_install(root, monkeypatch, original_vault, windows_newlines):
     path = root / ".env"
     original = path.read_text()
     vault_path = root / vault.VAULT_FILENAME
     if original_vault is not None:
-        vault_path.write_text(original_vault)
+        vault_path.write_bytes(original_vault.encode("utf-8"))
     replace = os.replace
 
     def fail_store_install(source, destination):
@@ -233,7 +235,7 @@ def test_initialize_store_rolls_back_only_its_vault_on_failed_store_install(root
     if original_vault is None:
         assert not vault_path.exists()
     else:
-        assert vault_path.read_text() == original_vault
+        assert vault_path.read_bytes() == original_vault.encode("utf-8")
     assert not any(item.is_dir() for item in root.iterdir())
 
 

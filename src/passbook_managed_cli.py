@@ -20,7 +20,9 @@ def exchange(envelope: dict[str, Any], *, install_service: bool = True) -> dict[
     if features.get("managed_integrations") != 1:
         return {"ok": False, "error": "Finish updating PassBook to connect this app. Running work has been left intact.",
                 "code": "broker-update-required"}
-    answer = broker._ask(envelope, root=root) or {
+    # Recovery performs password derivation and HTTPS may take up to 30 seconds.
+    # The two-second availability probe is not a deadline for completed work.
+    answer = broker._ask(envelope, root=root, timeout=35) or {
         "ok": False, "error": "Your key connection stopped responding. Please try again.", "code": "broker-unavailable"}
     if envelope.get("action") in {"connect", "authorize-decide"} and answer.get("ok") and (answer.get("binding") or {}).get("background"):
         from passbook_managed_service import install_managed_service

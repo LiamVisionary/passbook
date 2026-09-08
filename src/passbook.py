@@ -721,12 +721,12 @@ def _key_names_on_disk(path: Path) -> set[str]:
         return set()
 
 
-def _atomic_write(path: Path, text: str) -> None:
+def _atomic_write(path: Path, text: str, *, newline: str | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     _tighten(path.parent, ROOT_MODE)
     handle, temporary = tempfile.mkstemp(dir=str(path.parent), prefix=".hive-env-")
     try:
-        with os.fdopen(handle, "w", encoding="utf-8") as stream:
+        with os.fdopen(handle, "w", encoding="utf-8", newline=newline) as stream:
             stream.write(text)
         os.chmod(temporary, FILE_MODE)
         os.replace(temporary, path)

@@ -37,7 +37,7 @@ def test_headless_reconnect_reports_locked_and_never_claims_keys_are_ready(monke
     monkeypatch.setattr(sys.stdin, "isatty", lambda: is_tty)
     seen = []
     monkeypatch.setattr(connection, "exchange", lambda envelope: seen.append(envelope) or locked_binding())
-    monkeypatch.setattr(connection.getpass, "getpass", lambda *_: pytest.fail("headless password prompt"))
+    monkeypatch.setattr(connection, "hidden_input", lambda *_: pytest.fail("headless password prompt"))
     assert connection.connect(connect_args(non_interactive=interactive_flag)) == 1
     output = capsys.readouterr()
     result = json.loads(output.out)
@@ -52,7 +52,7 @@ def test_interactive_reconnect_unlocks_existing_binding_once_and_preserves_backg
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(keystore, "available", lambda: True)
     prompts, seen = [], []
-    monkeypatch.setattr(connection.getpass, "getpass", lambda prompt: prompts.append(prompt) or "synthetic-unlock-password")
+    monkeypatch.setattr(connection, "hidden_input", lambda prompt: prompts.append(prompt) or "synthetic-unlock-password")
     def exchange(envelope):
         seen.append(envelope)
         if envelope["action"] == "state":

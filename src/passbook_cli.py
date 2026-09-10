@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import argparse
 import base64
-import getpass
 import json
 import os
 import platform
@@ -45,6 +44,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from passbook_prompt import hidden_input
 import passbook  # noqa: E402
 
 # `passbook-check` and friends are symlinks to this file. Dispatching on the
@@ -434,7 +434,7 @@ def cmd_add(args: argparse.Namespace) -> int:
                 f"Pass {key}=value, or run this on a terminal to be prompted.",
             )
         try:
-            entered = getpass.getpass(f"{key}: ")
+            entered = hidden_input(f"{key}: ")
         except (EOFError, KeyboardInterrupt):
             print(file=sys.stderr)
             return _fail("Cancelled; nothing was written.")
@@ -985,10 +985,10 @@ def _ask_password(prompt: str = "Vault password: ", *, confirm: bool = False,
         if not supplied:
             raise ValueError("No password arrived on stdin")
         return supplied
-    first = getpass.getpass(prompt)
+    first = hidden_input(prompt)
     if not confirm:
         return first
-    again = getpass.getpass("Again: ")
+    again = hidden_input("Again: ")
     if first != again:
         raise ValueError("Those did not match")
     return first

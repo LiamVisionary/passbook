@@ -2,6 +2,37 @@
 
 All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
+## [Unreleased]
+
+### Typing a secret shows bullets instead of nothing
+
+`getpass` echoes nothing at all. On a typed password that is merely austere; on
+a PASTED one — which is what a credential store asks for almost every time — the
+screen is dead, and the honest reading of a dead screen is "did that work?".
+People answer that by pasting again, or by pasting somewhere visible first to
+check, which is the one place a secret must never go.
+
+Every prompt that takes a secret now draws one `•` per character: `passbook add
+KEY`, the vault password and its confirmation, and `passbook connect`'s
+create/unlock pair. The characters themselves are still never echoed, the
+bullets are written to the terminal rather than stdout so a redirected stdout
+stays clean, and nothing reaches argv or the shell history.
+
+Backspace, Ctrl-U and Ctrl-W erase bullets as they erase characters; a pasted
+value arrives in one read rather than crawling in; an arrow key is swallowed
+instead of leaving `[C` inside the key; and a multi-byte character draws one
+bullet rather than one per byte. Ctrl-C and Ctrl-D behave as before, because the
+terminal keeps ISIG rather than being put into raw mode.
+
+Anything that is not a terminal — a pipe, CI, a test — falls straight through to
+`getpass.getpass` unchanged, and so does a terminal that will not enter cbreak
+mode. A nicer prompt is not worth failing to read a password.
+
+New module `passbook_prompt` (and `py-modules`, without which the installed CLI
+would not have it). Driven in tests through a real pseudo-terminal, because a
+test that stubs the terminal away would pass just as happily on the version that
+showed nothing.
+
 ## [1.7.1] — 2026-09-08
 
 ### 2026-09-08 — Cross-platform release verification
@@ -134,6 +165,26 @@ and keystore access across login or reboot were not verified.
 Deletion propagation, bidirectional conflict resolution, automatic lease renewal,
 and forced replacement of a running older broker are not implemented; see
 `docs/MANAGED_PROTOCOL.md`.
+
+### `policy --reads` no longer pretends to take a scope
+
+`passbook policy --app hivemindos --key PLAID_CLIENT_ID --reads open` exited 0,
+printed "Reads are open", and recorded nothing for the app it named. The scope
+flags were parsed and then dropped: the reads branch ran first and returned, so
+a command that read as touching one key on one app flipped the store-wide switch
+for every key on the machine — and left no policy row behind, so `passbook
+policy` afterwards showed nothing and the person went looking for a rule that
+had never been written. `--mode` was discarded the same way whenever `--reads`
+was present.
+
+The combination is refused now rather than made to work, because there is no
+scoped `--reads` to implement. A per-app exemption to sealed reads is the list
+1.3.0 deliberately removed: an app name is a claim, and anything can call itself
+the exempted app. The refusal says that, says nothing was changed, and names the
+two flags the person was probably reaching for — `--mode` to govern who may have
+a key, `passbook run` to use one without printing it. `--reads` alone still sets
+the store's posture in both directions, and `--learn --mode … --reads sealed`
+still works, since `--learn` consumes the mode before the seal is applied.
 
 ### A revealed credential is drawn, and the window it is drawn in cannot be captured
 

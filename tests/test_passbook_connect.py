@@ -46,7 +46,7 @@ def test_existing_binding_resumes_service_without_prompt_or_reconnect(monkeypatc
     monkeypatch.setattr(connection, "exchange", lambda message: seen.append(message) or {
         "ok": True, "state": "ready", "binding": {"app": "hivemindos", "background": True}})
     monkeypatch.setattr(service, "install_managed_service", lambda: {"ok": True, "installed": True})
-    monkeypatch.setattr(connection.getpass, "getpass", lambda *_: (_ for _ in ()).throw(AssertionError("prompt")))
+    monkeypatch.setattr(connection, "hidden_input", lambda *_: (_ for _ in ()).throw(AssertionError("prompt")))
     assert connection.connect(args()) == 0
     assert [message["action"] for message in seen] == ["state"]
     assert json.loads(capsys.readouterr().out)["backgroundService"]["installed"]
@@ -64,7 +64,7 @@ def test_explicit_pause_is_not_resumed_by_reinstall(monkeypatch, capsys):
 def test_fresh_interactive_setup_uses_original_store_and_hidden_password(monkeypatch, capsys):
     monkeypatch.setenv("TEST_HOST_IDENTITY", "dummy-host-identity-for-test-only-7427")
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr(connection.getpass, "getpass", lambda *_: "dummy-vault-password")
+    monkeypatch.setattr(connection, "hidden_input", lambda *_: "dummy-vault-password")
     import passbook_keystore
     monkeypatch.setattr(passbook_keystore, "available", lambda: True)
     seen = []

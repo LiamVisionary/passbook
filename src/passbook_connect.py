@@ -2,13 +2,13 @@
 """Owner-facing enrollment; authentication is prompted, never passed in argv."""
 from __future__ import annotations
 
-import getpass
 import hashlib
 import json
 import os
 import sys
 from typing import Any
 
+from passbook_prompt import hidden_input
 from passbook_managed_cli import exchange
 from passbook_managed_store import b64, canonical, identifier, installation_id, now_ms, signed_bytes
 
@@ -99,9 +99,9 @@ def connect(args) -> int:
             # connection encrypts that same store and gives it the app's label.
             workspace = "main"
             print(f"Set up {args.name or workspace_label} to keep your keys encrypted and ready for this app.", file=sys.stderr)
-        password = getpass.getpass("PassBook password: " if existing and not create else "Create a PassBook password (8+ characters): ")
+        password = hidden_input("PassBook password: " if existing and not create else "Create a PassBook password (8+ characters): ")
         if not existing or create:
-            if password != getpass.getpass("Confirm password: "):
+            if password != hidden_input("Confirm password: "):
                 raise ValueError("The passwords did not match. No connection was created.")
         background = not args.no_background and (binding.get("background", False) if binding else True)
         if background:

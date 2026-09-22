@@ -4,6 +4,22 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+### A grant says when it was issued
+
+A process started by `passbook run` holds the store as it was at that moment,
+and `passbook get` inside it answers from that environment rather than from the
+store. That is right for a service using its own credential. It was wrong for
+anything passing those values on: the HivemindOS collector runs under
+`passbook run`, and on 2026-09-23 it served a pre-rotation credit token under
+the store's current timestamp, so every peer took the dead token as the newest
+copy. The rotation undid itself three times in one morning.
+
+Every grant now carries `PASSBOOK_GRANT_ISSUED_AT`, the Unix time its
+environment was built, at full precision. A caller that replicates can serve a
+value only when the store has not changed that key since then, and withhold it
+otherwise. An inherited or caller-supplied stamp is replaced, so a nested grant
+is dated by its own issue.
+
 ### Replacing a key can push it to the services already holding it
 
 Replacing a credential in the store was only ever half a rotation. The copies

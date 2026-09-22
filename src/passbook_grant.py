@@ -126,6 +126,12 @@ __all__ = [
 # this process was born holding what it needs and must not ask the broker again
 # — the broker would refuse it, correctly, for not being a grant-backed caller.
 GRANT_ENV = "PASSBOOK_GRANT"
+# When that grant was issued, in Unix seconds, taken as the child's environment
+# is built, just after its values were read. Those values never change while the
+# child runs, so anything that passes them on — replication above all — needs to
+# know how old they are. A collector launched before a rotation otherwise serves
+# the pre-rotation value as if it were current, and every peer adopts it.
+GRANT_ISSUED_ENV = "PASSBOOK_GRANT_ISSUED_AT"
 
 REDACTION = "[redacted:{name}]"
 
@@ -615,7 +621,7 @@ def _child_env(values: Mapping[str, str], *, extra: Mapping[str, str] | None,
     would let it do exactly that.
     """
     env = dict(os.environ if base is None else base)
-    for name in ("HIVE_ENV_FILES", "PASSBOOK_STORE", "PASSBOOK_ROOT", GRANT_ENV):
+    for name in ("HIVE_ENV_FILES", "PASSBOOK_STORE", "PASSBOOK_ROOT", GRANT_ENV, GRANT_ISSUED_ENV):
         env.pop(name, None)
     for name, value in (extra or {}).items():
         # Caller-supplied environment is ordinary configuration — a port, a
@@ -625,6 +631,9 @@ def _child_env(values: Mapping[str, str], *, extra: Mapping[str, str] | None,
         env[str(name)] = str(value)
     env.update({str(name): str(value) for name, value in values.items()})
     env[GRANT_ENV] = grant
+    # Full precision: rounding up would date the grant after a write that
+    # landed just behind it, and that write's value would pass for current.
+    env[GRANT_ISSUED_ENV] = repr(time.time())
     if app:
         env["PASSBOOK_APP"] = app
     return env

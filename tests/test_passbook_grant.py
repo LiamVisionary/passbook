@@ -15,6 +15,7 @@ import io
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -200,6 +201,23 @@ def test_caller_environment_cannot_overwrite_a_credential():
     done = grant.spawn(["sh", "-c", "echo $SECRET_TOKEN"], VALUES,
                        extra_env={"SECRET_TOKEN": "attacker-chosen"})
     assert "attacker-chosen" not in done["stdout"]
+
+
+@needs_a_posix_shell
+def test_a_child_knows_how_old_its_values_are():
+    """What a child holds is the store as of its launch, and never changes after.
+
+    Anything passing those values on has to know their age. A collector launched
+    before a rotation otherwise serves the pre-rotation value under the store's
+    current timestamp, every peer adopts it, and the rotation undoes itself —
+    three times in one morning, the day this was added. A stamp inherited from
+    the caller, or slipped in as configuration, describes some other grant.
+    """
+    before = time.time()
+    done = grant.spawn(["sh", "-c", "echo $PASSBOOK_GRANT_ISSUED_AT"], VALUES,
+                       base_env={"PASSBOOK_GRANT_ISSUED_AT": "1", "PATH": "/bin:/usr/bin"},
+                       extra_env={"PASSBOOK_GRANT_ISSUED_AT": "2"})
+    assert before <= float(done["stdout"].strip()) <= time.time()
 
 
 @needs_a_posix_shell

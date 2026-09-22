@@ -60,6 +60,7 @@ passbook-integration = "passbook_cli:main"
 passbook-link = "passbook_cli:main"
 passbook-mcp = "passbook_cli:main"
 passbook-oauth = "passbook_cli:main"
+passbook-services = "passbook_cli:main"
 passbook-pin = "passbook_cli:main"
 passbook-group = "passbook_cli:main"
 passbook-approved = "passbook_cli:main"
@@ -148,6 +149,7 @@ py-modules = [
     "passbook_pipe",
     "passbook_prompt",
     "passbook_seal",
+    "passbook_services",
     "passbook_stamp",
     "passbook_sync",
     "passbook_vault",

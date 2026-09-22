@@ -479,7 +479,211 @@ def cmd_add(args: argparse.Namespace) -> int:
     if result["kept"] and not args.replace:
         sys.stdout.flush()
         print("\nPass --replace to overwrite a key another app may be using.", file=sys.stderr)
+    # A replaced key whose old value also lives on a Worker, a VPS or a CI
+    # secret store is only half rotated. Offer to push it the rest of the way.
+    _offer_service_updates(result["updated"], values, args)
     return 0
+
+
+def _service_lines(items) -> list[str]:
+    """One numbered line per binding, with what last happened to it."""
+    out = []
+    for index, item in enumerate(items, start=1):
+        status = str(item.get("lastStatus") or "never")
+        mark = {"ok": "ok", "failed": "FAILED", "never": "not pushed yet"}.get(status, status)
+        note = f" — {item.get('lastError')}" if status == "failed" and item.get("lastError") else ""
+        out.append(f"  {index} {str(item.get('service','')):<24} {mark}{note}\n"
+                   f"      {item.get('command','')}")
+    return out
+
+
+def _run_service_updates(key: str, value: str, chosen, *, registry=None) -> int:
+    """Push to each service in turn, printing as it goes, and remember the result.
+
+    Prints per service rather than at the end because these are writes to other
+    people's systems and one of them can hang for a while; a silent run looks
+    identical to a stuck one.
+    """
+    import passbook_services as services
+
+    failed: list[str] = []
+
+    def announce(entry):
+        print(f"  {'ok  ' if entry['ok'] else 'FAIL'} {entry['service']}"
+              + (f" — {entry['detail']}" if not entry["ok"] and entry["detail"] else ""),
+              flush=True)  # a service can take a while; a buffered line looks like a hang
+        if not entry["ok"]:
+            failed.append(entry["service"])
+
+    results = services.update(key, value, chosen, on_result=announce)
+    working = registry if registry is not None else services.read()
+    for entry in results:
+        working = services.record(key, entry["service"], ok=entry["ok"],
+                                  error=entry["detail"], registry=working)
+    try:
+        services.write(working)
+    except Exception as error:  # noqa: BLE001 — a push that landed must not be forgotten over a write
+        print(f"could not record the outcome: {error}", file=sys.stderr)
+    if failed:
+        sys.stdout.flush()  # or the summary lands above the lines it summarises
+        print(f"\n{len(failed)} of {len(results)} did not take: {', '.join(failed)}",
+              file=sys.stderr)
+        print(f"Retry just those with: passbook services retry {key}", file=sys.stderr)
+        return 1
+    print(f"\nall {len(results)} updated")
+    return 0
+
+
+def _offer_service_updates(replaced, values, args) -> None:
+    """Ask, after a replace, whether the services holding that key should follow.
+
+    Default is to ask only when someone is there to answer. A script piping a
+    new value in is not asked and nothing is pushed, because pushing to a dozen
+    live services is not something to do to somebody who did not request it;
+    `--update-services all` is how a script opts in.
+    """
+    mode = str(getattr(args, "update_services", "ask") or "ask")
+    if mode == "none" or not replaced:
+        return
+    try:
+        import passbook_services as services
+
+        registry = services.read()
+    except Exception:  # noqa: BLE001 — an unreadable registry must not fail the add
+        return
+    for key in replaced:
+        items = services.bindings(key, registry)
+        if not items:
+            continue
+        print(f"\n{key} is also on {len(items)} service(s):")
+        for line in _service_lines(items):
+            print(line)
+        sys.stdout.flush()
+        if mode == "all":
+            chosen = items
+        elif not (sys.stdin.isatty() and sys.stdout.isatty()):
+            sys.stdout.flush()
+            print("Not a terminal, so nothing was pushed. "
+                  f"Run: passbook services update {key}", file=sys.stderr)
+            continue
+        else:
+            answer = input("Update them now? [a]ll / [s]elect / [n]o: ").strip().lower()
+            if answer.startswith("n") or not answer:
+                print(f"Left alone. Push later with: passbook services update {key}")
+                continue
+            if answer.startswith("s"):
+                try:
+                    chosen = services.select(items, input("Which? e.g. 1,3 or a name: "))
+                except services.ServiceError as error:
+                    print(str(error), file=sys.stderr)
+                    continue
+            else:
+                chosen = items
+        _run_service_updates(key, values.get(key, ""), chosen, registry=registry)
+
+
+def cmd_services(args: argparse.Namespace) -> int:
+    """Everything the store knows about where its keys have been copied to."""
+    import passbook_services as services
+
+    registry = services.read()
+    wanted = [args.key] if getattr(args, "key", "") else services.keys_with_bindings(registry)
+    if not wanted:
+        print("No service is recorded against any key yet.")
+        print("Record one with: passbook services attach KEY SERVICE --command '…'")
+        return 0
+    if getattr(args, "json", False):
+        print(json.dumps({key: services.bindings(key, registry) for key in wanted}, indent=2))
+        return 0
+    for key in wanted:
+        items = services.bindings(key, registry)
+        if not items:
+            print(f"{key}: no services recorded")
+            continue
+        print(f"{key} — {len(items)} service(s)")
+        for line in _service_lines(items):
+            print(line)
+    return 0
+
+
+def cmd_services_attach(args: argparse.Namespace) -> int:
+    import passbook_services as services
+
+    try:
+        registry = services.attach(args.key, args.service, args.command,
+                                   stdin=args.stdin, cwd=args.cwd)
+        services.write(registry)
+    except services.ServiceError as error:
+        return _fail(str(error))
+    print(f"recorded: {args.service} holds {args.key}")
+    print(f"The command runs with ${args.key} in its environment"
+          + (" and the value on stdin." if args.stdin else "."))
+    return 0
+
+
+def cmd_services_detach(args: argparse.Namespace) -> int:
+    import passbook_services as services
+
+    registry, removed = services.detach(args.key, args.service)
+    if not removed:
+        return _fail(f"{args.key} has no service called {args.service!r}.")
+    services.write(registry)
+    print(f"forgotten: {args.service} for {args.key}")
+    return 0
+
+
+def cmd_services_update(args: argparse.Namespace) -> int:
+    """Push the key's CURRENT value to the services that hold it."""
+    import passbook
+
+    import passbook_services as services
+
+    registry = services.read()
+    items = services.bindings(args.key, registry)
+    if not items:
+        return _fail(f"No service is recorded against {args.key}.")
+    value = passbook.load().get(args.key, "")
+    if not value:
+        return _fail(f"{args.key} is not set here, so there is nothing to push.")
+    try:
+        chosen = services.select(items, args.only or "all")
+    except services.ServiceError as error:
+        return _fail(str(error))
+    if args.dry_run:
+        print(f"would push {args.key} to {len(chosen)} service(s):")
+        for item in chosen:
+            print(f"  {item.get('service')}: {item.get('command')}")
+        return 0
+    print(f"pushing {args.key} to {len(chosen)} service(s)")
+    return _run_service_updates(args.key, value, chosen, registry=registry)
+
+
+def cmd_services_retry(args: argparse.Namespace) -> int:
+    """Only the ones that did not land last time."""
+    import passbook
+
+    import passbook_services as services
+
+    registry = services.read()
+    outstanding = [(key, item) for key, item in services.failures(registry)
+                   if not getattr(args, "key", "") or key == args.key]
+    if not outstanding:
+        print("Nothing is outstanding.")
+        return 0
+    values = passbook.load()
+    worst = 0
+    for key in sorted({key for key, _ in outstanding}):
+        value = values.get(key, "")
+        chosen = [item for that_key, item in outstanding if that_key == key]
+        if not value:
+            print(f"{key} is not set here, so its {len(chosen)} service(s) were skipped.",
+                  file=sys.stderr)
+            worst = 1
+            continue
+        print(f"retrying {key} on {len(chosen)} service(s)")
+        worst = max(worst, _run_service_updates(key, value, chosen, registry=registry))
+        registry = services.read()
+    return worst
 
 
 def cmd_remove(args: argparse.Namespace) -> int:
@@ -5177,6 +5381,9 @@ def build_parser() -> argparse.ArgumentParser:
     check.set_defaults(func=cmd_check)
 
     add = subs.add_parser("add", help="add keys; a bare KEY prompts without echo")
+    add.add_argument("--update-services", choices=("ask", "all", "none"), default="ask",
+                     help="after replacing a key, push it to the services recorded "
+                          "against it. 'ask' (the default) only asks at a terminal.")
     add.add_argument("pairs", nargs="*", metavar="KEY[=value]")
     add.add_argument("--replace", action="store_true", help="overwrite a key that is already set")
     add.add_argument("--stdin", action="store_true", help="read KEY=value lines from stdin")
@@ -5339,6 +5546,48 @@ def build_parser() -> argparse.ArgumentParser:
     passkey_enrol.add_argument("--password-stdin", dest="password_stdin", action="store_true",
                                help="read the vault password from stdin, after the PRF secret")
     passkey_enrol.set_defaults(json=False, func=cmd_passkey_enrol)
+
+    services_parser = subs.add_parser(
+        "services", help="which services hold a key, and how it got there")
+    services_parser.add_argument("--json", action="store_true")
+    services_parser.set_defaults(func=cmd_services)
+    services_subs = services_parser.add_subparsers(dest="services_command")
+
+    services_list = services_subs.add_parser("list", help="show the recorded services")
+    services_list.add_argument("key", nargs="?", default="")
+    services_list.add_argument("--json", action="store_true")
+    services_list.set_defaults(func=cmd_services)
+
+    services_attach = services_subs.add_parser(
+        "attach", help="record that a service holds this key, and how to put it there")
+    services_attach.add_argument("key")
+    services_attach.add_argument("service", help="a label, e.g. hivemindos-website")
+    services_attach.add_argument("--command", required=True,
+                                 help="the command that puts the key there. It runs with "
+                                      "$KEY in its environment; never put the value in it.")
+    services_attach.add_argument("--stdin", action="store_true",
+                                 help="also feed the value on stdin, for `wrangler secret put` and friends")
+    services_attach.add_argument("--cwd", default="", help="run the command in this directory")
+    services_attach.set_defaults(json=False, func=cmd_services_attach)
+
+    services_detach = services_subs.add_parser("detach", help="forget one service for a key")
+    services_detach.add_argument("key")
+    services_detach.add_argument("service")
+    services_detach.set_defaults(json=False, func=cmd_services_detach)
+
+    services_update = services_subs.add_parser(
+        "update", help="push the key's current value to the services that hold it")
+    services_update.add_argument("key")
+    services_update.add_argument("--only", default="",
+                                 help="a subset: numbers like 1,3 or service names. Default is all.")
+    services_update.add_argument("--dry-run", action="store_true",
+                                 help="say what would run, and run nothing")
+    services_update.set_defaults(json=False, func=cmd_services_update)
+
+    services_retry = services_subs.add_parser(
+        "retry", help="push again to the services whose last push failed")
+    services_retry.add_argument("key", nargs="?", default="")
+    services_retry.set_defaults(json=False, func=cmd_services_retry)
 
     oauth = subs.add_parser("oauth", help="sign-ins this machine holds, kept alive")
     oauth.add_argument("--json", action="store_true")

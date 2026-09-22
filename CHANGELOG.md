@@ -4,6 +4,46 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+### Replacing a key can push it to the services already holding it
+
+Replacing a credential in the store was only ever half a rotation. The copies
+already sitting on a Worker, a VPS, a CI secret store or a hosting provider went
+on serving the old value until somebody pushed the new one to each of them by
+hand, and the list of where those copies were lived in somebody's head. A
+rotation got remembered as finished while several services were still holding a
+dead key, and the way that surfaced was an outage somewhere else.
+
+PassBook now keeps that list beside the key, with the exact command that put it
+there:
+
+    passbook services attach API_KEY cloudflare-worker \
+      --command 'wrangler secret put API_KEY --name my-worker' --stdin
+    passbook services                       # everything, and how each one last went
+    passbook services update API_KEY        # push the current value again
+    passbook services update API_KEY --only 1,3
+    passbook services retry                 # only the ones that did not land
+
+Replacing a key that has services recorded against it now asks whether they
+should follow, and takes `all`, a selection like `1,3` or a service name, or
+`no`. The push is sequential, prints each service as it goes, and one failure
+never stops the rest: the point is to get as many onto the new value as possible
+and leave a list of the ones that did not. That list survives the run, so
+`passbook services retry` tomorrow picks up exactly what failed today.
+
+Three things this deliberately does NOT do. It never asks when nobody is there
+to answer: a script piping a new value in is told what it could run and pushes
+nothing, because writing to a dozen live services is not something to do to
+somebody who did not request it. It never puts the value on a command line,
+where `ps` would show it to every process on the box — the command receives it
+in its environment as `$KEY`, and on stdin when the binding asks for it, and a
+command that tries to interpolate the value itself is refused. And it holds no
+secret of its own: a binding is a service name and a command.
+
+The record is itself a store key, `PASSBOOK_SERVICE_BINDINGS`, so it replicates
+between machines on the sync that already exists rather than needing a new wire
+and a matching change in every collector before machines could agree.
+
+
 ### Typing a secret shows bullets instead of nothing
 
 `getpass` echoes nothing at all. On a typed password that is merely austere; on

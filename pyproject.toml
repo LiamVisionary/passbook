@@ -133,6 +133,7 @@ py-modules = [
     "passbook_integrations",
     "passbook_keystore",
     "passbook_link",
+    "passbook_web_link",
     "passbook_managed_cli",
     "passbook_managed_authorize",
     "passbook_managed_client",

@@ -2912,6 +2912,11 @@ passbook oauth connect google:work</pre>
     seal:      { did: "encrypted the store", didnt: "could not encrypt the store", bare: true },
     unseal:    { did: "decrypted the store", didnt: "could not decrypt the store", bare: true },
     recovery:  { did: "made a recovery code", didnt: "could not make one", bare: true },
+    // Standing access — an app using a key with the vault locked, and being
+    // given or losing that. Worded for the app, since that is whose row it is.
+    standing:  { did: "used, while locked,", didnt: "could not use, while locked," },
+    keep:      { did: "may use while locked", didnt: "could not be given" },
+    release:   { did: "no longer uses while locked", didnt: "no longer uses while locked" },
   };
 
   /** What each kind of entry did, as a glyph. Same vocabulary, same test. */
@@ -2922,6 +2927,7 @@ passbook oauth connect google:work</pre>
     provision: "plus", signin: "unlock", signout: "lock", seal: "lock",
     use: "unlock", remove: "trash",
     unseal: "unlock", recovery: "shield",
+    standing: "unlock", keep: "shield", release: "cross",
   };
 
   /** The same thing, over and over, as one row that says how many times.

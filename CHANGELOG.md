@@ -42,6 +42,41 @@ skip on locked, stop on unlink; foreign relays refused). The browser half is
 proven against this implementation from the HivemindOS side
 (`scripts/test-passbook-web-link-interop.mts`).
 
+### A service can keep one key while the vault is locked
+
+On 2026-09-23 the vault was locked after the broker restarted. Every overnight
+service on the machine lost its X credential at once: three study arms stopped
+polling for ten hours and a watcher got 401s. The only way to prevent that was
+`passbook vault --stay-open on`, which lets anything running as you open the
+whole vault with nobody present. Most services need one key, not all of them.
+
+`passbook standing add KEY --app NAME` grants exactly that, and asks for the
+vault password because it widens access. The key's current value is sealed a
+second time, under an escrow key in the OS keystore (or `PASSBOOK_STANDING_KEY`
+where there is none), and written to `standing.json`. When a request for a
+sealed key arrives while the vault is locked, and the asking app is on that
+key's list, the broker opens the escrow copy. It does this after the same
+policy, guard and pin checks every read goes through. `passbook standing` lists
+what is kept and whether it still matches the store, and `passbook standing
+remove` takes access away.
+
+The escrow records a digest of the store's own sealed value. A key that has
+changed since it was kept is refused rather than served stale, and it heals
+itself: any read with the vault open re-seals the new value, and a sign-in
+refreshes every kept key at once. A key removed from the store stops being
+served. Names that any unnamed caller gets (`passbook-run`, `unknown`, `*`) are
+refused. The ledger gains `standing` for a use while locked, and `keep` and
+`release` for grants and removals, each recorded against the app. The window
+has words for all three.
+
+`passbook run --only KEY` now asks the broker for only the keys it names. It
+used to request every sealed key in the store and discard the rest before the
+child saw them. That still opened, and recorded, keys no command had asked for.
+
+The cost is stated in the command and the README. Anything running as you can
+fetch the escrow key, so the kept keys are exposed the way the device factor
+exposes the vault, but only those keys.
+
 ### A grant says when it was issued
 
 A process started by `passbook run` holds the store as it was at that moment,

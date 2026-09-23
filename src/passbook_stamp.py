@@ -93,6 +93,11 @@ OPERATIONS = frozenset({
     # consequential thing anyone can do here, and the row an audit looks for
     # first, so it is never folded into "read".
     "export", "import",
+    # Standing access. `standing` is a key used while the vault was locked —
+    # the one read that happens with nobody signed in, so an audit of a locked
+    # machine should find every one. `keep` and `release` are an app being
+    # given that access and losing it, recorded against the app, not the tool.
+    "standing", "keep", "release",
     # A recovery code minted. The code itself is never written down here — only
     # that one now exists, and when, because a second one appearing is
     # something the owner should be able to notice.

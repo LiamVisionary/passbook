@@ -287,6 +287,37 @@ data key and nothing on the machine can read a credential until you sign in.
 The window lock stops a person at your keyboard. It does not stop code running
 as you, and nothing here could. That code can read the store directly.
 
+### Keys a service keeps while the vault is locked
+
+A reboot, an update or a crash drops the data key, and every service that reads
+a credential overnight fails until somebody signs in again. `passbook vault
+--stay-open on` fixes that by letting anything running as you open the whole
+vault. Most services need one key, not the vault, so you can grant that one key
+instead:
+
+```bash
+passbook standing add X_API_BEARER_TOKEN --app kol-arms      # asks for the vault password
+passbook run --app kol-arms --only X_API_BEARER_TOKEN -- node arm-runner.mjs
+passbook standing                                            # what is kept, for whom
+passbook standing remove X_API_BEARER_TOKEN --app kol-arms   # take it back
+```
+
+While the vault is locked, the broker gives that key to that app and to nothing
+else. Policy, guards and pins are still checked first, so standing access only
+gets a key past the lock. Every use is recorded, and so are grants and removals.
+
+A rotated key is not served from the old copy. If the key has changed since you
+granted access, the app is refused until you next sign in. At that point
+PassBook seals the new value on its own. A key deleted from the store stops
+being served straight away.
+
+**What it costs.** The copy is sealed under a key held in the OS keystore, and
+anything running as you can fetch that key. So the kept keys are exposed the
+way the device factor exposes the whole vault, but only those keys. The app
+name is a claim until you pin it with `passbook pin`. Names that any unnamed
+caller gets, such as `passbook-run`, are refused. The copy stays on this
+machine and never syncs.
+
 ---
 
 ## Encryption

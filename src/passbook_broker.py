@@ -778,6 +778,7 @@ def _signin(payload: Mapping[str, Any], root: Path | None,
             # somebody signed in again.
             "asked": seconds,
         }
+    _refresh_standing(workspace, root)
     span = access.describe_duration(seconds) if seconds else "until it is locked"
     _record("signin", ["*"], app=str(payload.get("app") or "passbook"), granted=True,
             reason=f"{factor} sign-in to {workspace} for {span} "
@@ -1076,9 +1077,72 @@ def _use_refusal(key: str, *, guarded_key: bool) -> str:
             f"Run what needs it with `passbook run -- <command>` instead.")
 
 
-def _resolve_values(keys: Iterable[str], *, workspace: str = "", root: Path | None = None) -> dict[str, str]:
-    """Open exactly these keys, here, inside the broker. Never sent onward."""
+def _standing(app: str, owner: str, raw: Mapping[str, str], opened: Mapping[str, str],
+              wanted: set[str], root: Path | None) -> dict[str, str]:
+    """Kept keys: refresh their escrow when open, open the escrow when shut.
+
+    Only ever consulted for keys the caller asked for, after the same policy
+    decision every read goes through. Never raises — a broken escrow must leave
+    a locked read answering exactly as it would have without one.
+    """
+    try:
+        import passbook_standing
+    except ImportError:
+        return {}
+    try:
+        kept = passbook_standing.kept_names(owner, root=store_root(root)) & set(raw) & wanted
+        if not kept:
+            return {}
+        sealed = {name for name in kept if str(raw[name]).startswith("hive-sealed:")}
+        passbook_standing.refresh(
+            owner, {name: (raw[name], opened[name]) for name in sealed if opened.get(name)},
+            root=store_root(root))
+        shut = {name: raw[name] for name in sealed if not opened.get(name)}
+        if not shut or not app:
+            return {}
+        granted, refused = passbook_standing.open_for(app, owner, shut, root=store_root(root))
+    except Exception:  # noqa: BLE001
+        return {}
+    if granted:
+        _record("standing", sorted(granted), app=app, granted=True,
+                reason="opened from standing access while the vault is locked",
+                workspace=owner, root=root)
+    if refused:
+        _record("standing", sorted(refused), app=app, granted=False,
+                reason="; ".join(sorted(set(refused.values())))[:200],
+                workspace=owner, root=root)
+    return granted
+
+
+def _refresh_standing(workspace: str, root: Path | None) -> None:
+    """Bring every kept key in this workspace up to date, now the vault is open.
+
+    A key rotated while the vault was shut has an escrow copy that is refused
+    until somebody reads the new value with the vault open. Signing in is that
+    moment for every kept key at once, rather than for each one whenever some
+    app next happens to ask for it.
+    """
+    try:
+        import passbook_standing
+
+        kept = passbook_standing.kept_names(workspace, root=store_root(root))
+        if kept:
+            _resolve_values(sorted(kept), workspace=workspace, root=root)
+    except Exception:  # noqa: BLE001 — a sign-in never fails over its escrow
+        pass
+
+
+def _resolve_values(keys: Iterable[str], *, workspace: str = "", root: Path | None = None,
+                    app: str = "") -> dict[str, str]:
+    """Open exactly these keys, here, inside the broker. Never sent onward.
+
+    `app` is who the values are for. It only matters to a key with standing
+    access, which that app may still receive while the vault is locked.
+    """
     import passbook_integrations
+
+    keys = list(keys)
+    wanted = set(keys)
 
     source = _workspace_environ(workspace, root)
     workspace = source["HIVE_WORKSPACE"]
@@ -1096,7 +1160,9 @@ def _resolve_values(keys: Iterable[str], *, workspace: str = "", root: Path | No
         owner = workspace if path == selected else passbook.ROOT_WORKSPACE_ID
         if passbook_integrations.managed_workspace(owner, store_root(root)):
             continue
-        available.update(_unsealer(raw, owner))
+        opened = _unsealer(raw, owner)
+        opened.update(_standing(app, owner, raw, opened, wanted, root))
+        available.update(opened)
     if workspace == passbook.ROOT_WORKSPACE_ID:
         # Preserve standalone process overrides. A different workspace must
         # not inherit credentials from the daemon's own startup environment.
@@ -1292,11 +1358,11 @@ def _spawn(payload: Mapping[str, Any], root: Path | None,
             key if verdict["allowed"] else (key, verdict["why"]))
     allowed = keeping
 
-    values = _resolve_values(allowed, workspace=workspace, root=root)
+    values = _resolve_values(allowed, workspace=workspace, root=root, app=app)
     missing = [key for key in allowed if key not in values]
     if allowed:
         _refresh_if_needed(allowed, root, workspace=workspace)
-        values = _resolve_values(allowed, workspace=workspace, root=root)
+        values = _resolve_values(allowed, workspace=workspace, root=root, app=app)
 
     token = base64.urlsafe_b64encode(os.urandom(18)).decode("ascii").rstrip("=")
     answer = passbook_grant.spawn(
@@ -1383,7 +1449,7 @@ def _proxy(payload: Mapping[str, Any], root: Path | None,
                 "why": {key: why for key, why in refused}}
 
     _refresh_if_needed(allowed, root, workspace=workspace)
-    values = _resolve_values(allowed, workspace=workspace, root=root)
+    values = _resolve_values(allowed, workspace=workspace, root=root, app=app)
     answer = passbook_grant.proxy(
         {"url": url, "method": payload.get("method"), "headers": headers, "body": body},
         values, timeout=float(payload.get("timeout") or 30.0))
@@ -1463,7 +1529,7 @@ def _spawn_streaming(payload: Mapping[str, Any], root: Path | None,
 
     if allowed:
         _refresh_if_needed(allowed, root, workspace=workspace)
-    values = _resolve_values(allowed, workspace=workspace, root=root)
+    values = _resolve_values(allowed, workspace=workspace, root=root, app=app)
     token = base64.urlsafe_b64encode(os.urandom(18)).decode("ascii").rstrip("=")
 
     if refused:
@@ -1749,7 +1815,7 @@ def _handle(payload: Mapping[str, Any], root: Path | None = None,
         # Before reading: renew any sign-in among these keys that is about to
         # expire, so what the caller receives actually works.
         _refresh_if_needed(allowed, root, workspace=asking_workspace)
-    granted = _resolve_values(allowed, workspace=asking_workspace, root=root)
+    granted = _resolve_values(allowed, workspace=asking_workspace, root=root, app=app)
     missing = [key for key in allowed if key not in granted]
 
     if allowed:

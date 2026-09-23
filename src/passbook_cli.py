@@ -40,7 +40,7 @@ import sys
 import time
 import urllib.parse
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -86,7 +86,7 @@ def _fail(message: str, remedy: str = "") -> int:
     return 1
 
 
-def _use_broker_for_sealed_values(app: str, reason: str) -> None:
+def _use_broker_for_sealed_values(app: str, reason: str, only: Iterable[str] = ()) -> None:
     """Let this process read a sealed store by asking the broker to open it.
 
     The data key stays inside the broker; what comes back are values it decided
@@ -103,8 +103,14 @@ def _use_broker_for_sealed_values(app: str, reason: str) -> None:
     except ImportError:
         return
 
+    wanted = set(only)
+
     def unseal(values: dict[str, str]) -> dict[str, str]:
-        sealed = [name for name, value in values.items() if str(value).startswith("hive-sealed:")]
+        # With `--only`, ask for those keys and no others: the rest would be
+        # dropped before the child saw them, but the broker would still have
+        # opened them — and recorded a read — for a command that never asked.
+        sealed = [name for name, value in values.items()
+                  if str(value).startswith("hive-sealed:") and (not wanted or name in wanted)]
         if not sealed:
             return values
         granted = passbook_broker.request_through_broker(sealed, app=app, reason=reason) or {}
@@ -686,6 +692,177 @@ def cmd_services_retry(args: argparse.Namespace) -> int:
     return worst
 
 
+def _standing_source(name: str) -> tuple[str, str]:
+    """Which workspace's store holds this key, and what it holds on disk.
+
+    Resolved the way the broker resolves it — the most specific store that
+    lists the name wins — so the escrow is keyed exactly where the broker will
+    look for it. ("", "") when no store lists it.
+    """
+    here = passbook.workspace() or passbook.ROOT_WORKSPACE_ID
+    selected = passbook.workspace_env_path(here)
+    found = ("", "")
+    for path in passbook._scoped_paths():
+        try:
+            raw = passbook.parse_env_text(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError):
+            continue
+        if name in raw:
+            found = (here if path == selected else passbook.ROOT_WORKSPACE_ID, raw[name])
+    return found
+
+
+def _standing_stored() -> dict[str, dict[str, str]]:
+    """{workspace: {name: what its store holds}}, for every workspace with escrow."""
+    import passbook_standing as standing
+
+    out: dict[str, dict[str, str]] = {}
+    for row in standing.entries(root=passbook.root()):
+        space = row["workspace"]
+        if space in out:
+            continue
+        try:
+            out[space] = passbook.parse_env_text(
+                passbook.workspace_env_path(space).read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, ValueError):
+            out[space] = {}
+    return out
+
+
+def cmd_standing(args: argparse.Namespace) -> int:
+    """Which keys an app may use while the vault is locked. Never a value."""
+    import passbook_standing as standing
+
+    rows = standing.entries(root=passbook.root(), stored=_standing_stored())
+    if getattr(args, "json", False):
+        print(json.dumps(rows, indent=2))
+        return 0
+    if not rows:
+        print("No key has standing access. Every sealed key waits for a sign-in.")
+        print("Give one:  passbook standing add KEY --app <name>")
+        return 0
+    notes = {"current": "", "stale": "  (changed since; refreshed at the next sign-in)",
+             "gone": "  (no longer in the store; not served)", "unknown": ""}
+    for row in rows:
+        where = "" if row["workspace"] == passbook.ROOT_WORKSPACE_ID else f" [{row['workspace']}]"
+        print(f"{row['key']}{where}: {', '.join(row['apps'])}{notes.get(row['state'], '')}")
+    return 0
+
+
+def cmd_standing_add(args: argparse.Namespace) -> int:
+    """Let named apps use named keys while the vault is locked."""
+    import passbook_standing as standing
+
+    ok, why = standing.available()
+    if not ok:
+        return _fail("Standing access needs an OS keystore on this machine.", why)
+    try:
+        apps = standing._clean_apps(args.app or [])
+    except standing.StandingError as error:
+        return _fail(str(error))
+
+    plan: list[tuple[str, str, str]] = []
+    for name in args.keys:
+        owner, stored = _standing_source(name)
+        if not owner:
+            return _fail(f"{name} is not in this store.", f"Add it first:  passbook add {name}")
+        if not str(stored).startswith("hive-sealed:"):
+            print(f"{name} is readable without signing in already, so it needs no standing access.")
+            continue
+        plan.append((name, owner, stored))
+    if not plan:
+        return 0
+    if len({owner for _, owner, _ in plan}) > 1:
+        return _fail("Those keys live in different workspaces' stores.",
+                     "Give standing access to one workspace's keys at a time.")
+
+    names = ", ".join(name for name, _, _ in plan)
+    if not args.yes:
+        print(f"This lets {', '.join(apps)} use {names} while the vault is locked, "
+              "with nobody signed in.")
+        print("\nThe cost, stated plainly:")
+        print("  · a copy is sealed under a key in the OS keystore, and ANY program")
+        print("    running as you can fetch that key and open the copy")
+        print("  · the app name is a claim unless you pin it:  passbook pin <app> -- <command>")
+        print("\nWhat it narrows, against  passbook vault --stay-open on:  only these keys")
+        print("are exposed that way, and only these apps are served them.")
+        print("\nRe-run with --yes to accept that.")
+        return 1
+
+    module = _vault_or_fail()
+    if module is None:
+        return 1
+    owner = plan[0][1]
+    opened = _open_vault(module, "", from_stdin=getattr(args, "password_stdin", False),
+                         workspace="" if owner == passbook.ROOT_WORKSPACE_ID else owner)
+    if opened is None:
+        return 1
+    dek, profile = opened
+    # `--app` names who RECEIVES access here, so it cannot also say who asked.
+    who = os.environ.get("PASSBOOK_APP", "").strip() or "passbook-standing"
+    kept = []
+    for name, owner, stored in plan:
+        try:
+            if module.is_sealed(stored):
+                value = module.unseal_value(name, stored, dek, profile_id=profile)
+            else:
+                import passbook_seal
+
+                value = passbook_seal.unseal_value(stored)
+            result = standing.keep(name, value, stored, apps=apps, workspace=owner,
+                                   root=passbook.root(), by=who)
+        except Exception as error:  # noqa: BLE001 — name the key that failed, never its value
+            return _fail(f"Could not keep {name}: {error}")
+        kept.append(result)
+    try:
+        import passbook_stamp
+
+        for app in apps:
+            passbook_stamp.stamp(op="keep", keys=[row["key"] for row in kept], app=app,
+                                 granted=True, reason=f"standing access, given by {who}",
+                                 workspace=owner)
+    except Exception:  # noqa: BLE001 — a missing ledger must not undo the grant
+        pass
+    print(f"{names}: usable by {', '.join(apps)} while the vault is locked.")
+    print(f"\nRun it under that name:  passbook run --app {apps[0]} --only {plan[0][0]} -- <command>")
+    print("Take it back:           passbook standing remove "
+          f"{plan[0][0]}{' --app ' + apps[0] if len(apps) == 1 else ''}")
+    return 0
+
+
+def cmd_standing_remove(args: argparse.Namespace) -> int:
+    """Take standing access away. Narrowing needs no password."""
+    import passbook_standing as standing
+
+    worst = 0
+    for name in args.keys:
+        owner, _ = _standing_source(name)
+        spaces = [owner] if owner else [row["workspace"] for row in
+                                         standing.entries(root=passbook.root())
+                                         if row["key"] == name]
+        removed: list[str] = []
+        for space in dict.fromkeys(spaces):
+            removed += standing.release(name, apps=args.app or [], workspace=space,
+                                        root=passbook.root())["removed"]
+        if not removed:
+            print(f"{name}: no standing access to take away"
+                  + (f" from {', '.join(args.app)}" if args.app else ""), file=sys.stderr)
+            worst = 1
+            continue
+        try:
+            import passbook_stamp
+
+            who = os.environ.get("PASSBOOK_APP", "").strip() or "passbook-standing"
+            for app in removed:
+                passbook_stamp.stamp(op="release", keys=[name], app=app, granted=True,
+                                     reason=f"standing access, taken by {who}",
+                                     workspace=owner or passbook.ROOT_WORKSPACE_ID)
+        except Exception:  # noqa: BLE001
+            pass
+        print(f"{name}: {', '.join(removed)} now waits for a sign-in like everything else.")
+    return worst
+
+
 def cmd_remove(args: argparse.Namespace) -> int:
     """Delete keys. The one operation that can break another app on this box."""
     if not _confirm_change("delete", args.keys, reason="remove a credential",
@@ -706,6 +883,13 @@ def cmd_remove(args: argparse.Namespace) -> int:
                                  app=caller("passbook-delete", args),
                                  reason="deleted from the store")
         except Exception:  # noqa: BLE001 — a missing ledger must not fail a delete
+            pass
+        try:
+            import passbook_standing
+
+            for name in result["removed"]:
+                passbook_standing.forget_key(name, root=passbook.root())
+        except Exception:  # noqa: BLE001 — the broker never serves a removed name anyway
             pass
         print(f"removed: {', '.join(result['removed'])}")
     if result["absent"]:
@@ -880,7 +1064,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     sealed = _sealed_run(command, who, args)
     if sealed is not None:
         return sealed
-    _use_broker_for_sealed_values(who, f"run {Path(command[0]).name}")
+    _use_broker_for_sealed_values(who, f"run {Path(command[0]).name}", args.only or ())
     child = dict(_store_values())
     if args.only:
         # Named keys only. `run` handing over the whole store was the reason an
@@ -5663,6 +5847,33 @@ def build_parser() -> argparse.ArgumentParser:
         "retry", help="push again to the services whose last push failed")
     services_retry.add_argument("key", nargs="?", default="")
     services_retry.set_defaults(json=False, func=cmd_services_retry)
+
+    standing_parser = subs.add_parser(
+        "standing", help="keys an app may use while the vault is locked")
+    standing_parser.add_argument("--json", action="store_true")
+    standing_parser.set_defaults(func=cmd_standing)
+    standing_subs = standing_parser.add_subparsers(dest="standing_command")
+
+    standing_list = standing_subs.add_parser("list", help="show every standing grant")
+    standing_list.add_argument("--json", action="store_true")
+    standing_list.set_defaults(func=cmd_standing)
+
+    standing_add = standing_subs.add_parser(
+        "add", help="let an app use a key while the vault is locked (asks for the password)")
+    standing_add.add_argument("keys", nargs="+", metavar="KEY")
+    standing_add.add_argument("--app", action="append", default=[], required=True,
+                              help="the app that may use it; repeat for more than one")
+    standing_add.add_argument("--yes", action="store_true", help="accept the stated cost")
+    standing_add.add_argument("--password-stdin", dest="password_stdin", action="store_true",
+                              help="read the vault password from stdin")
+    standing_add.set_defaults(json=False, func=cmd_standing_add)
+
+    standing_remove = standing_subs.add_parser(
+        "remove", help="take standing access away, from one app or from every app")
+    standing_remove.add_argument("keys", nargs="+", metavar="KEY")
+    standing_remove.add_argument("--app", action="append", default=[],
+                                 help="only this app; omit for every app")
+    standing_remove.set_defaults(json=False, func=cmd_standing_remove)
 
     oauth = subs.add_parser("oauth", help="sign-ins this machine holds, kept alive")
     oauth.add_argument("--json", action="store_true")

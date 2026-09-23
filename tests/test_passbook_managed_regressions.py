@@ -220,3 +220,18 @@ def test_alias_of_the_same_managed_file_cannot_reopen_plaintext_access(root, inh
     result = broker._handle({"op": "request", "workspace": "alias", "keys": ["MANAGED_ONLY"]}, root)
     assert result["code"] == "managed-connection-required" and not result["granted"]
     assert broker._resolve_values(["MANAGED_ONLY"], workspace="alias", root=root) == {}
+
+
+def test_credential_names_lists_every_workspace_store_by_name_only(root):
+    app = Installation(root)
+    assert app.connect()["ok"]
+    passbook.set_values({"MAIN_ONLY_SYNTHETIC": "synthetic-main-value"},
+                        path=root / ".env", environ=managed.env_for(root, "main"))
+    assert app.call("service-write", {"values": {"BOUND_ONLY_SYNTHETIC": "synthetic-bound-value"}})["ok"]
+    stores = {row["id"]: row for row in app.call("credential-names")["workspaceStores"]}
+    assert "MAIN_ONLY_SYNTHETIC" in stores["main"]["credentialNames"]
+    assert "BOUND_ONLY_SYNTHETIC" not in stores["main"]["credentialNames"]
+    assert stores["hivemindos"]["credentialNames"] == ["BOUND_ONLY_SYNTHETIC"]
+    assert stores["hivemindos"]["connected"] and not stores["main"]["connected"]
+    assert all(isinstance(row["name"], str) and row["name"] for row in stores.values())
+    assert "synthetic-main-value" not in json.dumps(stores) and "synthetic-bound-value" not in json.dumps(stores)

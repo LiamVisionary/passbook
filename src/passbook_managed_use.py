@@ -234,17 +234,29 @@ def _supply(body: Mapping[str, Any], root: Path, tx: Transaction, binding: Mappi
 def credential_names(root: Path, binding: Mapping[str, Any]) -> dict[str, Any]:
     credentials: set[str] = set()
     configuration: set[str] = set()
-    names = set(passbook.workspaces(env_for(root))) | {"main", binding["workspace"]}
-    for workspace in names:
+    env = env_for(root)
+    names = set(passbook.workspaces(env)) | {"main", binding["workspace"]}
+    stores: list[dict[str, Any]] = []
+    for workspace in sorted(names):
         path = workspace_path(root, workspace)
         raw = _raw(root, workspace)
         skip = vault.skip_list(root=path.parent)
+        own: set[str] = set()
         for key, value in raw.items():
-            (configuration if vault.matches_skip(key, skip) and not value.startswith("hive-sealed:")
-             else credentials).add(key)
+            if vault.matches_skip(key, skip) and not value.startswith("hive-sealed:"):
+                configuration.add(key)
+            else:
+                credentials.add(key)
+                if value:
+                    own.add(key)
+        if own or workspace == binding["workspace"] or path.exists():
+            # Names per workspace, so a connected app can show every store PassBook keeps. Never values.
+            stores.append({"id": workspace, "name": passbook.workspace_label(workspace, env),
+                           "credentialNames": sorted(own), "connected": workspace == binding["workspace"]})
     return {"ok": True, "state": "paused" if binding.get("paused") else "ready",
             "credentialNames": sorted(credentials), "configurationNames": sorted(configuration - credentials),
-            "workspaceNames": sorted(key for key, value in _raw(root, binding["workspace"]).items() if value)}
+            "workspaceNames": sorted(key for key, value in _raw(root, binding["workspace"]).items() if value),
+            "workspaceStores": stores}
 
 
 def _service_write(body: Mapping[str, Any], root: Path, binding: Mapping[str, Any], broker: Any) -> dict[str, Any]:

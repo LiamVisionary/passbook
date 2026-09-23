@@ -4,6 +4,14 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+### Connected apps can list every workspace, by name
+
+`credential-names` now also answers `workspaceStores`: each workspace's id, its
+label, the names of the keys it holds, and whether it is the one the app is
+connected to. Values never leave. HivemindOS uses this to show every PassBook
+workspace next to its own. The fields that were already there are unchanged,
+so older apps see the same answer as before.
+
 ### HivemindOS on the web links to a workspace
 
 A browser on hivemindos.app can now hold a workspace's keys. It links the way a

@@ -42,7 +42,7 @@ import passbook_link as link
 import passbook_vault as vault
 from passbook_managed_store import ManagedError
 
-DEFAULT_RELAYS = ("https://hivemindos-paid-agent-gateway.hivemindos.workers.dev",)
+DEFAULT_RELAYS = ("https://hivemindos-passbook-relay.hivemindos.workers.dev",)
 REQUEST_ID = re.compile(r"^[A-Za-z0-9_-]{22}$")
 GRANT_DAYS = 30
 TIMEOUT = 20

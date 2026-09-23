@@ -66,7 +66,10 @@
     "allow-import-env",
     "allow-pending-authorization",
     "allow-dismiss-authorization",
-    "allow-decide-authorization"
+    "allow-decide-authorization",
+    "allow-pending-web-link",
+    "allow-dismiss-web-link",
+    "allow-decide-web-link"
   ],
   "remote": {
     "urls": [

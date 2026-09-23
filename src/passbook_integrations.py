@@ -355,6 +355,21 @@ def handle(envelope: Mapping[str, Any], root: Path, broker: Any) -> dict[str, An
             if action in {"authorize-begin", "authorize-inspect", "authorize-decide", "authorize-status", "authorize-cancel"}:
                 import passbook_managed_authorize
                 return passbook_managed_authorize.handle(action, envelope, root, tx, broker)
+            if action in {"web-link-inspect", "web-link-decide", "web-link-list", "web-link-revoke", "web-link-sync"}:
+                # A browser on hivemindos.app linking to a workspace (passbook_web_link). Like app
+                # authorization these are the owner's own actions in this window: approving needs the
+                # workspace's password, and syncing only ever re-seals a workspace that is already open.
+                import passbook_web_link as web_link
+                body = envelope.get("body") if isinstance(envelope.get("body"), dict) else {}
+                if action == "web-link-inspect":
+                    return web_link.inspect(str(body.get("requestId") or ""), str(body.get("relay") or ""), root)
+                if action == "web-link-decide":
+                    return web_link.decide(body, root, tx)
+                if action == "web-link-list":
+                    return {"ok": True, "linked": web_link.linked(tx)}
+                if action == "web-link-revoke":
+                    return web_link.revoke(str(body.get("did") or ""), tx)
+                return web_link.sync(root, tx, broker._held_dek)
             if action in {"state", "begin"} and not envelope.get("signature"):
                 return _state(root, tx, None, broker)
             if action == "recovery-pair":

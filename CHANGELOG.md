@@ -4,6 +4,36 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+### HivemindOS on the web links to a workspace
+
+A browser on hivemindos.app can now hold a workspace's keys. It links the way a
+second machine does, with the same protocol (`passbook_link`), so nothing about
+what a link is or promises changed:
+
+- The browser makes its own device identity (WebCrypto, non-extractable keys)
+  and a pairing token, registers it with the HivemindOS relay, and opens
+  `passbook://link?request=<id>&relay=<origin>`.
+- PassBook shows who is asking and the browser's code. Linking needs the
+  workspace password and a tick that the codes match: the fingerprint check, as
+  its own step. The browser shows PassBook's code back when it is done.
+- The browser receives every key in the chosen workspace, sealed to it. While
+  the workspace is open here, the broker re-seals it every 15 minutes, so a key
+  added or changed reaches the browser on its next visit. A locked workspace is
+  skipped, never forced open.
+- The relay carries a public token one way and an envelope it cannot open the
+  other. PassBook contacts only relays on an allowlist (`PASSBOOK_WEB_RELAYS`
+  adds more). A browser accepts envelopes only from the PassBook it linked with.
+- Unlinking in HivemindOS or with `passbook link web-unlink` stops the next
+  envelope, not the last one: keys already sent stay with that browser.
+
+Terminal: `passbook link web <link>`, `web-list`, `web-sync`, `web-unlink`.
+Window: the `passbook://link` sheet (`app/ui/weblink.js`, `weblink.rs`).
+Tests: `tests/test_passbook_web_link.py` (password and code both required
+before anything is sent; the real `accept` opens every envelope; sync on open,
+skip on locked, stop on unlink; foreign relays refused). The browser half is
+proven against this implementation from the HivemindOS side
+(`scripts/test-passbook-web-link-interop.mts`).
+
 ### A grant says when it was issued
 
 A process started by `passbook run` holds the store as it was at that moment,

@@ -1540,12 +1540,37 @@ def _managed_refusal(payload: Mapping[str, Any], root: Path | None) -> dict[str,
             "why": {key: why for key in keys}, "error": why, "code": "managed-connection-required"}
 
 
+WEB_LINK_SYNC_SECONDS = 15 * 60
+
+
+def _keep_web_links_current(root: Path | None) -> None:
+    """Re-seal each linked browser's workspace while it is open here (passbook_web_link.sync).
+
+    Runs 30 seconds after start and then every 15 minutes, and stops with the broker. It never asks
+    for a factor: a workspace that is locked here is skipped, and the browser keeps what it last had.
+    """
+    if _STOPPING.wait(30):
+        return
+    while True:
+        try:
+            import passbook_integrations
+            from passbook_managed_store import Store
+            target = store_root(root)
+            # Machines that never connected an app have no managed store; never create one here.
+            if Store(target).path.exists():
+                passbook_integrations.handle({"op": "managed", "action": "web-link-sync"}, target, sys.modules[__name__])
+        except Exception as exc:  # noqa: BLE001 - a failed sync must never take the broker down
+            print(f"web link sync failed: {type(exc).__name__}", file=sys.stderr)
+        if _STOPPING.wait(WEB_LINK_SYNC_SECONDS):
+            return
+
+
 def _handle(payload: Mapping[str, Any], root: Path | None = None,
             caller: Mapping[str, Any] | None = None) -> dict[str, Any]:
     operation = str(payload.get("op") or "").strip().lower()
     if operation == "ping":
         return {"ok": True, "pid": os.getpid(), "spec_version": SPEC_VERSION,
-                "managed_integrations": 1}
+                "managed_integrations": 1, "web_links": 1}
     if operation == "managed":
         import passbook_integrations
         return passbook_integrations.handle(payload, store_root(root), sys.modules[__name__])
@@ -1900,6 +1925,8 @@ def serve(*, root: Path | None = None, ready: threading.Event | None = None,
 
     if ready is not None:
         ready.set()
+
+    threading.Thread(target=_keep_web_links_current, args=(root,), daemon=True).start()
 
     # A throwaway store — a test tree, a `mktemp -d` HIVE_HOME, a container
     # layer — is deleted far more often than it is shut down. Without this the

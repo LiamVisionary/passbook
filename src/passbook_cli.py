@@ -3886,6 +3886,81 @@ def cmd_link_accept(args: argparse.Namespace) -> int:
     return 0
 
 
+def _web_exchange(action: str, body: dict) -> dict:
+    from passbook_managed_cli import exchange
+    return exchange({"op": "managed", "action": action, "body": body})
+
+
+def cmd_link_web(args: argparse.Namespace) -> int:
+    """Approve HivemindOS on the web: link a browser to one of this machine's workspaces."""
+    import getpass
+    import passbook_web_link as web_link
+    from passbook_managed_store import ManagedError
+    try:
+        request_id, relay = web_link.parse_link(args.link) if args.link.startswith("passbook://") else (args.link, web_link.relay_origin(args.relay))
+    except ManagedError as error:
+        return _fail(str(error))
+    seen = _web_exchange("web-link-inspect", {"requestId": request_id, "relay": relay})
+    if not seen.get("ok"):
+        return _fail(seen.get("error") or "This link request could not be read.")
+    request = seen["request"]
+    print(f"{request['label']} ({request['site']}) wants to link to a workspace on this machine.")
+    print(f"It will receive every key in the workspace you choose, and stay current while it is open here.\n")
+    print(f"The browser shows this code:\n\n    {request['code']}\n")
+    workspaces = [row["id"] for row in seen.get("workspaces", [])]
+    workspace = args.workspace or (workspaces[0] if len(workspaces) == 1 else "")
+    confirm = args.confirm
+    interactive = sys.stdin.isatty()
+    if not workspace:
+        if not interactive:
+            return _fail("Choose a workspace.", f"Re-run with --workspace (one of: {', '.join(workspaces)}).")
+        workspace = input(f"workspace ({', '.join(workspaces)}): ").strip()
+    if not confirm:
+        if not interactive:
+            return _fail("This link needs the code confirmed.", f"Re-run with --confirm {request['code']} only if the browser shows that.")
+        confirm = input("type the code back if it matches the browser: ").strip()
+    password = sys.stdin.readline().rstrip("\n") if args.password_stdin else (getpass.getpass("PassBook password for this workspace: ") if interactive else "")
+    answer = _web_exchange("web-link-decide", {"requestId": request_id, "relay": relay, "decision": "allow",
+                                                "workspace": workspace, "code": confirm, "password": password})
+    if not answer.get("ok"):
+        return _fail(answer.get("error") or "The browser was not linked.")
+    print(f"\nlinked {answer['linked']['label']} to {workspace} ({answer['linked']['keys']} keys)")
+    print(f"this machine's fingerprint: {answer['issuerFingerprint']}")
+    return 0
+
+
+def cmd_link_web_sync(args: argparse.Namespace) -> int:
+    answer = _web_exchange("web-link-sync", {})
+    if not answer.get("ok"):
+        return _fail(answer.get("error") or "Linked browsers could not be updated.")
+    print(json.dumps(answer, indent=2) if args.json else
+          f"updated: {', '.join(answer['synced']) or 'none'}; skipped (workspace locked or empty): {', '.join(answer['skipped']) or 'none'}")
+    return 0
+
+
+def cmd_link_web_list(args: argparse.Namespace) -> int:
+    answer = _web_exchange("web-link-list", {})
+    if not answer.get("ok"):
+        return _fail(answer.get("error") or "Linked browsers could not be listed.")
+    if args.json:
+        print(json.dumps(answer["linked"], indent=2))
+        return 0
+    for row in answer["linked"]:
+        state = "unlinked" if row["revokedAt"] else "linked"
+        print(f"{row['label']} ({row['site']})  [{state}]  workspace {row['workspace']}, {row['keys']} keys, updated {row['syncedAt']}\n  {row['did']}")
+    if not answer["linked"]:
+        print("no browsers linked")
+    return 0
+
+
+def cmd_link_web_unlink(args: argparse.Namespace) -> int:
+    answer = _web_exchange("web-link-revoke", {"did": args.did})
+    if not answer.get("ok"):
+        return _fail(answer.get("error") or "That browser could not be unlinked.")
+    print(answer["detail"])
+    return 0
+
+
 def cmd_link_revoke(args: argparse.Namespace) -> int:
     module = _link_or_fail()
     if module is None:
@@ -5914,6 +5989,23 @@ def build_parser() -> argparse.ArgumentParser:
                         help="the sending machine's fingerprint, required the first time")
     accept.add_argument("--replace", action="store_true", help="overwrite keys already set here")
     accept.set_defaults(json=False, func=cmd_link_accept)
+
+    web = link_subs.add_parser("web", help="approve HivemindOS on the web: link a browser to a workspace")
+    web.add_argument("link", help="the passbook://link?… address the browser opened, or its request id with --relay")
+    web.add_argument("--relay", default="", help="with a bare request id: the HivemindOS relay it came from")
+    web.add_argument("--workspace", default="", help="which workspace the browser receives")
+    web.add_argument("--confirm", default="", metavar="CODE", help="the code the browser shows")
+    web.add_argument("--password-stdin", action="store_true", help="read the workspace password from stdin")
+    web.set_defaults(json=False, func=cmd_link_web)
+    web_sync = link_subs.add_parser("web-sync", help="send linked browsers their workspaces' current keys")
+    web_sync.add_argument("--json", action="store_true")
+    web_sync.set_defaults(func=cmd_link_web_sync)
+    web_list = link_subs.add_parser("web-list", help="browsers linked to this machine's workspaces")
+    web_list.add_argument("--json", action="store_true")
+    web_list.set_defaults(func=cmd_link_web_list)
+    web_unlink = link_subs.add_parser("web-unlink", help="stop sending keys to a linked browser")
+    web_unlink.add_argument("did")
+    web_unlink.set_defaults(json=False, func=cmd_link_web_unlink)
 
     revoke = link_subs.add_parser("revoke", help="stop lending to a machine")
     revoke.add_argument("did")

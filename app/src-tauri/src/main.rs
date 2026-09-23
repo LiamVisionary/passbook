@@ -1361,6 +1361,7 @@ fn key_history(name: String) -> Result<Value, String> {
 mod ask;
 mod authorize;
 mod veil;
+mod weblink;
 
 mod ui {
     use std::io::{Read, Write};
@@ -1369,6 +1370,7 @@ mod ui {
 
     const INDEX: &[u8] = include_bytes!("../../ui/index.html");
     const AUTHORIZE: &[u8] = include_bytes!("../../ui/authorize.js");
+    const WEBLINK: &[u8] = include_bytes!("../../ui/weblink.js");
     const MARK: &[u8] = include_bytes!("../../ui/mark.png");
 
     /// The port this window prefers, and why it is not simply left to the OS.
@@ -1549,6 +1551,7 @@ mod ui {
         let (status, kind, body): (&str, &str, &[u8]) = match path {
             "/" | "/index.html" => ("200 OK", "text/html; charset=utf-8", INDEX),
             "/authorize.js" => ("200 OK", "text/javascript; charset=utf-8", AUTHORIZE),
+            "/weblink.js" => ("200 OK", "text/javascript; charset=utf-8", WEBLINK),
             "/mark.png" => ("200 OK", "image/png", MARK),
             _ => ("404 Not Found", "text/plain", b"not here"),
         };
@@ -1748,6 +1751,14 @@ fn pending() -> &'static std::sync::Mutex<Option<ask::Ask>> {
 
 /// Remember a request and wake the window.
 fn remember_ask(app: &tauri::AppHandle, url: &str) {
+    // HivemindOS on the web asking to link a browser to a workspace (weblink.rs).
+    if weblink::remember(url) {
+        let _ = app.emit("passbook://weblink", ());
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.unminimize(); let _ = window.show(); let _ = window.set_focus();
+        }
+        return;
+    }
     if authorize::remember(url) {
         let _ = app.emit("passbook://authorize", ());
         if let Some(window) = app.get_webview_window("main") {
@@ -1813,6 +1824,17 @@ fn dismiss_ask() {
 
 #[tauri::command(async)]
 fn pending_authorization() -> Result<Option<Value>, String> { authorize::inspect() }
+
+#[tauri::command(async)]
+fn pending_web_link() -> Result<Option<Value>, String> { weblink::inspect() }
+
+#[tauri::command(async)]
+fn dismiss_web_link(id: String) -> Result<(), String> { weblink::dismiss(&id) }
+
+#[tauri::command(async)]
+fn decide_web_link(id: String, decision: String, workspace: String, code: String, password: String) -> Result<Value, String> {
+    weblink::decide(id, decision, workspace, code, password)
+}
 
 #[tauri::command(async)]
 fn dismiss_authorization(id: String) -> Result<(), String> { authorize::dismiss(&id) }
@@ -2078,7 +2100,8 @@ fn main() {
             vault_signin_passkey, biometric_status, vault_signin_device, vault_trust_device,
             set_key_projects, set_confirmation,
             pending_ask, dismiss_ask, apply_ask, inspect_env, import_env,
-            pending_authorization, dismiss_authorization, decide_authorization
+            pending_authorization, dismiss_authorization, decide_authorization,
+            pending_web_link, dismiss_web_link, decide_web_link
         ])
         .run(tauri::generate_context!())
         .expect("PassBook failed to start");

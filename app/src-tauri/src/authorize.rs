@@ -11,7 +11,7 @@ use zeroize::Zeroizing;
 static PENDING: Mutex<Option<String>> = Mutex::new(None);
 const MAX_OUTPUT: usize = 128 * 1024;
 
-fn bounded_output(mut command: Command, input: Zeroizing<Vec<u8>>, timeout: Duration) -> Result<Vec<u8>, String> {
+pub(crate) fn bounded_output(mut command: Command, input: Zeroizing<Vec<u8>>, timeout: Duration) -> Result<Vec<u8>, String> {
     let mut child = command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null())
         .spawn().map_err(|_| "PassBook could not start this app authorization.")?;
     let stdin = child.stdin.take();

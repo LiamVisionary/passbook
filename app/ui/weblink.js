@@ -32,17 +32,18 @@ window.createPassbookWebLink = function ({ invoke, container, esc, repaint }) {
       <form class="akeys" id="weblink-form">
         <label class="aorigin"><input id="weblink-matched" type="checkbox" ${matched ? "checked" : ""} ${busy ? "disabled" : ""}> The browser shows this code</label>
         <div class="akey"><label class="aplain" for="weblink-workspace">Workspace</label><select id="weblink-workspace" ${busy ? "disabled" : ""}>
-          ${current.workspaces.map((row) => `<option value="${esc(row.id)}" ${choice === row.id ? "selected" : ""}>${esc(row.name)}</option>`).join("")}
+          ${current.workspaces.map((row) => `<option value="${esc(row.id)}" ${choice === row.id ? "selected" : ""} ${row.hasProfile === false ? "disabled" : ""}>${esc(row.name)}${row.hasProfile === false ? " (no password)" : ""}</option>`).join("")}
         </select></div>
         <div class="akey"><label class="aplain" for="weblink-password">PassBook password for this workspace</label>
           <input id="weblink-password" type="password" autocomplete="current-password" maxlength="4096" required ${busy ? "disabled" : ""}></div>
         <p class="aorigin">Only continue if you started this from HivemindOS just now. Unlinking later stops new keys reaching the browser, not the ones it already has.</p>
+        ${choice ? "" : `<p class="aerr" role="alert">None of your workspaces has a password yet, so none can be linked. Set a password on one, then start again from HivemindOS.</p>`}
         ${error ? `<p class="aerr" role="alert">${esc(error)}</p>` : ""}
         <div class="arow"><button class="aghost" type="button" data-link-deny ${busy ? "disabled" : ""}>Decline</button>
-          <button class="aprimary" type="submit" ${busy || !matched ? "disabled" : ""}>${busy ? "Linking…" : "Link browser"}</button></div>
+          <button class="aprimary" type="submit" ${busy || !matched || !choice ? "disabled" : ""}>${busy ? "Linking…" : "Link browser"}</button></div>
       </form><button class="alink" data-link-later ${busy ? "disabled" : ""}>Close and decide later</button></div></div>`;
     container.querySelector("#weblink-workspace").onchange = (event) => { choice = event.target.value; error = ""; };
-    container.querySelector("#weblink-matched").onchange = (event) => { matched = event.target.checked; container.querySelector('[type="submit"]').disabled = !matched; };
+    container.querySelector("#weblink-matched").onchange = (event) => { matched = event.target.checked; container.querySelector('[type="submit"]').disabled = !matched || !choice; };
     container.querySelector("#weblink-password").oninput = () => { error = ""; container.querySelector('[role="alert"]')?.remove(); };
     container.querySelector("[data-link-deny]").onclick = () => decide("deny", "");
     container.querySelector("[data-link-later]").onclick = async () => {
@@ -75,7 +76,9 @@ window.createPassbookWebLink = function ({ invoke, container, esc, repaint }) {
       if (next?.ok === false) { failure = next; current = null; done = null; repaint(); paint(true); return; }
       if (!next || current?.request.id === next.request.id) return;
       current = next; done = null; failure = null; error = ""; matched = false;
-      choice = next.workspaces.some((row) => row.id === "hivemindos") ? "hivemindos" : next.workspaces[0]?.id || "";
+      // Only a workspace with a password can be linked: the password is how linking is confirmed.
+      const linkable = next.workspaces.filter((row) => row.hasProfile !== false);
+      choice = linkable.some((row) => row.id === "hivemindos") ? "hivemindos" : linkable[0]?.id || "";
       repaint(); paint(true); container.querySelector("input")?.focus();
     } catch (caught) {
       if (current) { error = String(caught); paint(true); }

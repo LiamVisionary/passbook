@@ -163,8 +163,14 @@ def decide(body: Mapping[str, Any], root: Path, tx: Any, *, opener=None) -> dict
     if confirmed != peer["fingerprint"].replace("-", ""):
         raise ManagedError("The codes do not match. Do not link this browser.", "code-mismatch")
     workspace = str(body.get("workspace") or "")
-    if workspace not in {row["id"] for row in _workspace_rows(root)}:
+    row = next((row for row in _workspace_rows(root) if row["id"] == workspace), None)
+    if row is None:
         raise ManagedError("Choose one of your workspaces.", "workspace-required")
+    # Linking is confirmed with the workspace's password; one without a password
+    # can only fail that step, as "The password was not accepted".
+    if not row.get("hasProfile"):
+        raise ManagedError("This workspace has no password yet, so it cannot be linked. Choose one that has a password.",
+                           "workspace-unprotected")
     dek, profile = _password_key(root, workspace, body.get("password"))
     values = _workspace_values(root, workspace, dek, profile)
     if not values:

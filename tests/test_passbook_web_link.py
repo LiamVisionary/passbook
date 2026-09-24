@@ -137,3 +137,19 @@ def test_revoke_reports_what_it_cannot_recall(root, connected, browser, relay):
     answer = owner(root, "web-link-revoke", did=first["linked"]["did"])
     assert answer["ok"] and "rotate" in answer["detail"]
     assert owner(root, "web-link-sync")["synced"] == []
+
+
+def test_a_workspace_without_a_password_is_refused_by_name_not_as_a_wrong_password(root, connected, browser, relay, monkeypatch):
+    """Linking is confirmed with the workspace's password. A workspace that has none was
+    offered anyway and could only fail as "The password was not accepted"."""
+    code = browser["pairing"]["fingerprint"]
+    seen = owner(root, "web-link-inspect", requestId=REQUEST_ID, relay=RELAY)
+    assert all("hasProfile" in row for row in seen["workspaces"]), "the picker needs to know which can be linked"
+
+    real_rows = managed._workspace_rows
+    monkeypatch.setattr(managed, "_workspace_rows",
+                        lambda r: [{**row, "hasProfile": False} if row["id"] == "hivemindos" else row for row in real_rows(r)])
+    answer = owner(root, "web-link-decide", requestId=REQUEST_ID, relay=RELAY, decision="allow",
+                   workspace="hivemindos", code=code, password=PASSWORD)
+    assert answer["code"] == "workspace-unprotected"
+    assert relay.answers == [], "nothing is sent for a workspace that cannot be linked"

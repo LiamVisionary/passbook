@@ -4108,7 +4108,11 @@ def cmd_link_web(args: argparse.Namespace) -> int:
     print(f"{request['label']} ({request['site']}) wants to link to a workspace on this machine.")
     print(f"It will receive every key in the workspace you choose, and stay current while it is open here.\n")
     print(f"The browser shows this code:\n\n    {request['code']}\n")
-    workspaces = [row["id"] for row in seen.get("workspaces", [])]
+    # Linking is confirmed with the workspace's password, so one without a password is not offered.
+    workspaces = [row["id"] for row in seen.get("workspaces", []) if row.get("hasProfile", True)]
+    if not workspaces:
+        return _fail("No workspace here has a password yet, so none can be linked.",
+                     "Set a password on a workspace in PassBook, then start the link again.")
     workspace = args.workspace or (workspaces[0] if len(workspaces) == 1 else "")
     confirm = args.confirm
     interactive = sys.stdin.isatty()

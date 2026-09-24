@@ -4287,6 +4287,20 @@ passbook oauth connect google:work</pre>
     try { again.setSelectionRange(at, to); } catch { /* refused */ }
   }
 
+  /** Repaint while someone is in a search box: same text, same caret, same focus.
+   *  The box's text comes from `query`, so it survives the paint; the focus and the
+   *  caret do not, and a box that loses focus mid-word is its own kind of broken. */
+  function paintKeepingSearch(el) {
+    const id = el.id;
+    let at = el.value.length, to = el.value.length;
+    try { at = el.selectionStart ?? at; to = el.selectionEnd ?? to; } catch { /* refused */ }
+    paint();
+    const again = id && document.getElementById(id);
+    if (!again) return;
+    again.focus();
+    try { again.setSelectionRange(at, to); } catch { /* refused */ }
+  }
+
   function paint() {
     if (!state) return;
     paintNav();
@@ -4938,10 +4952,16 @@ passbook oauth connect google:work</pre>
     // rebuilds `main` wholesale, so the text went with it mid-word. A field
     // being typed into is the one thing on screen this window did not put
     // there, so it waits for the caret to leave rather than listing fields.
-    if (typing(focused)) return;
+    // The search box is typed into too, but it only narrows the list: the list
+    // itself must keep coming in, or a key added while the caret sits in the box
+    // is searched for against a list from before it existed ("no results").
+    // Any other field keeps its text: the data still refreshes, the repaint waits.
+    const searching = Boolean(focused?.classList?.contains("search"));
+    const editing = typing(focused) && !searching;
     polling = true;
     try {
       const next = await invoke("state");
+      if (editing) { state = next; lastSeen = ""; return; }
       await refreshVault();
       await refreshSignins();
       // Before the unchanged-state shortcut below: a request that arrived and
@@ -4960,7 +4980,7 @@ passbook oauth connect google:work</pre>
       if (now === lastSeen && ++quietPolls < 12) { state = next; return; }
       lastSeen = now; quietPolls = 0;
       state = next;
-      paint();
+      if (searching) paintKeepingSearch(focused); else paint();
     } catch {}
     finally { polling = false; }
   }, 5000);

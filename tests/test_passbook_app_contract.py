@@ -1148,3 +1148,18 @@ def test_turning_it_on_carries_the_warning_rather_than_a_bare_switch():
     assert "confirm(" in handler, "turning it on must ask"
     assert "keystore" in handler, "the confirm must carry the cost, not just ask"
     assert "no password" in handler
+
+
+def test_the_key_list_keeps_refreshing_while_the_search_box_has_the_caret():
+    """The poll skipped every tick while any text field had focus, the search box
+    included, so a key added while someone was searching was searched for against
+    a list from before it existed: "no results" for a key that was there.
+    Verified in a browser against the real page with a stubbed backend: the old
+    page made 0 `state` calls in 11 s of searching, this one refreshes and keeps
+    the caret."""
+    ui = UI.read_text(encoding="utf-8")
+    poll = ui[ui.index("let polling = false;"):]
+    poll = poll[:poll.index("}, 5000);")]
+    assert 'classList?.contains("search")' in poll
+    assert "if (typing(focused)) return;" not in poll, "a focused search box must not stop the refresh"
+    assert "paintKeepingSearch(focused)" in poll

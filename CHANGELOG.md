@@ -4,6 +4,8 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [1.8.0] — 2026-09-24
+
 ### Connected apps can list every workspace, by name
 
 `credential-names` now also answers `workspaceStores`: each workspace's id, its

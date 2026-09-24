@@ -4,6 +4,8 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [1.8.1] — 2026-09-24
+
 ### The app no longer piles up `passbook state` processes
 
 `passbook state` read the whole access record several times to show its last

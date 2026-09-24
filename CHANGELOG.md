@@ -4,6 +4,17 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [1.8.5] — 2026-09-24
+
+### The key list refreshes while you search
+
+The window stopped refreshing whenever a text field had the caret, so it would
+not wipe half-typed text, and the search box counted as one. A key added while
+the caret sat in "Search keys" was searched for against a list from before it
+existed, and the search said there was nothing. The list now keeps refreshing
+while you search (your text, caret and focus stay put), and while you type in
+any other field the data still refreshes; only the repaint waits.
+
 ## [1.8.4] — 2026-09-24
 
 ### A lone key from a well-known vendor gets its own heading

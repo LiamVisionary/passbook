@@ -4094,7 +4094,6 @@ def _web_exchange(action: str, body: dict) -> dict:
 
 def cmd_link_web(args: argparse.Namespace) -> int:
     """Approve HivemindOS on the web: link a browser to one of this machine's workspaces."""
-    import getpass
     import passbook_web_link as web_link
     from passbook_managed_store import ManagedError
     try:
@@ -4124,7 +4123,7 @@ def cmd_link_web(args: argparse.Namespace) -> int:
         if not interactive:
             return _fail("This link needs the code confirmed.", f"Re-run with --confirm {request['code']} only if the browser shows that.")
         confirm = input("type the code back if it matches the browser: ").strip()
-    password = sys.stdin.readline().rstrip("\n") if args.password_stdin else (getpass.getpass("PassBook password for this workspace: ") if interactive else "")
+    password = sys.stdin.readline().rstrip("\n") if args.password_stdin else (hidden_input("PassBook password for this workspace: ") if interactive else "")
     answer = _web_exchange("web-link-decide", {"requestId": request_id, "relay": relay, "decision": "allow",
                                                 "workspace": workspace, "code": confirm, "password": password})
     if not answer.get("ok"):

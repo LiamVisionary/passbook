@@ -52,6 +52,20 @@ def _bullet_for(stream) -> str:
     return BULLET
 
 
+def _silent(prompt: str) -> str:
+    """The stdlib prompt, which echoes nothing, saying so.
+
+    Used only where bullets cannot be drawn: not a terminal, or one that will
+    not leave line mode. A prompt that shows nothing and does not say why reads
+    as a hung command, or as keys going nowhere.
+    """
+    if prompt.endswith(": "):
+        prompt = f"{prompt[:-2]} (input hidden): "
+    elif prompt:
+        prompt = f"{prompt.rstrip()} (input hidden) "
+    return _getpass.getpass(prompt)
+
+
 def hidden_input(prompt: str = "", *, stream=None) -> str:
     """Read a line without echoing it, showing one bullet per character.
 
@@ -60,7 +74,7 @@ def hidden_input(prompt: str = "", *, stream=None) -> str:
     call site here already handles exactly those.
     """
     if not sys.stdin.isatty():
-        return _getpass.getpass(prompt)
+        return _silent(prompt)
     if os.name == "nt":
         return _windows_hidden_input(prompt)
     return _posix_hidden_input(prompt, stream)
@@ -70,7 +84,7 @@ def _posix_hidden_input(prompt: str, stream) -> str:
     try:
         import termios
     except ImportError:                                   # pragma: no cover
-        return _getpass.getpass(prompt)
+        return _silent(prompt)
 
     # The prompt and the bullets belong to the TERMINAL, not to stdout: a caller
     # redirecting stdout to a file wants the value's side effects, not a row of
@@ -90,7 +104,7 @@ def _posix_hidden_input(prompt: str, stream) -> str:
     except termios.error:
         if opened:
             tty.close()
-        return _getpass.getpass(prompt)
+        return _silent(prompt)
 
     bullet = _bullet_for(tty)
     # Explicit flags rather than tty.setcbreak: what setcbreak clears has moved
@@ -198,7 +212,7 @@ def _windows_hidden_input(prompt: str) -> str:            # pragma: no cover
     try:
         import msvcrt
     except ImportError:
-        return _getpass.getpass(prompt)
+        return _silent(prompt)
 
     bullet = _bullet_for(sys.stderr)
     typed: list[str] = []

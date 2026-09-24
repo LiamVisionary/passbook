@@ -158,7 +158,8 @@ def test_without_a_terminal_it_falls_through_to_getpass(monkeypatch):
 
     monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
     monkeypatch.setattr(real_getpass, "getpass", lambda prompt="": f"fell-through:{prompt}")
-    assert passbook_prompt.hidden_input("Key: ") == "fell-through:Key: "
+    # The same stdlib prompt, now saying the input is hidden (see below).
+    assert passbook_prompt.hidden_input("Key: ") == "fell-through:Key (input hidden): "
 
 
 def test_the_bullet_degrades_when_the_terminal_cannot_encode_it():
@@ -173,3 +174,22 @@ def test_the_bullet_degrades_when_the_terminal_cannot_encode_it():
 
     assert passbook_prompt._bullet_for(Ascii()) == "*"
     assert passbook_prompt._bullet_for(Utf8()) == "•"
+
+
+def test_where_bullets_cannot_be_drawn_the_prompt_says_input_is_hidden(monkeypatch):
+    """The silent fallback read as a hung prompt: nothing on screen, no reason."""
+    import passbook_prompt
+
+    asked = []
+    monkeypatch.setattr(passbook_prompt._getpass, "getpass", lambda prompt="": asked.append(prompt) or "v")
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    assert passbook_prompt.hidden_input("Vault password: ") == "v"
+    assert passbook_prompt.hidden_input("KEY:") == "v"
+    assert asked == ["Vault password (input hidden): ", "KEY: (input hidden) "]
+
+
+def test_link_web_asks_for_its_password_with_bullets():
+    source = (Path(__file__).resolve().parent.parent / "src" / "passbook_cli.py").read_text(encoding="utf-8")
+    start = source.index("def cmd_link_web(")
+    body = source[start:source.index("\ndef ", start + 1)]
+    assert "hidden_input(" in body and "getpass" not in body

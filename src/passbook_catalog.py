@@ -94,6 +94,7 @@ _VENDOR_CASING = {
     "AWS": "AWS", "GCP": "GCP", "S3": "S3", "SQS": "SQS", "SNS": "SNS",
     "GITHUB": "GitHub", "GITLAB": "GitLab", "BITBUCKET": "Bitbucket",
     "OPENAI": "OpenAI", "XAI": "xAI", "HUGGINGFACE": "HuggingFace",
+    "OPENROUTER": "OpenRouter", "DEEPSEEK": "DeepSeek",
     "ELEVENLABS": "ElevenLabs", "RUNPOD": "RunPod", "POSTHOG": "PostHog",
     "SENDGRID": "SendGrid", "MAILGUN": "Mailgun", "PAGERDUTY": "PagerDuty",
     "DIGITALOCEAN": "DigitalOcean", "MONGODB": "MongoDB", "POSTGRESQL": "PostgreSQL",
@@ -102,6 +103,19 @@ _VENDOR_CASING = {
     "NPM": "NPM", "PYPI": "PyPI", "MCP": "MCP", "LLM": "LLM", "AI": "AI",
     "IOS": "iOS", "MACOS": "macOS", "TLS": "TLS", "SSH": "SSH", "GPG": "GPG",
 }
+
+
+# Vendors people look for by name. A family of one is normally not a group (see
+# `groups`), but a lone ANTHROPIC_API_KEY filed under a 72-key "Ungrouped" at the
+# bottom of the list read as a key that had not been saved. For a vendor this
+# well known, its own heading is where anyone would look, so it keeps one.
+_KNOWN_VENDORS = frozenset({
+    "Anthropic", "OpenAI", "OpenRouter", "Gemini", "Google", "Mistral", "Groq", "xAI",
+    "DeepSeek", "Cohere", "Perplexity", "Together", "Fireworks", "Replicate", "HuggingFace",
+    "ElevenLabs", "Fal", "RunPod", "Stripe", "GitHub", "GitLab", "Slack", "Discord",
+    "Telegram", "Twilio", "SendGrid", "Resend", "Cloudflare", "AWS", "Azure", "Supabase",
+    "Vercel", "Netlify", "Notion", "Linear", "PostHog", "Sentry", "Alchemy", "Helius",
+})
 
 
 def infer_group(name: str) -> str:
@@ -158,7 +172,8 @@ def groups(names: Iterable[str], policy: Mapping[str, Any], *, minimum: int = 2)
     where they are honestly one undifferentiated pile.
 
     A group somebody set by hand is always kept, however few keys are in it:
-    they said so, and the point of an override is that it overrides.
+    they said so, and the point of an override is that it overrides. So is a
+    well-known vendor's (`_KNOWN_VENDORS`): that name is where people look.
     """
     pinned: dict[str, list[str]] = {}
     guessed: dict[str, list[str]] = {}
@@ -169,7 +184,7 @@ def groups(names: Iterable[str], policy: Mapping[str, Any], *, minimum: int = 2)
 
     out: dict[str, list[str]] = {group: list(members) for group, members in pinned.items()}
     for group, members in guessed.items():
-        destination = group if len(members) >= minimum or group in out else UNGROUPED
+        destination = group if len(members) >= minimum or group in out or group in _KNOWN_VENDORS else UNGROUPED
         out.setdefault(destination, []).extend(members)
 
     for members in out.values():

@@ -125,8 +125,9 @@ def test_a_group_of_one_is_not_a_group(machine):
     policy = access.read_policy()
     arranged = catalog.groups(passbook.key_names(), policy)
     assert "ADMIN_TOKEN" in arranged[catalog.UNGROUPED]
+    # Except a well-known vendor, which keeps its heading with one key.
     assert all(len(members) >= 2 for name, members in arranged.items()
-               if name != catalog.UNGROUPED)
+               if name != catalog.UNGROUPED and name not in catalog._KNOWN_VENDORS)
 
 
 def test_a_group_someone_set_by_hand_is_kept_however_small(machine):
@@ -306,3 +307,15 @@ def test_scope_survives_a_policy_round_trip(machine):
     reloaded = access.read_policy()
     assert access.scope_for("ADMIN_TOKEN", reloaded) == {
         "scope": "workspace", "owner": "acme", "explicit": True}
+
+
+def test_a_lone_key_from_a_well_known_vendor_keeps_its_own_group():
+    """A single ANTHROPIC_API_KEY filed under a 72-key "Ungrouped" at the bottom
+    read as a key that had not been saved. An unknown one-off prefix still does."""
+    import passbook_catalog as catalog
+
+    arranged = catalog.groups(["ANTHROPIC_API_KEY", "MYPROJECT_TOKEN", "OPENROUTER_API_KEY"], {})
+    assert arranged["Anthropic"] == ["ANTHROPIC_API_KEY"]
+    assert arranged["OpenRouter"] == ["OPENROUTER_API_KEY"]
+    assert arranged["Ungrouped"] == ["MYPROJECT_TOKEN"]
+    assert list(arranged)[-1] == "Ungrouped"

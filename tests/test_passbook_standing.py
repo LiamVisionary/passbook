@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from _platform import broker_marker
+from _platform import assert_private, broker_marker
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -118,7 +118,7 @@ def test_the_file_never_holds_a_value(tmp_path, keystore):
                   workspace="main", root=tmp_path)
     text = (tmp_path / standing.FILENAME).read_text(encoding="utf-8")
     assert "plain-secret-value" not in text
-    assert (tmp_path / standing.FILENAME).stat().st_mode & 0o077 == 0
+    assert_private(tmp_path / standing.FILENAME)
 
 
 def test_a_copy_cannot_be_moved_to_another_key(tmp_path, keystore):

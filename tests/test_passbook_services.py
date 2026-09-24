@@ -14,6 +14,7 @@ lost with the run that failed.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -240,7 +241,10 @@ def test_a_failed_push_is_recorded_and_retry_finds_only_that_one(tmp_path):
     home.mkdir()
     _run(["add", "API_KEY=abc123xyz"], home)
     _run(["services", "attach", "API_KEY", "good", "--command", "true"], home)
-    _run(["services", "attach", "API_KEY", "bad", "--command", "echo nope >&2; exit 3"], home)
+    # Commands run under the platform's shell: cmd.exe on Windows, where `;` is
+    # not a separator and `echo nope >&2; exit 3` echoes and exits 0.
+    failing = "echo nope 1>&2 & exit 3" if os.name == "nt" else "echo nope >&2; exit 3"
+    _run(["services", "attach", "API_KEY", "bad", "--command", failing], home)
 
     pushed = _run(["services", "update", "API_KEY"], home)
     assert pushed.returncode == 1, "a failure must not report success"

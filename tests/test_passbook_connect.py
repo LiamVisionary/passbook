@@ -122,3 +122,51 @@ def test_unconfigured_state_with_null_binding_does_not_inspect_a_service(monkeyp
                         if message["op"] == "ping" else {"ok": True, "binding": None, "state": "unconfigured"})
     result = transport.exchange({"op": "managed", "action": "state"})
     assert result == {"ok": True, "binding": None, "state": "unconfigured"}
+
+
+def test_a_broker_from_before_web_links_is_named_not_reported_as_not_connected(monkeypatch):
+    """A 1.7.1 broker left running after an update refused a web link as
+    "not connected", which the app could only show as "could not be linked"."""
+    monkeypatch.setattr(transport.broker, "running", lambda **_: True)
+    sent = []
+
+    def old_broker(message, **_):
+        sent.append(message["op"])
+        return {"managed_integrations": 1} if message["op"] == "ping" else {"ok": False, "code": "not-connected"}
+
+    monkeypatch.setattr(transport.broker, "_ask", old_broker)
+    result = transport.exchange({"op": "managed", "action": "web-link-inspect", "body": {}})
+    assert result["code"] == "broker-update-required"
+    assert "passbook broker restart" in result["error"]
+    assert sent == ["ping"], "the request must not reach a broker that cannot answer it"
+
+    # Other actions still go through to a broker that has app connections.
+    sent.clear()
+    transport.exchange({"op": "managed", "action": "state"})
+    assert sent == ["ping", "managed"]
+
+
+def test_a_current_broker_takes_web_links_and_says_its_version(monkeypatch):
+    import passbook_broker
+
+    ping = passbook_broker._handle({"op": "ping"})
+    assert ping["web_links"] == 1 and "version" in ping
+
+    monkeypatch.setattr(transport.broker, "running", lambda **_: True)
+    monkeypatch.setattr(transport.broker, "_ask", lambda message, **_: ping if message["op"] == "ping"
+                        else {"ok": True, "request": {}})
+    assert transport.exchange({"op": "managed", "action": "web-link-inspect", "body": {}})["ok"]
+
+
+def test_update_names_a_broker_still_running_the_old_version(monkeypatch, capsys):
+    import passbook_broker
+
+    monkeypatch.setattr(passbook_broker, "running", lambda **_: True)
+    monkeypatch.setattr(passbook_broker, "_ask", lambda message, **_: {"ok": True, "managed_integrations": 1})
+    passbook_cli._warn_stale_broker("1.8.2")
+    out = capsys.readouterr().out
+    assert "passbook broker restart" in out and "an older version" in out
+
+    monkeypatch.setattr(passbook_broker, "_ask", lambda message, **_: {"ok": True, "version": "1.8.2"})
+    passbook_cli._warn_stale_broker("1.8.2")
+    assert capsys.readouterr().out == ""

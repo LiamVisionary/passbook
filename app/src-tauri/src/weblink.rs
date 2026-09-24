@@ -64,7 +64,7 @@ fn refusal(code: Option<&str>) -> &'static str {
         Some("relay-unavailable") => "HivemindOS could not be reached. Check your connection and try again.",
         Some("workspace-empty") => "This workspace has no keys to share yet.",
         Some("workspace-required") => "Choose one of your workspaces.",
-        Some("broker-update-required") => "Finish updating PassBook and try again.",
+        Some("broker-update-required") => "PassBook needs a restart to finish updating. Run passbook broker restart, sign in, and try again.",
         _ => "This browser could not be linked. Review the request and try again.",
     }
 }

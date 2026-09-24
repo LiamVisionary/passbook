@@ -4,6 +4,18 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+### A broker left over from before an update is named, not "could not be linked"
+
+`passbook update` replaces the files, not the broker already running from them.
+A broker started under 1.7.1 answers app connections but has no web links, so it
+refused a link from HivemindOS on the web as "not connected", and the app could
+only say "This browser could not be linked".
+
+- A web link now checks the broker offers web links before sending the request,
+  and says to run `passbook broker restart` when it does not.
+- The broker reports its version, and `passbook update` says when the one still
+  running is older than what it just installed.
+
 ## [1.8.1] — 2026-09-24
 
 ### The app no longer piles up `passbook state` processes

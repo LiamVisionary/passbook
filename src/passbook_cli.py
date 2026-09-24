@@ -2656,7 +2656,24 @@ def cmd_update(args: argparse.Namespace) -> int:
                      (done.stderr or done.stdout).strip()[:400]
                      or f"Run it by hand:  {' '.join(pinned)}")
     print(f"Updated to {newest}.")
+    _warn_stale_broker(newest)
     return 0
+
+
+def _warn_stale_broker(newest: str) -> None:
+    """An update replaces the files, not the broker already running from them."""
+    try:
+        import passbook_broker as broker_module
+
+        if not broker_module.running():
+            return
+        running = (broker_module._ask({"op": "ping"}, timeout=1.0) or {}).get("version") or "an older version"
+    except Exception:  # noqa: BLE001 — the update itself succeeded
+        return
+    if running != newest:
+        print(f"\nThe background service is still running {running}. To finish:\n"
+              "  passbook broker restart\n"
+              "then sign in again (passbook signin): the restart closes the vault.")
 
 
 def _brief():

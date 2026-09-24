@@ -1631,12 +1631,26 @@ def _keep_web_links_current(root: Path | None) -> None:
             return
 
 
+def _package_version() -> str:
+    try:
+        from importlib.metadata import version
+
+        return version("passbook")
+    except Exception:  # noqa: BLE001 — a checkout has no metadata
+        return ""
+
+
+# Read once, at start: what this process is running, so `passbook update` can
+# tell a broker left over from the version it just replaced.
+_RUNNING_VERSION = _package_version()
+
+
 def _handle(payload: Mapping[str, Any], root: Path | None = None,
             caller: Mapping[str, Any] | None = None) -> dict[str, Any]:
     operation = str(payload.get("op") or "").strip().lower()
     if operation == "ping":
         return {"ok": True, "pid": os.getpid(), "spec_version": SPEC_VERSION,
-                "managed_integrations": 1, "web_links": 1}
+                "managed_integrations": 1, "web_links": 1, "version": _RUNNING_VERSION}
     if operation == "managed":
         import passbook_integrations
         return passbook_integrations.handle(payload, store_root(root), sys.modules[__name__])

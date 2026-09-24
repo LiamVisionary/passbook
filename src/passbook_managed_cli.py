@@ -20,6 +20,13 @@ def exchange(envelope: dict[str, Any], *, install_service: bool = True) -> dict[
     if features.get("managed_integrations") != 1:
         return {"ok": False, "error": "Finish updating PassBook to connect this app. Running work has been left intact.",
                 "code": "broker-update-required"}
+    # A broker started before an update keeps running the old code. One from
+    # before web links answers `managed_integrations` and then refuses the link
+    # as "not connected", which the app can only show as "could not be linked".
+    if str(envelope.get("action") or "").startswith("web-link-") and features.get("web_links") != 1:
+        return {"ok": False, "error": "PassBook's background service predates this update. Run `passbook broker restart`, "
+                                      "sign in again, and try linking again.",
+                "code": "broker-update-required"}
     # Recovery performs password derivation and HTTPS may take up to 30 seconds.
     # The two-second availability probe is not a deadline for completed work.
     answer = broker._ask(envelope, root=root, timeout=35) or {

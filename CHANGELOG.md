@@ -4,6 +4,16 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [1.8.2] — 2026-09-24
+
+### A workspace without a password is not offered for a web link
+
+Linking a browser is confirmed with the workspace's password. A workspace that
+has none was still listed, and choosing it could only fail as "The password was
+not accepted". It now shows as "(no password)" and cannot be picked, the window
+says so when no workspace can be linked, `passbook link web` leaves it out, and
+a request for one is refused as `workspace-unprotected` before anything is sent.
+
 ### A broker left over from before an update is named, not "could not be linked"
 
 `passbook update` replaces the files, not the broker already running from them.

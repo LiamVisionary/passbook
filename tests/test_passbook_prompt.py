@@ -9,7 +9,6 @@ terminal away would pass on the version that shows no feedback at all.
 from __future__ import annotations
 
 import os
-import pty
 import select
 import subprocess
 import sys
@@ -49,6 +48,8 @@ def _read_until(fd: int, seen: bytearray, done, timeout: float) -> bool:
 
 def _run_in_tty(keystrokes: bytes, *, timeout: float = 10.0) -> str:
     """Run the prompt under a pty, type `keystrokes`, return everything shown."""
+    import pty  # POSIX-only (it needs termios); a top-level import broke collection on Windows
+
     primary, secondary = pty.openpty()
     process = subprocess.Popen(
         [sys.executable, "-c", DRIVER.format(src=SRC)],

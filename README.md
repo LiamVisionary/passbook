@@ -1134,6 +1134,13 @@ X" never was. Everything that genuinely needs plaintext — replication above al
 since copying a key to another machine means reading it — asks to be *started*
 rather than to be trusted. `passbook sync` does this to itself.
 
+So `--reads` takes no scope. `passbook policy --app X --key K --reads open` is
+refused rather than obeyed, because what it asks for is the list that was
+removed: an app allowed to read plaintext through a seal, keyed on a name
+anything can claim. `--mode` is the scoped flag — it says who may have a key —
+and `passbook run` is how a program uses one without printing it. `--reads` on
+its own is the whole store's posture.
+
 ---
 
 ## What it does not claim

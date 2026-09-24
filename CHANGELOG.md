@@ -4,6 +4,17 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [1.8.3] — 2026-09-24
+
+### Every password prompt shows bullets, or says why it cannot
+
+- `passbook link web` asked for the workspace password with the stdlib prompt,
+  which echoes nothing. It now shows a bullet per character, like `passbook add`
+  and `passbook signin` (bullets since 1.8.0).
+- Where bullets cannot be drawn (input is not a terminal, or the terminal will
+  not leave line mode), the prompt now says `(input hidden)` instead of showing
+  nothing and looking hung.
+
 ## [1.8.2] — 2026-09-24
 
 ### A workspace without a password is not offered for a web link

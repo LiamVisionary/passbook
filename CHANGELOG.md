@@ -4,6 +4,26 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+### The app no longer piles up `passbook state` processes
+
+`passbook state` read the whole access record several times to show its last
+rows and each key's usage. The record only grows (one machine's reached 1.2GB in
+four weeks), so a call took 83 seconds, and the app starts one every five
+seconds. About a dozen ran at once, each slowing the others down, and a link
+from HivemindOS on the web waited behind them.
+
+- `read_stamps` reads backwards from the end, so it costs the rows asked for,
+  not the size of the record.
+- Usage per key is checkpointed next to the record
+  (`credential-access-usage.json`, owner-only): later calls fold in only the rows
+  appended since. A record that no longer matches the checkpoint is counted
+  again from the start. Counts now cover the whole record, not the newest
+  100,000 rows.
+- The app polls once at a time: a tick is skipped while the last one is still
+  running.
+
+On that machine `passbook state` went from 83 seconds to about 1.2.
+
 ## [1.8.0] — 2026-09-24
 
 ### Connected apps can list every workspace, by name

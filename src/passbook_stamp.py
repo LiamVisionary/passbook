@@ -304,15 +304,51 @@ def _tighten(path: Path) -> None:
 # ── reading and verifying ──────────────────────────────────────────────────
 
 
+def _tail_lines(path: Path, limit: int) -> list[str]:
+    """The last `limit` non-empty lines, reading backwards from the end.
+
+    `read_stamps` used to be `read_text().split("\n")[-limit:]`, which reads
+    the whole ledger to return its tail. On one machine the ledger reached
+    1.2GB in four weeks, `passbook state` read it four times, and a call took
+    83 seconds; the app polls it every five seconds, so the calls piled up.
+    This costs the size of the rows asked for, whatever the file's size.
+    """
+    with path.open("rb") as handle:
+        handle.seek(0, os.SEEK_END)
+        end = handle.tell()
+        chunks: list[bytes] = []
+        found = 0
+        position = end
+        window = 1 << 16
+        # One newline more than rows wanted: the first line in the window may
+        # be cut, and the line before it bounds it.
+        while position > 0 and found <= limit:
+            start = max(0, position - window)
+            handle.seek(start)
+            chunk = handle.read(position - start)
+            chunks.append(chunk)
+            found += chunk.count(b"\n")
+            position = start
+            window = min(window * 2, 1 << 24)
+    raw = b"".join(reversed(chunks))
+    if position > 0:
+        # Started mid-line: drop the partial first line.
+        raw = raw[raw.index(b"\n") + 1:] if b"\n" in raw else b""
+    # The same newline translation `read_text` applied, so a row reads the same.
+    text = raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+    lines = [line for line in text.split("\n") if line.strip()]
+    return lines[-max(1, limit):]
+
+
 def read_stamps(*, limit: int = 200, root: Path | None = None) -> list[dict[str, Any]]:
     """The most recent receipts, newest last. Safe to show anyone."""
     path = proof_path(root)
     try:
-        lines = [line for line in path.read_text(encoding="utf-8").split("\n") if line.strip()]
+        lines = _tail_lines(path, max(1, limit))
     except (OSError, UnicodeDecodeError):
         return []
     rows = []
-    for line in lines[-max(1, limit):]:
+    for line in lines:
         try:
             rows.append(json.loads(line))
         except json.JSONDecodeError:
@@ -320,26 +356,125 @@ def read_stamps(*, limit: int = 200, root: Path | None = None) -> list[dict[str,
     return rows
 
 
-def usage_by_key(*, root: Path | None = None, limit: int = 100000) -> dict[str, Any]:
+USAGE_FILENAME = "credential-access-usage.json"
+_USAGE_VERSION = 1
+_USAGE_PROBE = 4096
+
+
+def _fold_usage(seen: dict[str, dict[str, Any]], row: Mapping[str, Any]) -> None:
+    at = row.get("at")
+    app = str(row.get("app") or "")
+    op = str(row.get("op") or "")
+    for key in row.get("keys") or []:
+        entry = seen.setdefault(str(key), {"count": 0, "last": "", "last_app": "", "last_op": "", "apps": []})
+        entry["count"] += 1
+        if app and app not in entry["apps"]:
+            entry["apps"].append(app)
+        # Rows are appended in order, so the last one wins without sorting.
+        if at:
+            entry["last"], entry["last_app"], entry["last_op"] = at, app, op
+
+
+def _fold_bytes(seen: dict[str, dict[str, Any]], raw: bytes) -> None:
+    text = raw.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
+    for line in text.split("\n"):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(row, dict):
+            _fold_usage(seen, row)
+
+
+def usage_by_key(*, root: Path | None = None, limit: int | None = None) -> dict[str, Any]:
     """When each key was last used, how often, and by what.
 
     Derived from the ledger rather than tracked separately, so it cannot drift
     from the record it summarises — and so a key that has never been read simply
     has no entry, rather than a zero that looks like data.
+
+    The derivation is checkpointed next to the ledger: how far it has read, and
+    the bytes at both ends of that span. The ledger only ever grows, so the next
+    call folds in just the rows appended since. A ledger that no longer matches
+    the checkpoint (replaced, truncated, rewritten at either end) is folded
+    again from the first row. `limit` keeps the old meaning, the newest `limit`
+    rows only, and skips the checkpoint.
     """
-    seen: dict[str, dict[str, Any]] = {}
-    for row in read_stamps(limit=limit, root=root):
-        at = row.get("at")
-        app = str(row.get("app") or "")
-        op = str(row.get("op") or "")
-        for key in row.get("keys") or []:
-            entry = seen.setdefault(str(key), {"count": 0, "last": "", "last_app": "", "last_op": "", "apps": []})
-            entry["count"] += 1
-            if app and app not in entry["apps"]:
-                entry["apps"].append(app)
-            # Rows are appended in order, so the last one wins without sorting.
-            if at:
-                entry["last"], entry["last_app"], entry["last_op"] = at, app, op
+    if limit is not None:
+        seen: dict[str, dict[str, Any]] = {}
+        for row in read_stamps(limit=limit, root=root):
+            _fold_usage(seen, row)
+        return seen
+
+    path = proof_path(root)
+    cache_path = path.with_name(USAGE_FILENAME)
+    try:
+        handle = path.open("rb")
+    except OSError:
+        return {}
+    with handle:
+        stat = os.fstat(handle.fileno())
+        # Only whole rows: a writer may be mid-append past the last newline.
+        size = stat.st_size
+        head = handle.read(min(size, _USAGE_PROBE))
+        head_hash = proof_sha256(head.decode("utf-8", errors="replace"))
+
+        cached: dict[str, Any] = {}
+        try:
+            cached = json.loads(cache_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            cached = {}
+        offset = cached.get("offset") if isinstance(cached, dict) else None
+        seen = cached.get("seen") if isinstance(cached, dict) else None
+        valid = (
+            isinstance(offset, int) and isinstance(seen, dict)
+            and cached.get("version") == _USAGE_VERSION
+            and cached.get("inode") == stat.st_ino
+            and cached.get("head") == head_hash
+            and 0 <= offset <= size
+        )
+        if valid and offset:
+            probe_start = max(0, offset - _USAGE_PROBE)
+            handle.seek(probe_start)
+            tail = handle.read(offset - probe_start)
+            valid = cached.get("tail") == proof_sha256(tail.decode("utf-8", errors="replace"))
+        if not valid:
+            offset, seen = 0, {}
+
+        # In chunks: the first fold of a large ledger is the whole file.
+        handle.seek(offset)
+        start, carry = offset, b""
+        remaining = size - offset
+        while remaining > 0:
+            chunk = handle.read(min(remaining, 1 << 23))
+            if not chunk:
+                break
+            remaining -= len(chunk)
+            data = carry + chunk
+            cut = data.rfind(b"\n") + 1
+            _fold_bytes(seen, data[:cut])
+            offset += cut
+            carry = data[cut:]
+
+        if offset != start or not valid:
+            probe_start = max(0, offset - _USAGE_PROBE)
+            handle.seek(probe_start)
+            tail = handle.read(offset - probe_start)
+            record = {
+                "version": _USAGE_VERSION, "inode": stat.st_ino, "head": head_hash,
+                "offset": offset, "tail": proof_sha256(tail.decode("utf-8", errors="replace")),
+                "seen": seen,
+            }
+            try:
+                temporary = cache_path.with_name(f"{cache_path.name}.{os.getpid()}.tmp")
+                fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                    json.dump(record, stream, ensure_ascii=False, separators=(",", ":"))
+                os.replace(temporary, cache_path)
+            except OSError:
+                pass  # a summary that cannot be saved is still a correct answer
     return seen
 
 

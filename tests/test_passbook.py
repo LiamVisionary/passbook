@@ -1435,3 +1435,134 @@ def test_a_read_does_not_get_slower_as_the_ledger_grows(tmp_path):
         Path.open = real_open
 
     assert reads, "the tail read stopped using Path.open; update this test"
+
+
+# ── 20. reading the record's tail, and usage, without reading all of it ───────
+
+
+def _rows_the_old_way(path, limit):
+    """`read_stamps` before it read from the end: the whole file, then its tail."""
+    import json as _json
+
+    try:
+        lines = [line for line in path.read_text(encoding="utf-8").split("\n") if line.strip()]
+    except (OSError, UnicodeDecodeError):
+        return []
+    rows = []
+    for line in lines[-max(1, limit):]:
+        try:
+            rows.append(_json.loads(line))
+        except _json.JSONDecodeError:
+            rows.append({"kind": "credential-access", "unreadable": True})
+    return rows
+
+
+@pytest.mark.parametrize("shape,body", [
+    ("empty", b""),
+    ("one row, no trailing newline", b'{"a":1}'),
+    ("many rows", b"".join(b'{"n":%d}\n' % i for i in range(5000))),
+    ("torn tail", b"".join(b'{"n":%d}\n' % i for i in range(500)) + b'{"half'),
+    ("blank lines", b'{"a":1}\n\n{"b":2}\n\n'),
+    ("rows wider than the window", b"".join(b'{"n":%d,"k":"%s"}\n' % (i, b"x" * 90_000) for i in range(6))),
+    ("crlf", b'{"a":1}\r\n{"b":2}\r\n'),
+    ("cr only", b'{"a":1}\r{"b":2}\r'),
+], ids=lambda value: value if isinstance(value, str) else "")
+@pytest.mark.parametrize("limit", [1, 3, 200, 100000])
+def test_read_stamps_agrees_with_reading_the_whole_file(tmp_path, shape, body, limit):
+    import passbook_stamp
+
+    (tmp_path / passbook_stamp.PROOF_FILENAME).write_bytes(body)
+    got = passbook_stamp.read_stamps(limit=limit, root=tmp_path)
+    assert got == _rows_the_old_way(tmp_path / passbook_stamp.PROOF_FILENAME, limit), shape
+
+
+def test_read_stamps_reads_only_the_tail_of_a_large_record(tmp_path):
+    """`passbook state` read a 1.2GB record four times to show its last rows."""
+    import passbook_stamp
+
+    ledger = tmp_path / passbook_stamp.PROOF_FILENAME
+    ledger.write_bytes(b"".join(b'{"n":%d,"pad":"%s"}\n' % (i, b"x" * 400) for i in range(20_000)))
+    assert ledger.stat().st_size > 5_000_000
+
+    read = []
+    real_open = Path.open
+
+    def counting_open(self, *args, **kwargs):
+        handle = real_open(self, *args, **kwargs)
+        if self == ledger:
+            real_read = handle.read
+            handle.read = lambda *a: read.append(len(chunk := real_read(*a))) or chunk
+        return handle
+
+    Path.open = counting_open
+    try:
+        rows = passbook_stamp.read_stamps(limit=200, root=tmp_path)
+    finally:
+        Path.open = real_open
+
+    assert [row["n"] for row in rows] == list(range(19_800, 20_000))
+    assert read, "the tail read stopped using Path.open; update this test"
+    assert sum(read) < 1_000_000, f"read {sum(read)} bytes for 200 rows"
+
+
+def _usage_the_old_way(root):
+    import passbook_stamp
+
+    return passbook_stamp.usage_by_key(root=root, limit=10**9)
+
+
+def test_usage_folds_only_what_was_appended_and_matches_a_full_count(tmp_path):
+    import passbook_stamp
+
+    for index in range(30):
+        passbook_stamp.stamp(op="read", keys=["A", f"K{index % 3}"], app=f"app{index % 4}", root=tmp_path)
+    first = passbook_stamp.usage_by_key(root=tmp_path)
+    assert first == _usage_the_old_way(tmp_path)
+    assert (tmp_path / passbook_stamp.USAGE_FILENAME).exists()
+
+    for index in range(5):
+        passbook_stamp.stamp(op="read", keys=["A", "NEW"], app="later", root=tmp_path)
+    second = passbook_stamp.usage_by_key(root=tmp_path)
+    assert second == _usage_the_old_way(tmp_path)
+    assert second["A"]["count"] == 35 and second["NEW"]["count"] == 5
+    assert second["A"]["last_app"] == "later"
+
+
+def test_usage_starts_over_when_the_record_is_not_the_one_it_counted(tmp_path):
+    """Replaced, truncated or rewritten: the checkpoint no longer describes it."""
+    import passbook_stamp
+
+    ledger = tmp_path / passbook_stamp.PROOF_FILENAME
+    for _ in range(10):
+        passbook_stamp.stamp(op="read", keys=["OLD"], app="a", root=tmp_path)
+    passbook_stamp.usage_by_key(root=tmp_path)
+
+    # Truncated to fewer rows.
+    lines = ledger.read_bytes().splitlines(keepends=True)
+    ledger.write_bytes(b"".join(lines[:4]))
+    assert passbook_stamp.usage_by_key(root=tmp_path)["OLD"]["count"] == 4
+
+    # Replaced by another record of the same length or longer.
+    replacement = tmp_path / "other.jsonl"
+    replacement.write_bytes(b"".join(b'{"at":"t","app":"b","keys":["NEW"]}\n' for _ in range(12)))
+    os.replace(replacement, ledger)
+    usage = passbook_stamp.usage_by_key(root=tmp_path)
+    assert "OLD" not in usage and usage["NEW"]["count"] == 12
+
+    # A half-written last row is left for the next call, not counted twice.
+    with ledger.open("ab") as stream:
+        stream.write(b'{"at":"t","app":"b","keys":["NEW"]')
+    assert passbook_stamp.usage_by_key(root=tmp_path)["NEW"]["count"] == 12
+    with ledger.open("ab") as stream:
+        stream.write(b'}\n')
+    assert passbook_stamp.usage_by_key(root=tmp_path)["NEW"]["count"] == 13
+    assert passbook_stamp.usage_by_key(root=tmp_path) == _usage_the_old_way(tmp_path)
+
+
+def test_a_damaged_usage_checkpoint_is_ignored(tmp_path):
+    import passbook_stamp
+
+    passbook_stamp.stamp(op="read", keys=["A"], app="a", root=tmp_path)
+    passbook_stamp.usage_by_key(root=tmp_path)
+    (tmp_path / passbook_stamp.USAGE_FILENAME).write_text("{not json", encoding="utf-8")
+    assert passbook_stamp.usage_by_key(root=tmp_path)["A"]["count"] == 1

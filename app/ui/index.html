@@ -4920,7 +4920,13 @@ passbook oauth connect google:work</pre>
   // first, and only rebuild when the answer is actually different.
   let lastSeen = "";
   let quietPolls = 0;
+  // One poll at a time. Each tick starts a `passbook state` process, and when
+  // one took longer than five seconds the next tick started another beside
+  // it: a slow ledger read became a dozen concurrent processes, each slowing
+  // the others down.
+  let polling = false;
   setInterval(async () => {
+    if (polling) return;
     // A background refresh must not wipe a value someone is mid-edit on.
     const focused = document.activeElement;
     if (busy || confirming || audienceFor || bulkConfirm
@@ -4933,6 +4939,7 @@ passbook oauth connect google:work</pre>
     // being typed into is the one thing on screen this window did not put
     // there, so it waits for the caret to leave rather than listing fields.
     if (typing(focused)) return;
+    polling = true;
     try {
       const next = await invoke("state");
       await refreshVault();
@@ -4955,6 +4962,7 @@ passbook oauth connect google:work</pre>
       state = next;
       paint();
     } catch {}
+    finally { polling = false; }
   }, 5000);
 })();
 </script>

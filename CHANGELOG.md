@@ -4,6 +4,17 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [1.8.4] — 2026-09-24
+
+### A lone key from a well-known vendor gets its own heading
+
+A single `ANTHROPIC_API_KEY` was filed under "Ungrouped", a pile of 72 keys at
+the bottom of the list, because a family only became a group once two keys
+shared it. It looked as if the key had not been saved. Well-known vendors
+(Anthropic, OpenAI, OpenRouter, Stripe and others) now keep their own heading
+with one key; an unknown one-off prefix still collects under "Ungrouped".
+OpenRouter and DeepSeek headings are spelled the way those vendors write them.
+
 ## [1.8.3] — 2026-09-24
 
 ### Every password prompt shows bullets, or says why it cannot

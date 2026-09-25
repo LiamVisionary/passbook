@@ -101,12 +101,15 @@ def _in_process_run(monkeypatch, capsys, *, resolved, stored, only):
         monkeypatch.delenv(name, raising=False)
     handed = {}
 
-    def fake_exec(program, argv, env):
-        handed.update(env)
+    def launch(*args, env=None, **kwargs):
+        # Both ways cmd_run starts the child: execvpe(program, argv, env) on
+        # POSIX and subprocess.run(argv, env=env) on Windows. Stubbing both
+        # rather than faking os.name, which breaks pathlib on Windows.
+        handed.update(env if env is not None else args[-1])
         raise SystemExit(0)
 
-    monkeypatch.setattr(passbook_cli.os, "execvpe", fake_exec)
-    monkeypatch.setattr(passbook_cli.os, "name", "posix")
+    monkeypatch.setattr(passbook_cli.os, "execvpe", launch)
+    monkeypatch.setattr(passbook_cli.subprocess, "run", launch)
     args = argparse.Namespace(command=["--", "true"], only=list(only), keep=[], used_in="",
                               push_command="", app="", note="")
     with pytest.raises(SystemExit):

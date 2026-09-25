@@ -198,8 +198,8 @@ def grants(*, root: Path | None = None) -> list[dict[str, Any]]:
     """Every grant, described. Key NAMES and endpoints — never a token."""
     out = []
     for grant in read_grants(root=root).get("grants", []):
-        if not isinstance(grant, dict):
-            continue
+        if not isinstance(grant, dict) or grant.get("connection"):
+            continue  # a connection (GitHub) is listed by its own command
         out.append({
             "id": grant.get("id", ""),
             "provider": grant.get("provider", ""),

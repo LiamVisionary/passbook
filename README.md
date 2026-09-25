@@ -650,6 +650,38 @@ fails is kept as failed and `rotate` exits non-zero. `passbook services retry`
 works through the failed ones. Every push is a `use` row in the
 record, named after the service.
 
+### Sending keys to GitHub
+
+![Name each secret, see which already exist, then review](docs/app-github-review.png)
+
+Connect GitHub once, then send keys to a repository, one of its environments, or
+an organisation as Actions secrets:
+
+```bash
+passbook github connect                  # your gh login (after a yes), a pasted token, or a device code
+passbook github push                     # pick keys, a repo, an environment, names; review; send
+passbook push DEPLOY_TOKEN --to gh:acme/app:CI_DEPLOY --env production
+passbook push DEPLOY_TOKEN --to gh-org:acme --visibility all
+```
+
+In the window: select keys, then **Send to GitHub**. Each key's secret name
+starts as the key's own name and can be changed. GitHub's rules are checked
+first (letters, digits, `_`; not starting with a digit or `GITHUB_`). A name
+that already exists shows when it was last updated, and is replaced only if you
+tick Replace (or pass `--overwrite`). The review screen shows names and targets,
+never values.
+
+The token is stored as `PASSBOOK_GITHUB_TOKEN`, encrypted like any other key,
+and the connection is listed beside your sign-ins. Device sign-in needs your own
+OAuth app's client id (`--client-id` or `PASSBOOK_GITHUB_CLIENT_ID`). None ships
+with PassBook, for the reason under Sign-ins. Each value is encrypted on this
+machine to the repository's, environment's or organisation's public key (a
+libsodium sealed box) and sent over GitHub's API. Every secret sent is recorded,
+under the name you gave it, so `passbook rotate` sends the new value to the same
+place. On a machine that seals reads, connecting binds the token to
+`api.github.com`, so the window can list repositories through the broker without
+holding the token.
+
 On a machine that seals reads, a push can't read the value itself. It re-runs
 under a grant for that one key, the way replication does. The record is two
 store keys, `PASSBOOK_SERVICE_BINDINGS` and `PASSBOOK_USED_IN`. They hold names
@@ -1334,6 +1366,7 @@ are the sort of promise that erodes one convenience at a time.
 | `passbook_stamp.py` | a tamper evident record of who read what |
 | `passbook_services.py` | where each key lives, and pushing it there again |
 | `passbook_sinks.py` | recognising a push in a command, and `--to` specs |
+| `passbook_github.py` | the GitHub connection, and secrets sealed to GitHub's key |
 | `passbook_link.py` | lending named keys to a second device |
 | `passbook_peer.py` | asking the kernel who is calling (macOS) |
 | `bin/passbook` | the command line |

@@ -783,7 +783,7 @@
   .gswitch[aria-checked="true"]::after { transform: translateX(17px); }
   .gswitch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-  .gerror { margin: 0; color: var(--danger); font-size: 12px; line-height: 1.5; }
+  .gerror { margin: 0; color: var(--warn); font-size: 12px; line-height: 1.5; }
   .gerror:empty { display: none; }
   .gback { background: none !important; border: 0 !important; color: var(--ink3); font: inherit; font-size: 12px; cursor: pointer; padding: 4px; min-height: 0 !important; }
   .gback:hover { color: var(--ink2); }
@@ -873,7 +873,7 @@
   .aghost { background: var(--soft); color: var(--ink2); }
   .aprimary { background: var(--accent); color: var(--accent-ink); }
   .aprimary:disabled { opacity: .55; cursor: default; }
-  .aerr { margin: 0; font-size: 12.5px; color: var(--bad); line-height: 1.5; }
+  .aerr { margin: 0; font-size: 12.5px; color: var(--warn); line-height: 1.5; }
   .arefused { margin: 0; font-size: 11.5px; color: var(--ink3); line-height: 1.5; }
 
   /* The confirmation. A tick that draws itself, because "it worked" should be
@@ -937,6 +937,50 @@
   .ibar { display: flex; align-items: center; gap: 14px; font-size: 12.5px; color: var(--ink3); }
   .ibar .alink { font-size: 12.5px; }
   .ibar .count { margin-left: auto; }
+
+  /* ── Sending keys to GitHub ── */
+  .ghways { display: grid; gap: 10px; }
+  .ghway {
+    display: grid; gap: 7px; padding: 12px; border: 1px solid var(--line2);
+    border-radius: 11px; background: var(--paper);
+  }
+  .ghway b { font-size: 13.5px; font-weight: 620; }
+  .ghway .act { justify-self: start; }
+  .ghcode { display: grid; justify-items: center; gap: 8px; text-align: center; font-size: 12.5px; color: var(--ink3); }
+  .ghcode strong { font: 700 26px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .12em; color: var(--ink); }
+  .ghtabs { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; background: var(--soft); padding: 4px; border-radius: 10px; }
+  .ghtabs button { border: 0; border-radius: 8px; min-height: 32px; font: 600 12.5px inherit; background: transparent; color: var(--ink2); cursor: pointer; }
+  .ghtabs button.on { background: var(--card); color: var(--ink); box-shadow: 0 1px 3px rgba(0,0,0,.10); }
+  .ghtabs button:disabled { opacity: .45; cursor: default; }
+  .ghlist { max-height: min(34vh, 260px); overflow-y: auto; }
+  .apick button:disabled { color: var(--ink3); cursor: default; }
+  .ghselect {
+    width: 100%; min-height: 38px; padding: 0 9px; border: 1px solid var(--line2);
+    border-radius: 9px; background: var(--paper); color: var(--ink); font: 500 13px inherit;
+  }
+  .ghrows { display: grid; gap: 6px; max-height: min(44vh, 360px); overflow-y: auto; }
+  .ghrow {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1.1fr);
+    grid-template-areas: "key arrow name" "state state state";
+    align-items: center; gap: 4px 8px; padding: 8px 10px; border: 1px solid var(--line);
+    border-radius: 10px; background: var(--paper);
+  }
+  .ghrow.review { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto; grid-template-areas: "key arrow name state"; }
+  .ghrow .ghkey:first-child { grid-area: key; }
+  .ghkey { font: 500 12px ui-monospace, SFMono-Regular, Menlo, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .gharrow { grid-area: arrow; color: var(--ink3); }
+  .ghrow input[data-ghname] {
+    grid-area: name; min-width: 0; min-height: 32px; padding: 0 9px; border: 1px solid var(--line2);
+    border-radius: 8px; background: var(--card); color: var(--ink);
+    font: 500 12px ui-monospace, SFMono-Regular, Menlo, monospace; text-transform: uppercase;
+  }
+  .ghrow input[data-ghname]:focus { outline: 0; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .ghstate { grid-area: state; font-size: 11.5px; }
+  .ghrow.review .ghstate { justify-self: end; }
+  .ghbad { color: var(--warn); }
+  .ghnew { color: var(--ink3); }
+  .ghover { display: inline-flex; align-items: center; gap: 6px; color: var(--warn); cursor: pointer; }
+  .ghover input { accent-color: var(--accent); margin: 0; }
 
   /* The drop target. Covers the window while something is being dragged over
      it, so there is no small rectangle to aim at. */
@@ -1777,6 +1821,7 @@ Use the copy button to put it on the clipboard."
           ${(cat?.scope_options || []).map((s) =>
             `<option value="${s}">${esc(SCOPE_WORDS[s] || s)}</option>`).join("")}
         </select>
+        <button class="act" data-bulkgithub ${busy ? "disabled" : ""}>${icon("out")} Send to GitHub</button>
         <button class="act danger" data-bulkremove ${busy ? "disabled" : ""}>${icon("trash")} Remove</button>
         <button class="act" data-bulkclear>Clear</button>
       `}
@@ -2414,6 +2459,30 @@ Use the copy button to put it on the clipboard."
   async function refreshSignins() {
     try { signins = await invoke("oauth_state"); }
     catch { signins = null; }
+    try { ghStatus = await invoke("github_state"); }
+    catch { ghStatus = null; }
+  }
+
+  /** GitHub is a connection, not a renewable sign-in: it is where keys go. */
+  function githubGroup() {
+    const s = ghStatus;
+    const how = { device: "Signed in on github.com", gh: "Using your GitHub CLI login",
+                  token: "Using a token you pasted" }[s?.method] || "Connected";
+    return `<div class="group">
+      <h3>GitHub</h3>
+      <div class="row">
+        ${avatar("github")}
+        <div class="grow">
+          <strong>${s?.connected ? `Connected as ${esc(s.account || "?")}` : "Not connected"}</strong>
+          <div class="note">${s?.connected
+            ? `${esc(how)}. Select keys, then Send to GitHub, to set them as Actions secrets.`
+            : "Connect to send keys to your repositories as Actions secrets."}</div>
+        </div>
+        ${s?.connected
+          ? `<button class="act danger" data-ghdisconnect ${busy ? "disabled" : ""}>Disconnect</button>`
+          : `<button class="act" data-ghconnect ${busy ? "disabled" : ""}>Connect</button>`}
+      </div>
+    </div>`;
   }
 
   async function callSignin(name, args = {}) {
@@ -2466,6 +2535,7 @@ Use the copy button to put it on the clipboard."
           clock: it is renewed on the way past when something reads it, so nothing has
           to handle that itself.</p>`, "How these stay alive")}
       </div>
+      ${githubGroup()}
       <div class="group">
         <h3>Add a sign-in</h3>
         <p class="note">Register a client with the provider, then describe it here.
@@ -3213,7 +3283,7 @@ passbook oauth connect google:work</pre>
   function gateShouldShow() {
     // A request on screen carries its own unlock step, and the sign-in
     // sheet underneath it would mean approving something unread.
-    if (webLink.active() || authorization.active() || askShouldShow() || impShouldShow() || impView.done) return false;
+    if (webLink.active() || authorization.active() || askShouldShow() || impShouldShow() || impView.done || ghShouldShow()) return false;
     // The passkey offer comes AFTER a successful sign-in, which is the one
     // moment it can succeed — and the same moment the gate would otherwise
     // decide it is no longer needed and take the offer down with it.
@@ -3868,6 +3938,7 @@ passbook oauth connect google:work</pre>
   function paintSheet() {
     if (webLink.paint()) return;
     if (authorization.paint()) return;
+    if (ghShouldShow()) { paintGithub(); return; }
     if (impShouldShow() || impView.done) { paintImport(); return; }
     paintAsk();
   }
@@ -4226,6 +4297,313 @@ passbook oauth connect google:work</pre>
     if (picked) await openEnv(typeof picked === "string" ? picked : picked.path);
   }
 
+  // ── Sending keys to GitHub ─────────────────────────────────────────────────
+  //
+  //  Same sheet as a request or an import: a person is deciding where keys go.
+  //  Every step shows names only. The values are read, sealed to GitHub's key
+  //  and sent by the CLI (`passbook github push`), one key per process, and
+  //  never come into this page. A pasted token goes straight to the CLI's stdin
+  //  and the field is cleared.
+
+  let gh = null;
+  let ghStatus = null;
+
+  const ghShouldShow = () => Boolean(gh);
+  const ghTarget = () => gh.kind === "org"
+    ? { org: gh.org, visibility: gh.visibility }
+    : (gh.env ? { repo: gh.repo, env: gh.env } : { repo: gh.repo });
+  const ghWhere = () => gh.kind === "org"
+    ? `organisation <b>${esc(gh.org)}</b> (${gh.visibility === "all" ? "all repositories" : "private repositories"})`
+    : `<b>${esc(gh.repo)}</b>${gh.env ? `, environment <b>${esc(gh.env)}</b>` : ""}`;
+
+  /** GitHub's naming rules, the same ones the CLI enforces before sending. */
+  function ghNameError(name) {
+    const text = String(name || "").trim().toUpperCase();
+    if (!text) return "Needs a name";
+    if (!/^[A-Z0-9_]+$/.test(text)) return "Letters, digits and _ only";
+    if (/^[0-9]/.test(text)) return "Cannot start with a digit";
+    if (text.startsWith("GITHUB_")) return "Names starting GITHUB_ are GitHub's";
+    return "";
+  }
+  const ghName = (key) => String(gh.names[key] ?? key).trim().toUpperCase();
+
+  async function ghOpen(keys) {
+    gh = { step: "loading", keys: [...keys], kind: "repo", repo: "", env: "", envs: null,
+           org: "", visibility: "private", query: "", targets: null, names: {}, checks: {},
+           overwrite: {}, busy: false, error: "", results: null, clientId: "", confirmGh: false };
+    paintSheet();
+    try { ghStatus = await invoke("github_state"); } catch (e) { ghStatus = null; gh.error = String(e); }
+    if (ghStatus?.connected && gh.keys.length) { gh.step = "target"; ghLoadTargets(); }
+    else if (ghStatus?.connected) { gh = null; paint(); return; }
+    else gh.step = "connect";
+    paintSheet();
+  }
+
+  function ghClose() { gh = null; ask.hidden = true; paint(); }
+
+  async function ghLoadTargets() {
+    gh.busy = true; paintSheet();
+    try { gh.targets = await invoke("github_targets"); gh.error = ""; }
+    catch (e) { gh.error = String(e); }
+    finally { gh.busy = false; paintSheet(); }
+  }
+
+  async function ghPickRepo(repo) {
+    gh.repo = repo; gh.env = ""; gh.envs = null; paintSheet();
+    try { gh.envs = (await invoke("github_environments", { repo })).environments || []; }
+    catch (e) { gh.envs = []; gh.error = String(e); }
+    paintSheet();
+  }
+
+  async function ghCheck() {
+    const names = gh.keys.map(ghName).filter((n) => !ghNameError(n));
+    if (!names.length) return;
+    const t = ghTarget();
+    try {
+      const answer = await invoke("github_check", { repo: t.repo || "", env: t.env || "",
+        org: t.org || "", visibility: t.visibility || "", names });
+      gh.checks = {};
+      (answer.secrets || []).forEach((row) => { gh.checks[row.name] = row; });
+      gh.error = "";
+    } catch (e) { gh.error = String(e); }
+    paintSheet();
+  }
+
+  function ghToReview() {
+    const names = gh.keys.map(ghName);
+    const bad = gh.keys.filter((k) => ghNameError(ghName(k)));
+    if (bad.length) { gh.error = `Fix the name for ${bad.join(", ")} first.`; paintSheet(); return; }
+    if (new Set(names).size !== names.length) {
+      gh.error = "Two keys would land on the same secret name."; paintSheet(); return;
+    }
+    const unasked = names.filter((n) => gh.checks[n]?.exists && !gh.overwrite[n]);
+    if (unasked.length) {
+      gh.error = `${unasked.join(", ")} already ${unasked.length === 1 ? "exists" : "exist"} there. `
+        + "Tick Replace, or choose another name.";
+      paintSheet(); return;
+    }
+    gh.error = ""; gh.step = "review"; paintSheet();
+  }
+
+  async function ghSend() {
+    gh.busy = true; gh.error = ""; paintSheet();
+    const plan = {
+      target: ghTarget(),
+      items: gh.keys.map((key) => ({ key, name: ghName(key) })),
+      overwrite: gh.keys.map(ghName).filter((n) => gh.overwrite[n]),
+    };
+    try { gh.results = (await invoke("github_push", { plan })).results || []; gh.step = "done"; }
+    catch (e) { gh.error = String(e); }
+    finally { gh.busy = false; paintSheet(); }
+  }
+
+  async function ghConnect(command, args = {}) {
+    gh.busy = true; gh.error = ""; paintSheet();
+    try {
+      ghStatus = await invoke(command, args);
+      const field = ask.querySelector("[data-ghtoken]");
+      if (field) field.value = "";
+      if (ghStatus?.connected) {
+        if (gh.keys.length) { gh.step = "target"; ghLoadTargets(); }
+        else { ghClose(); return; }
+      }
+    } catch (e) { gh.error = String(e); }
+    finally { if (gh) { gh.busy = false; paintSheet(); } }
+  }
+
+  async function ghDevice() {
+    gh.busy = true; gh.error = ""; paintSheet();
+    try { await invoke("github_connect_device", { clientId: gh.clientId }); }
+    catch (e) { gh.error = String(e); gh.busy = false; paintSheet(); return; }
+    const until = Date.now() + 16 * 60 * 1000;
+    const tick = async () => {
+      if (!gh) return;
+      try { ghStatus = await invoke("github_state"); } catch { /* keep waiting */ }
+      if (ghStatus?.pending?.error) { gh.error = ghStatus.pending.error; gh.busy = false; paintSheet(); return; }
+      if (ghStatus?.connected) { gh.busy = false; gh.keys.length ? (gh.step = "target", ghLoadTargets()) : ghClose(); return; }
+      if (Date.now() < until) setTimeout(tick, 2000);
+      paintSheet();
+    };
+    setTimeout(tick, 1500);
+  }
+
+  function ghHead(title, lede) {
+    return `<div class="ahead"><div class="amark">${icon("out")}</div>
+      <h1>${title}</h1>${lede ? `<p class="aorigin">${lede}</p>` : ""}</div>`;
+  }
+
+  function ghConnectBody() {
+    const code = ghStatus?.pending?.userCode;
+    return `<div class="acard">
+      ${ghHead("Connect GitHub", "PassBook keeps the GitHub token like your other keys: encrypted, never shown, and only ever sent to GitHub.")}
+      ${code ? `<div class="ghcode"><span>Enter this code at <b>${esc(ghStatus.pending.verificationUri || "github.com/login/device")}</b></span>
+          <strong>${esc(code)}</strong><span class="aorigin">Waiting for you to approve it…</span></div>` : `
+      <div class="ghways">
+        <div class="ghway">
+          <b>Use your GitHub CLI login</b>
+          <span class="aorigin">Copies the token <code>gh</code> is signed in with into PassBook. Only if you say so here.</span>
+          <button class="act" data-ghwithgh ${gh.busy ? "disabled" : ""}>Use my gh login</button>
+        </div>
+        <div class="ghway">
+          <b>Paste a token</b>
+          <span class="aorigin">A fine-grained token with <i>Secrets: read and write</i> on the repositories you want, or a classic one with <code>repo</code>.</span>
+          <div class="akey"><input data-ghtoken type="password" autocomplete="off" spellcheck="false" placeholder="github_pat_… or ghp_…"></div>
+          <button class="act" data-ghpaste ${gh.busy ? "disabled" : ""}>Connect with this token</button>
+        </div>
+        <div class="ghway">
+          <b>Sign in on github.com</b>
+          <span class="aorigin">Needs your GitHub OAuth app's client id, with device flow on.</span>
+          <div class="akey"><input data-ghclient autocomplete="off" spellcheck="false" placeholder="Client id" value="${esc(gh.clientId)}"></div>
+          <button class="act" data-ghdevice ${gh.busy ? "disabled" : ""}>Show me a code</button>
+        </div>
+      </div>`}
+      ${gh.error ? `<p class="aerr">${esc(gh.error)}</p>` : ""}
+      <div class="arow" style="grid-template-columns: 1fr;"><button class="aghost" data-ghcancel>Cancel</button></div>
+    </div>`;
+  }
+
+  function ghTargetBody() {
+    const t = gh.targets;
+    const repos = (t?.repos || []).filter((r) => !gh.query || r.repo.toLowerCase().includes(gh.query.toLowerCase()));
+    const orgs = t?.orgs || [];
+    const ready = gh.kind === "org" ? Boolean(gh.org) : Boolean(gh.repo);
+    return `<div class="acard">
+      ${ghHead(`Send ${gh.keys.length} key${gh.keys.length === 1 ? "" : "s"} to GitHub`,
+        `Connected as <b>${esc(ghStatus?.account || "")}</b>. Choose where they go.`)}
+      <div class="ghtabs">
+        <button class="${gh.kind === "repo" ? "on" : ""}" data-ghkind="repo">Repository</button>
+        <button class="${gh.kind === "org" ? "on" : ""}" data-ghkind="org" ${orgs.length ? "" : "disabled"}>Organisation</button>
+      </div>
+      ${!t ? `<p class="aorigin">Reading your repositories…</p>` : gh.kind === "repo" ? `
+        <div class="akey"><input data-ghsearch placeholder="Search repositories" value="${esc(gh.query)}" spellcheck="false"></div>
+        <ul class="apick ghlist">${repos.slice(0, 60).map((r) => `
+          <li><button data-ghrepo="${esc(r.repo)}" aria-pressed="${r.repo === gh.repo}" ${r.admin ? "" : "disabled"}>
+            ${esc(r.repo)}${r.private ? "" : " · public"}${r.admin ? "" : " · not admin"}</button></li>`).join("")
+          || `<li class="aorigin">No repositories match.</li>`}</ul>
+        ${gh.repo ? `<div class="akey"><label class="aplain">Environment</label>
+          <select class="ghselect" data-ghenv ${gh.envs ? "" : "disabled"}>
+            <option value="">Whole repository</option>
+            ${(gh.envs || []).map((e) => `<option value="${esc(e)}"${e === gh.env ? " selected" : ""}>${esc(e)}</option>`).join("")}
+          </select></div>` : ""}` : `
+        <ul class="apick">${orgs.map((o) => `<li><button data-ghorg="${esc(o)}" aria-pressed="${o === gh.org}">${esc(o)}</button></li>`).join("")}</ul>
+        <div class="akey"><label class="aplain">Which repositories may use it</label>
+          <select class="ghselect" data-ghvis>
+            <option value="private"${gh.visibility === "private" ? " selected" : ""}>Private repositories</option>
+            <option value="all"${gh.visibility === "all" ? " selected" : ""}>All repositories</option>
+          </select></div>`}
+      ${gh.error ? `<p class="aerr">${esc(gh.error)}</p>` : ""}
+      <div class="arow">
+        <button class="aghost" data-ghcancel>Cancel</button>
+        <button class="aprimary" data-ghnext ${ready ? "" : "disabled"}>Next</button>
+      </div>
+    </div>`;
+  }
+
+  function ghNamesBody() {
+    return `<div class="acard">
+      ${ghHead("Name the secrets", `Going to ${ghWhere()}. Each starts as the key's own name; change any of them.`)}
+      <div class="ghrows">${gh.keys.map((key, i) => {
+        const name = ghName(key);
+        const problem = ghNameError(name);
+        const found = gh.checks[name];
+        return `<div class="ghrow">
+          <span class="ghkey">${esc(key)}</span><span class="gharrow">→</span>
+          <input id="gn-${i}" data-ghname="${esc(key)}" value="${esc(gh.names[key] ?? key)}" spellcheck="false" autocomplete="off">
+          <span class="ghstate">${problem ? `<span class="ghbad">${esc(problem)}</span>`
+            : found?.exists ? `<label class="ghover"><input type="checkbox" data-ghover="${esc(name)}" ${gh.overwrite[name] ? "checked" : ""}>
+                Replace the one updated ${esc((found.updatedAt || "").slice(0, 10) || "before")}</label>`
+            : found ? `<span class="ghnew">new</span>` : ""}</span>
+        </div>`; }).join("")}</div>
+      ${gh.error ? `<p class="aerr">${esc(gh.error)}</p>` : ""}
+      <div class="arow">
+        <button class="aghost" data-ghback="target">Back</button>
+        <button class="aprimary" data-ghreview>Review</button>
+      </div>
+    </div>`;
+  }
+
+  function ghReviewBody() {
+    return `<div class="acard">
+      ${ghHead(`Send ${gh.keys.length} secret${gh.keys.length === 1 ? "" : "s"}?`, `To ${ghWhere()}.`)}
+      <div class="ghrows">${gh.keys.map((key) => {
+        const name = ghName(key);
+        return `<div class="ghrow review"><span class="ghkey">${esc(key)}</span><span class="gharrow">→</span>
+          <span class="ghkey">${esc(name)}</span>
+          <span class="ghstate">${gh.overwrite[name] ? `<span class="itag">replaces</span>` : `<span class="ghnew">new</span>`}</span></div>`;
+      }).join("")}</div>
+      <p class="arefused">Each value is encrypted on this device with ${gh.kind === "org" ? "the organisation's" : gh.env ? "the environment's" : "the repository's"} public key before it leaves.
+        PassBook remembers where each one went, so <code>passbook rotate</code> sends the new value to the same secret.</p>
+      ${gh.error ? `<p class="aerr">${esc(gh.error)}</p>` : ""}
+      <div class="arow">
+        <button class="aghost" data-ghback="names" ${gh.busy ? "disabled" : ""}>Back</button>
+        <button class="aprimary" data-ghsend ${gh.busy ? "disabled" : ""}>${gh.busy ? "Sending…" : `Send ${gh.keys.length}`}</button>
+      </div>
+    </div>`;
+  }
+
+  function ghDoneBody() {
+    const ok = gh.results.filter((r) => r.ok).length;
+    return `<div class="acard">
+      <div class="adone">
+        ${ok === gh.results.length ? `<svg class="atick" viewBox="0 0 68 68" aria-hidden="true"><circle cx="34" cy="34" r="28"/><path d="M21 35.5 30 44 47 25"/></svg>` : ""}
+        <h1>${ok} of ${gh.results.length} sent</h1>
+      </div>
+      <div class="ghrows">${gh.results.map((r) => `<div class="ghrow review">
+        <span class="ghkey">${esc(r.key)}</span><span class="gharrow">→</span><span class="ghkey">${esc(r.name)}</span>
+        <span class="ghstate">${r.ok ? `<span class="ghnew">sent</span>` : `<span class="ghbad">${esc(r.detail || "failed")}</span>`}</span></div>`).join("")}</div>
+      <div class="arow" style="grid-template-columns: 1fr;"><button class="aprimary" data-ghcancel>Done</button></div>
+    </div>`;
+  }
+
+  function paintGithub() {
+    ask.hidden = false;
+    const body = gh.step === "connect" ? ghConnectBody()
+      : gh.step === "target" ? ghTargetBody()
+      : gh.step === "names" ? ghNamesBody()
+      : gh.step === "review" ? ghReviewBody()
+      : gh.step === "done" ? ghDoneBody()
+      : `<div class="acard">${ghHead("GitHub", "Reading…")}</div>`;
+    ask.innerHTML = `<div class="awrap">${body}</div>`;
+    wireGithub();
+  }
+
+  function wireGithub() {
+    ask.querySelectorAll("[data-ghcancel]").forEach((b) => b.onclick = () => ghClose());
+    ask.querySelectorAll("[data-ghwithgh]").forEach((b) => b.onclick = () => ghConnect("github_connect_gh"));
+    ask.querySelectorAll("[data-ghpaste]").forEach((b) => b.onclick = () => {
+      const field = ask.querySelector("[data-ghtoken]");
+      const token = field?.value || "";
+      if (field) field.value = "";
+      ghConnect("github_connect_token", { token });
+    });
+    ask.querySelectorAll("[data-ghclient]").forEach((i) => i.oninput = () => { gh.clientId = i.value.trim(); });
+    ask.querySelectorAll("[data-ghdevice]").forEach((b) => b.onclick = () => ghDevice());
+    ask.querySelectorAll("[data-ghkind]").forEach((b) => b.onclick = () => { gh.kind = b.dataset.ghkind; gh.error = ""; paintSheet(); });
+    ask.querySelectorAll("[data-ghsearch]").forEach((i) => i.oninput = () => {
+      gh.query = i.value; const at = i.selectionStart; paintSheet();
+      const again = ask.querySelector("[data-ghsearch]");
+      if (again) { again.focus(); again.setSelectionRange(at, at); }
+    });
+    ask.querySelectorAll("[data-ghrepo]").forEach((b) => b.onclick = () => ghPickRepo(b.dataset.ghrepo));
+    ask.querySelectorAll("[data-ghorg]").forEach((b) => b.onclick = () => { gh.org = b.dataset.ghorg; paintSheet(); });
+    ask.querySelectorAll("[data-ghenv]").forEach((s) => s.onchange = () => { gh.env = s.value; });
+    ask.querySelectorAll("[data-ghvis]").forEach((s) => s.onchange = () => { gh.visibility = s.value; });
+    ask.querySelectorAll("[data-ghnext]").forEach((b) => b.onclick = () => { gh.step = "names"; gh.checks = {}; gh.error = ""; paintSheet(); ghCheck(); });
+    ask.querySelectorAll("[data-ghname]").forEach((i) => {
+      i.oninput = () => {
+        gh.names[i.dataset.ghname] = i.value;
+        const state = i.parentElement.querySelector(".ghstate");
+        const problem = ghNameError(i.value);
+        if (state) state.innerHTML = problem ? `<span class="ghbad">${esc(problem)}</span>` : "";
+      };
+      i.onchange = () => ghCheck();
+    });
+    ask.querySelectorAll("[data-ghover]").forEach((c) => c.onchange = () => { gh.overwrite[c.dataset.ghover] = c.checked; });
+    ask.querySelectorAll("[data-ghreview]").forEach((b) => b.onclick = () => ghToReview());
+    ask.querySelectorAll("[data-ghback]").forEach((b) => b.onclick = () => { gh.step = b.dataset.ghback; gh.error = ""; paintSheet(); });
+    ask.querySelectorAll("[data-ghsend]").forEach((b) => b.onclick = () => ghSend());
+  }
+
   /** Drag and drop, through Tauri rather than the DOM.
    *
    *  The DOM would hand the window a File and its contents. Tauri hands it a
@@ -4402,6 +4780,15 @@ passbook oauth connect google:work</pre>
       finally { busy = false; await refreshVault(); paint(); }
     });
 
+    main.querySelectorAll("[data-ghconnect]").forEach((b) => b.onclick = () => ghOpen([]));
+    main.querySelectorAll("[data-ghdisconnect]").forEach((b) => b.onclick = async () => {
+      if (!confirm("Disconnect GitHub? Its token is deleted from PassBook. Secrets already on GitHub stay.")) return;
+      busy = true; paint();
+      try { ghStatus = await invoke("github_disconnect"); notice = ""; }
+      catch (e) { notice = String(e); }
+      finally { busy = false; paint(); }
+    });
+    main.querySelectorAll("[data-bulkgithub]").forEach((b) => b.onclick = () => ghOpen(chosen()));
     main.querySelectorAll("[data-oarefresh]").forEach((b) => b.onclick = () =>
       callSignin("oauth_refresh", { id: b.dataset.oarefresh }));
     main.querySelectorAll("[data-oaforget]").forEach((b) => b.onclick = () =>

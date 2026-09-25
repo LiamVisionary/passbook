@@ -34,6 +34,8 @@ import json
 import os
 import platform
 import plistlib
+import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -743,7 +745,8 @@ def cmd_services_retry(args: argparse.Namespace) -> int:
     return worst
 
 
-def _value_for_push(key: str, app: str, *, rerun: bool = True) -> tuple[str, int | None]:
+def _value_for_push(key: str, app: str, *, rerun: bool = True,
+                    also: Iterable[str] = ()) -> tuple[str, int | None]:
     """The STORE's value of `key`, for pushing it somewhere. ("", code) if not.
 
     Not `passbook.load()`, which lets the process environment win: an agent
@@ -772,7 +775,8 @@ def _value_for_push(key: str, app: str, *, rerun: bool = True) -> tuple[str, int
     if key in refused:
         return "", _fail(f"Refused: {key} — {refused[key]}")
     if rerun and not os.environ.get("PASSBOOK_GRANT"):
-        again = _rerun_under_grant(app, f"push {key} to the services that hold it", keys=[key])
+        again = _rerun_under_grant(app, f"push {key} to the services that hold it",
+                                   keys=[key, *also])
         if again is not None:
             return "", again
     return "", _fail(f"{key} is in this store, but encrypted and the vault is shut.",
@@ -888,9 +892,15 @@ def cmd_push(args: argparse.Namespace) -> int:
         chosen = items
     else:
         try:
-            sinks = [passbook_sinks.parse_spec(spec, key, cwd=os.getcwd()) for spec in args.to]
-        except passbook_sinks.SinkError as error:
+            sinks = [_github_api_sink(spec, key, args)
+                     or passbook_sinks.parse_spec(_gh_cli_spec(spec, args), key, cwd=os.getcwd())
+                     for spec in args.to]
+        except (passbook_sinks.SinkError, ValueError) as error:
             return _fail(str(error))
+        for sink in sinks:
+            if sink.get("kind") == "gh-secret" and not sink.get("_where") \
+                    and getattr(args, "visibility", "") and "--org" in sink["command"]:
+                sink["command"] += f" --visibility {shlex.quote(args.visibility)}"
         chosen = [{"service": sink["service"], "command": sink["command"], "stdin": sink["stdin"],
                    "cwd": sink["cwd"], "warning": sink.get("warning", ""), "_sink": sink}
                   for sink in sinks]
@@ -903,7 +913,14 @@ def cmd_push(args: argparse.Namespace) -> int:
     if key not in set(passbook.key_names()) and not os.environ.get("PASSBOOK_GRANT"):
         return _fail(f"{key} is not in this store, so there is nothing to push.",
                      f"Add it:  passbook add {key}")
-    value, stop = _value_for_push(key, who)
+    api = [item["_sink"] for item in chosen if item.get("_sink", {}).get("_where")]
+    if api:
+        refused = _github_overwrite_check(api, args, who)
+        if refused is not None:
+            return refused
+    import passbook_github as github_module
+
+    value, stop = _value_for_push(key, who, also=[github_module.TOKEN_KEY] if api else [])
     if stop is not None:
         return stop
     if args.to:
@@ -925,6 +942,128 @@ def cmd_push(args: argparse.Namespace) -> int:
                 print(f"note: {item['service']}: {item['warning']}", file=sys.stderr)
     print(f"pushing {key} to {len(chosen)} service(s)")
     return _run_service_updates(key, value, chosen)
+
+
+def _sink_gh_secret(rest: list[str]) -> int:
+    """Seal one value to a GitHub repository's, environment's or org's key and
+    set it. The value comes from `$PASSBOOK_KEY`'s variable (a push sets it),
+    else stdin; the token from the connection."""
+    import passbook_github as github
+
+    parser = argparse.ArgumentParser(prog="passbook sink gh-secret")
+    parser.add_argument("name")
+    parser.add_argument("--repo", default="")
+    parser.add_argument("--env", default="")
+    parser.add_argument("--org", default="")
+    parser.add_argument("--visibility", default="private")
+    args = parser.parse_args(rest)
+    source = os.environ.get("PASSBOOK_KEY", "")
+    value = os.environ.get(source, "") if source else ""
+    if not value and not sys.stdin.isatty():
+        value = sys.stdin.read().strip()
+    if not value:
+        return _fail("No value to send: run this through `passbook push`, or pipe it in.")
+    try:
+        where = github.target(args.repo, args.env, args.org, args.visibility)
+        client = _github_client(caller("passbook-sink", None))
+        outcome = client.put(where, args.name, value)
+    except github.GitHubError as error:
+        import passbook_services
+
+        return _fail(passbook_services.redact(str(error), value))
+    print(f"GitHub: {github.secret_name(args.name)} {outcome} in {github.describe(where)}")
+    return 0
+
+
+def _gh_cli_spec(spec: str, args: argparse.Namespace) -> str:
+    """`gh:owner/repo[:NAME]` with `--env E` means the environment's secret."""
+    env = str(getattr(args, "env", "") or "")
+    if env and spec.startswith("gh:"):
+        repo, _, name = spec[3:].partition(":")
+        return f"gh-env:{repo}:{env}" + (f":{name}" if name else "")
+    return spec
+
+
+def _github_api_sink(spec: str, key: str, args: argparse.Namespace):
+    """A GitHub secret set through PassBook's own connection, when there is one.
+
+    None when the spec is not a GitHub secret or GitHub is not connected, so
+    the `gh` CLI is used exactly as before. Variables stay on `gh`: they are
+    not secret and are not sealed.
+    """
+    kind, _, rest = spec.partition(":")
+    if kind not in {"gh", "gh-env", "gh-org"}:
+        return None
+    try:
+        import passbook_github as github
+        import passbook_sinks
+    except ImportError:
+        return None
+    if not github.status().get("connected"):
+        return None
+    parts = rest.split(":") if rest else []
+    if not parts or not all(passbook_sinks.PART.match(part) for part in parts):
+        raise ValueError(f"Cannot read the sink {spec!r}.\n{passbook_sinks.SPEC_HELP}")
+    env = str(getattr(args, "env", "") or "")
+    visibility = str(getattr(args, "visibility", "") or "private")
+    if kind == "gh":
+        repo, name = parts[0], (parts[1] if len(parts) > 1 else key)
+        where = github.target(repo=repo, env=env)
+    elif kind == "gh-env":
+        if len(parts) < 2:
+            raise ValueError("gh-env: needs OWNER/REPO:ENVIRONMENT.")
+        repo, env, name = parts[0], parts[1], (parts[2] if len(parts) > 2 else key)
+        where = github.target(repo=repo, env=env)
+    else:
+        org, name = parts[0], (parts[1] if len(parts) > 1 else key)
+        where = github.target(org=org, visibility=visibility)
+    try:
+        name = github.secret_name(name)
+    except github.GitHubError as error:
+        raise ValueError(str(error)) from None
+    inner = ["passbook", "sink", "gh-secret", name]
+    if where.get("org"):
+        inner += ["--org", where["org"], "--visibility", where["visibility"]]
+    else:
+        inner += ["--repo", where["repo"]] + (["--env", where["env"]] if where.get("env") else [])
+    command = " ".join(shlex.quote(part) for part in
+                       ["passbook", "run", "--only", github.TOKEN_KEY, "--", *inner])
+    return {"key": key, "kind": "gh-secret", "service": github.label(where, name, key)[:96],
+            "command": command, "stdin": False, "cwd": "", "secretName": name,
+            "nonSecret": False, "warning": "", "_where": where, "_via": "api"}
+
+
+def _github_overwrite_check(sinks, args: argparse.Namespace, app: str) -> int | None:
+    """Stop before replacing a GitHub secret nobody said to replace."""
+    import passbook_github as github
+
+    if getattr(args, "overwrite", False):
+        return None
+    try:
+        client = _github_client(app)
+        existing = [(sink, client.existing(sink["_where"], sink["secretName"])) for sink in sinks]
+    except github.GitHubError as error:
+        if os.environ.get("PASSBOOK_GRANT"):
+            return _fail(str(error))
+        return None  # checked again under the grant, where the token can be held
+    clashing = [(sink, found) for sink, found in existing if found]
+    if not clashing:
+        return None
+    lines = [f"{sink['secretName']} already exists in {github.describe(sink['_where'])} "
+             f"(updated {found.get('updatedAt') or 'at an unknown time'})"
+             for sink, found in clashing]
+    if sys.stdin.isatty() and sys.stdout.isatty() and not os.environ.get("PASSBOOK_GRANT"):
+        for line in lines:
+            print(line)
+        if input("Replace " + ("it" if len(lines) == 1 else "them") + "? [y/N] "
+                 ).strip().lower().startswith("y"):
+            args.overwrite = True
+            if "--overwrite" not in sys.argv:
+                sys.argv.append("--overwrite")  # a re-run under a grant must not ask again
+            return None
+        return _fail("Left alone; nothing was sent.")
+    return _fail("\n".join(lines), "Pass --overwrite to replace "
+                 + ("it." if len(lines) == 1 else "them."))
 
 
 def cmd_used_in(args: argparse.Namespace) -> int:
@@ -1219,8 +1358,16 @@ def cmd_sink(args: argparse.Namespace) -> int:
     """
     import passbook_sinks
 
-    if args.sink_kind != "cf-secrets-store":
-        return _fail(f"Unknown sink {args.sink_kind!r}.")
+    rest = list(args.rest or [])
+    if args.sink_kind == "gh-secret":
+        return _sink_gh_secret(rest)
+    parser = argparse.ArgumentParser(prog="passbook sink cf-secrets-store")
+    parser.add_argument("store")
+    parser.add_argument("name")
+    parser.add_argument("--scopes", default="workers")
+    parser.add_argument("--token-key", dest="token_key", default="CLOUDFLARE_API_TOKEN")
+    parser.add_argument("--account-key", dest="account_key", default="CLOUDFLARE_ACCOUNT_ID")
+    args = parser.parse_args(rest)
     source = os.environ.get("PASSBOOK_KEY", "")
     value = os.environ.get(source, "") if source else ""
     if not value and not sys.stdin.isatty():
@@ -1245,6 +1392,519 @@ def cmd_sink(args: argparse.Namespace) -> int:
         return _fail(f"Secrets Store: {detail}")
     print(f"Secrets Store: {args.name} {detail}")
     return 0
+
+
+# ── GitHub: a connection, and secrets set through its API ──────────────────
+
+
+def _self_command() -> list[str]:
+    """How to run this same PassBook again as a child process."""
+    argv0 = sys.argv[0] if sys.argv[0] and os.access(sys.argv[0], os.X_OK) else ""
+    if argv0.endswith(".py"):
+        return [sys.executable, argv0]
+    return [argv0] if argv0 else [sys.executable, "-m", "passbook_cli"]
+
+
+def _github_token(app: str) -> str:
+    """The connection's token if THIS process may hold it, else ""."""
+    import passbook_github as github
+
+    if os.environ.get("PASSBOOK_GRANT") and os.environ.get(github.TOKEN_KEY):
+        return os.environ[github.TOKEN_KEY]
+    _use_broker_for_sealed_values(app, "use the GitHub connection", (github.TOKEN_KEY,))
+    token = ""
+    for path in passbook._scoped_paths():
+        token = passbook._read(path).get(github.TOKEN_KEY, token)
+    return token
+
+
+def _github_client(app: str):
+    """A client for the connected account: direct when this process may hold
+    the token, through the broker's proxy on a machine that seals reads."""
+    import passbook_github as github
+
+    token = _github_token(app)
+    if token:
+        return github.Client(github.direct_transport(token))
+    if github.TOKEN_KEY in set(passbook.key_names()):
+        try:
+            import passbook_broker
+
+            if passbook_broker.running():
+                return github.Client(github.broker_transport(app))
+        except ImportError:
+            pass
+        raise github.GitHubError("The GitHub connection is encrypted and the vault is shut. "
+                                 "Sign in first:  passbook signin")
+    raise github.GitHubError("GitHub is not connected.  Connect it:  passbook github connect")
+
+
+def _github_json(args, payload) -> int:
+    print(json.dumps(payload, indent=2 if not getattr(args, "compact", False) else None))
+    return 0 if payload.get("ok", True) else 1
+
+
+def cmd_github_status(args: argparse.Namespace) -> int:
+    import passbook_github as github
+
+    state = github.status()
+    pending = _github_pending()
+    if pending:
+        state["pending"] = pending
+    if args.json:
+        print(json.dumps(state, indent=2))
+        return 0
+    if pending and pending.get("userCode"):
+        print(f"Waiting for you on GitHub: enter {pending['userCode']} at {pending.get('verificationUri')}")
+    if not state.get("connected"):
+        print("GitHub is not connected.")
+        print("Connect it:  passbook github connect")
+        return 0
+    how = {"device": "signed in on github.com", "gh": "from the GitHub CLI login",
+           "token": "a token you pasted"}.get(state.get("method", ""), state.get("method", ""))
+    print(f"GitHub: connected as {state.get('account') or '?'} ({how})")
+    print(f"The token is the store key {github.TOKEN_KEY}; it is never printed.")
+    return 0
+
+
+def _github_pending_path() -> Path:
+    return passbook.root() / "github-device.json"
+
+
+def _github_pending() -> dict:
+    """A device sign-in waiting for its code, for the window to show. The user
+    code only: the device code is a bearer for the sign-in and stays in the
+    process that is polling."""
+    try:
+        data = json.loads(_github_pending_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    if data.get("expiresAt") and float(data["expiresAt"]) < time.time() and not data.get("error"):
+        return {}
+    return data
+
+
+def _github_set_pending(data: dict | None) -> None:
+    path = _github_pending_path()
+    if data is None:
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        json.dump(data, handle)
+
+
+def cmd_github_connect(args: argparse.Namespace) -> int:
+    """Connect a GitHub account. Asks before it takes anything.
+
+    Device flow with your OAuth app (`--client-id`), your `gh` login
+    (`--from-gh`, after a yes), or a token you paste (`--token-stdin`, or a
+    hidden prompt).
+    """
+    import passbook_github as github
+
+    who = caller("passbook-github", args)
+    interactive = sys.stdin.isatty() and not args.token_stdin
+    scope = github.REPO_SCOPE + (f" {github.ORG_SCOPE}" if args.org else "")
+    client_id = (args.client_id or os.environ.get(github.CLIENT_ID_KEY, "")
+                 or passbook.load().get(github.CLIENT_ID_KEY, "")).strip()
+    method = ("token" if args.token_stdin else "gh" if args.from_gh
+              else "device" if args.device else "")
+    if not method:
+        if not interactive:
+            return _fail("Say how to connect: --device (with --client-id), --from-gh, or --token-stdin.")
+        if github.gh_login_available():
+            answer = input("The GitHub CLI is signed in on this machine. Use that login for "
+                           "PassBook? It copies gh's token into your store, encrypted like "
+                           "your other keys. [y/N] ").strip().lower()
+            method = "gh" if answer.startswith("y") else ""
+        if not method:
+            method = "device" if client_id else "token"
+
+    try:
+        if method == "gh":
+            if not args.from_gh and not interactive:
+                return _fail("Using the gh login needs --from-gh.")
+            if args.from_gh and not args.yes and interactive:
+                answer = input("Copy the GitHub CLI's login into PassBook? [y/N] ").strip().lower()
+                if not answer.startswith("y"):
+                    return _fail("Left alone; nothing was saved.")
+            elif args.from_gh and not args.yes:
+                return _fail("Copying gh's login needs a yes: pass --yes.")
+            token = github.gh_token()
+        elif method == "device":
+            if not client_id:
+                return _fail(
+                    "Device sign-in needs your GitHub OAuth app's client id (with device flow on).",
+                    "Pass --client-id, or set PASSBOOK_GITHUB_CLIENT_ID.\n"
+                    "Or: passbook github connect --from-gh, or paste a token.")
+            started = github.device_start(client_id, scope)
+            expires = time.time() + int(started.get("expires_in") or 900)
+            _github_set_pending({"userCode": started.get("user_code"),
+                                 "verificationUri": started.get("verification_uri"),
+                                 "expiresAt": expires})
+            if args.json:
+                print(json.dumps({"userCode": started.get("user_code"),
+                                  "verificationUri": started.get("verification_uri")}), flush=True)
+            else:
+                print(f"Open {started.get('verification_uri')} and enter  {started.get('user_code')}",
+                      flush=True)
+                print("Waiting for you to approve it on GitHub…", flush=True)
+            try:
+                token = github.device_wait(client_id, started)
+            except github.GitHubError as error:
+                _github_set_pending({"error": str(error), "expiresAt": time.time() + 120})
+                raise
+        else:
+            if args.token_stdin:
+                token = sys.stdin.read().strip()
+            else:
+                print("Paste a GitHub token. A fine-grained one needs \"Secrets: read and write\" "
+                      "on the repositories you will use; a classic one needs the repo scope.")
+                print("Make one at https://github.com/settings/personal-access-tokens/new")
+                try:
+                    token = hidden_input("Token: ").strip()
+                except (EOFError, KeyboardInterrupt):
+                    print(file=sys.stderr)
+                    return _fail("Cancelled; nothing was saved.")
+            if not token:
+                return _fail("No token given; nothing was saved.")
+        details = github.connection_from(github.Client(github.direct_transport(token)), method=method)
+    except github.GitHubError as error:
+        return _fail(str(error))
+
+    written = _write_values({github.TOKEN_KEY: token}, overwrite=True, app=who,
+                            interactive=interactive)
+    if written is None:
+        _github_set_pending(None)
+        return 1
+    github.save_connection({**details, "scope": scope if method == "device" else ""})
+    _github_set_pending(None)
+    bound = _github_bind_host()
+    result = {"ok": True, "connected": True, "account": details["account"], "method": method,
+              "boundToApi": bound}
+    if args.json:
+        print(json.dumps(result))
+        return 0
+    print(f"GitHub connected as {details['account']}.")
+    print(f"The token is stored as {github.TOKEN_KEY}, "
+          + ("encrypted like your other keys." if written.get("sealed") else "in this store."))
+    if bound:
+        print("It is bound to api.github.com: it may only be sent there, and is never printed.")
+    print("Send keys to GitHub:  passbook github push")
+    return 0
+
+
+def _github_bind_host() -> bool:
+    """On a machine that seals reads, bind the token to api.github.com.
+
+    There the CLI never holds the token, so listing repositories and checking
+    names goes through the broker's proxy, which only sends a key to hosts it
+    is bound to. Bound here, said out loud, and only then.
+    """
+    try:
+        import passbook_access as access
+        import passbook_broker
+        import passbook_github as github
+    except ImportError:
+        return False
+    try:
+        policy = access.read_policy()
+        if passbook_broker.reads_mode(policy) != "sealed":
+            return False
+        access.set_guard(github.TOKEN_KEY, policy, destinations=["api.github.com"])
+        access.write_policy(policy)
+        return True
+    except Exception:  # noqa: BLE001 — the connection works without it; say nothing false
+        return False
+
+
+def cmd_github_disconnect(args: argparse.Namespace) -> int:
+    import passbook_github as github
+
+    state = github.status()
+    if not state.get("connected") and not state.get("tokenStored"):
+        github.forget_connection()
+        print("GitHub was not connected.")
+        return 0
+    if not args.yes:
+        if not sys.stdin.isatty():
+            return _fail("Disconnecting needs a yes: pass --yes.")
+        if not input(f"Disconnect GitHub ({state.get('account') or 'this account'}) and delete "
+                     "its token from PassBook? Secrets already set on GitHub stay. [y/N] "
+                     ).strip().lower().startswith("y"):
+            return _fail("Left connected.")
+    if not _confirm_change("delete", [github.TOKEN_KEY], reason="disconnect GitHub",
+                           app=caller("passbook-github", args)):
+        return 1
+    passbook.remove_values([github.TOKEN_KEY])
+    github.forget_connection()
+    if args.json:
+        print(json.dumps({"ok": True, "connected": False}))
+        return 0
+    print("GitHub disconnected. Its token is gone from PassBook; revoke it on GitHub too if "
+          "you are done with it.")
+    return 0
+
+
+def cmd_github_targets(args: argparse.Namespace) -> int:
+    import passbook_github as github
+
+    try:
+        client = _github_client(caller("passbook-github", args))
+        repos = client.repos()
+        orgs = client.orgs()
+    except github.GitHubError as error:
+        return _fail(str(error))
+    if args.json:
+        print(json.dumps({"repos": repos, "orgs": orgs}, indent=2))
+        return 0
+    for repo in repos:
+        print(f"{repo['repo']}{'' if repo['admin'] else '   (not admin: cannot set secrets)'}")
+    for org in orgs:
+        print(f"org: {org}")
+    return 0
+
+
+def cmd_github_environments(args: argparse.Namespace) -> int:
+    import passbook_github as github
+
+    try:
+        names = _github_client(caller("passbook-github", args)).environments(args.repo)
+    except github.GitHubError as error:
+        return _fail(str(error))
+    if args.json:
+        print(json.dumps({"repo": args.repo, "environments": names}, indent=2))
+        return 0
+    print("\n".join(names) if names else f"{args.repo} has no environments.")
+    return 0
+
+
+def cmd_github_check(args: argparse.Namespace) -> int:
+    """Which of these secret names already exist there, and when they changed."""
+    import passbook_github as github
+
+    try:
+        where = github.target(args.repo, args.env, args.org, args.visibility)
+        client = _github_client(caller("passbook-github", args))
+        rows = []
+        for name in args.names:
+            try:
+                clean = github.secret_name(name)
+            except github.GitHubError as error:
+                rows.append({"name": name, "valid": False, "error": str(error)})
+                continue
+            found = client.existing(where, clean)
+            rows.append({"name": clean, "valid": True, "exists": bool(found),
+                         "updatedAt": (found or {}).get("updatedAt", "")})
+    except github.GitHubError as error:
+        return _fail(str(error))
+    if args.json:
+        print(json.dumps({"target": where, "secrets": rows}, indent=2))
+        return 0
+    for row in rows:
+        if not row["valid"]:
+            print(f"  {row['name']}: {row['error']}")
+        else:
+            print(f"  {row['name']}: " + (f"exists, updated {row['updatedAt']}" if row["exists"]
+                                          else "new"))
+    return 0
+
+
+def _github_spec(where: dict, name: str) -> list[str]:
+    """`passbook push` arguments for one secret at `where`."""
+    if where.get("org"):
+        return ["--to", f"gh-org:{where['org']}:{name}", "--visibility",
+                where.get("visibility", "private")]
+    spec = ["--to", f"gh:{where['repo']}:{name}"]
+    return spec + (["--env", where["env"]] if where.get("env") else [])
+
+
+def _github_run_plan(where: dict, items: list, overwrite: set, *, app: str, quiet: bool) -> list:
+    """Send each (key, name) with `passbook push`, one process per key.
+
+    One process each because on a machine that seals reads, a push re-runs
+    itself under a grant for exactly its key; a single process holding every
+    key the person picked would be a grant wider than any one push needs.
+    """
+    results = []
+    for item in items:
+        key, name = item["key"], item["name"]
+        command = [*_self_command(), "push", key, *_github_spec(where, name)]
+        if name in overwrite:
+            command.append("--overwrite")
+        environment = {**os.environ, "PASSBOOK_APP": app}
+        done = subprocess.run(command, env=environment, capture_output=True, text=True,
+                              stdin=subprocess.DEVNULL)
+        detail = ""
+        for text in (done.stderr, done.stdout):
+            lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+            if lines:
+                detail = lines[-1]
+                break
+        results.append({"key": key, "name": name, "ok": done.returncode == 0,
+                        "detail": detail[:300]})
+        if not quiet:
+            print(f"  {'ok  ' if done.returncode == 0 else 'FAIL'} {key} → {name}"
+                  + ("" if done.returncode == 0 else f" — {detail}"), flush=True)
+    return results
+
+
+def _pick(prompt: str, options: list[str], *, many: bool, allow_empty: bool = False) -> list[str]:
+    """Choose by number; a long list is searched first. Returns the choices."""
+    if not options:
+        if allow_empty:
+            return []
+        raise EOFError
+    while True:
+        if len(options) <= 12:
+            print(f"{prompt}:")
+            shown = list(options)
+        else:
+            query = input(f"{prompt} (type to search, Enter for all): ").strip().lower()
+            shown = [option for option in options if query in option.lower()][:40]
+            if not shown:
+                print("  nothing matches")
+                continue
+        for index, option in enumerate(shown, start=1):
+            print(f"  {index:>2}  {option}")
+        answer = input("Pick " + ("one or more, e.g. 1,3" if many else "one")
+                       + (" (Enter for none)" if allow_empty else "") + ": ").strip()
+        if not answer and allow_empty:
+            return []
+        try:
+            picked = [shown[int(part) - 1] for part in re.split(r"[,\s]+", answer) if part]
+        except (ValueError, IndexError):
+            print("  pick by the numbers shown")
+            continue
+        if picked and (many or len(picked) == 1):
+            return list(dict.fromkeys(picked))
+        print("  pick " + ("at least one" if many else "exactly one"))
+
+
+def cmd_github_push(args: argparse.Namespace) -> int:
+    """Send PassBook keys to GitHub as secrets: pick keys, a place, names; review; send.
+
+    Everything shown is a name. Values are read, sealed to GitHub's key and
+    sent by `passbook push`, one key per process, and recorded so a rotation
+    sends them again under the same (possibly renamed) secret name.
+    """
+    import passbook_github as github
+
+    who = caller("passbook-github", args)
+    if args.plan_stdin:
+        try:
+            plan = json.loads(sys.stdin.read() or "{}")
+            where = github.target(**{k: plan.get("target", {}).get(k, "") for k in ("repo", "env", "org")},
+                                  visibility=plan.get("target", {}).get("visibility") or "private")
+            items = [{"key": str(item["key"]), "name": github.secret_name(item.get("name") or item["key"])}
+                     for item in plan.get("items", [])]
+            overwrite = {github.secret_name(name) for name in plan.get("overwrite", [])}
+        except (ValueError, KeyError, TypeError, github.GitHubError) as error:
+            return _fail(f"The plan could not be read: {error}")
+        missing = [item["key"] for item in items if item["key"] not in set(passbook.key_names())]
+        if missing:
+            return _fail(f"Not in this store: {', '.join(missing)}")
+        results = _github_run_plan(where, items, overwrite, app=who, quiet=True)
+        payload = {"ok": all(r["ok"] for r in results), "target": where, "results": results}
+        print(json.dumps(payload, indent=2))
+        return 0 if payload["ok"] else 1
+
+    interactive = sys.stdin.isatty() and sys.stdout.isatty()
+    try:
+        client = _github_client(who)
+        keys = list(args.keys)
+        held = [name for name in passbook.key_names() if not name.startswith("PASSBOOK_")]
+        if not keys:
+            if not interactive:
+                return _fail("Name the keys:  passbook github push KEY… --repo OWNER/NAME")
+            keys = _pick("Keys to send", held, many=True)
+        unknown = [key for key in keys if key not in set(passbook.key_names())]
+        if unknown:
+            return _fail(f"Not in this store: {', '.join(unknown)}")
+
+        repo, env, org, visibility = args.repo, args.env, args.org, args.visibility
+        if not repo and not org:
+            if not interactive:
+                return _fail("Say where: --repo OWNER/NAME [--env ENV], or --org ORG.")
+            kind = input("Send to a [r]epository or an [o]rganisation? [r] ").strip().lower()
+            if kind.startswith("o"):
+                org = _pick("Organisation", client.orgs(), many=False)[0]
+                visibility = input("Which repositories may use it: [p]rivate ones or [a]ll? [p] "
+                                   ).strip().lower().startswith("a") and "all" or "private"
+            else:
+                repos = client.repos()
+                usable = [r["repo"] for r in repos if r["admin"]] or [r["repo"] for r in repos]
+                repo = _pick("Repository", usable, many=False)[0]
+                environments = client.environments(repo)
+                if environments:
+                    chosen = _pick(f"Environment in {repo}", environments, many=False,
+                                   allow_empty=True)
+                    env = chosen[0] if chosen else ""
+        where = github.target(repo, env, org, visibility)
+
+        renames = dict(part.split("=", 1) for part in (args.name or []) if "=" in part)
+        items = []
+        for key in keys:
+            proposed = renames.get(key, key)
+            while True:
+                if interactive and not args.yes:
+                    typed = input(f"GitHub secret name for {key} [{proposed}]: ").strip()
+                    proposed = typed or proposed
+                try:
+                    items.append({"key": key, "name": github.secret_name(proposed)})
+                    break
+                except github.GitHubError as error:
+                    if not interactive or args.yes:
+                        raise
+                    print(f"  {error}")
+                    proposed = key if proposed != key else ""
+
+        names = [item["name"] for item in items]
+        if len(set(names)) != len(names):
+            raise github.GitHubError("Two keys would land on the same secret name.")
+        overwrite: set = set()
+        for item in list(items):
+            found = client.existing(where, item["name"])
+            if not found:
+                continue
+            said = f"{item['name']} already exists in {github.describe(where)} (updated {found['updatedAt'] or 'at an unknown time'})"
+            if args.overwrite:
+                overwrite.add(item["name"])
+            elif interactive:
+                if input(f"{said}. Replace it? [y/N] ").strip().lower().startswith("y"):
+                    overwrite.add(item["name"])
+                else:
+                    items.remove(item)
+            else:
+                raise github.GitHubError(f"{said}. Pass --overwrite to replace it.")
+    except github.GitHubError as error:
+        return _fail(str(error))
+    except (EOFError, KeyboardInterrupt):
+        print(file=sys.stderr)
+        return _fail("Cancelled; nothing was sent.")
+
+    if not items:
+        print("Nothing to send.")
+        return 0
+    print(f"\nTo {github.describe(where)}:")
+    for item in items:
+        print(f"  {item['key']:<32} → {item['name']}"
+              + ("   (replaces the existing one)" if item["name"] in overwrite else ""))
+    if interactive and not args.yes:
+        if not input(f"Send {len(items)} secret(s)? [y/N] ").strip().lower().startswith("y"):
+            return _fail("Nothing was sent.")
+    results = _github_run_plan(where, items, overwrite, app=who, quiet=False)
+    failed = [r for r in results if not r["ok"]]
+    print(f"\n{len(results) - len(failed)} of {len(results)} sent"
+          + (". Each is recorded; `passbook rotate KEY` sends it again." if not failed else ""))
+    return 1 if failed else 0
 
 
 def _sink_help() -> str:
@@ -6495,8 +7155,73 @@ def build_parser() -> argparse.ArgumentParser:
                           help="where to put it; repeatable. Omit to push everywhere it "
                                "is already recorded")
     push_cmd.add_argument("--dry-run", action="store_true", help="show the commands; run nothing")
+    push_cmd.add_argument("--env", default="", help="with gh:OWNER/REPO, that repository's "
+                                                    "deployment environment")
+    push_cmd.add_argument("--visibility", default="", choices=["", "private", "all"],
+                          help="with gh-org:ORG, which repositories may use it")
+    push_cmd.add_argument("--overwrite", action="store_true",
+                          help="replace a GitHub secret that already exists")
     push_cmd.add_argument("--app", default="", help="who is asking; recorded")
     push_cmd.set_defaults(func=cmd_push)
+
+    github_cmd = subs.add_parser(
+        "github", help="connect GitHub and send keys to it as Actions secrets")
+    github_cmd.set_defaults(func=cmd_github_status, json=False)
+    github_subs = github_cmd.add_subparsers(dest="github_command")
+    gh_status = github_subs.add_parser("status", help="whether GitHub is connected, and as whom")
+    gh_status.add_argument("--json", action="store_true")
+    gh_status.set_defaults(func=cmd_github_status)
+    gh_connect = github_subs.add_parser("connect", help="connect a GitHub account")
+    gh_connect.add_argument("--device", action="store_true",
+                            help="sign in on github.com with a code (needs --client-id)")
+    gh_connect.add_argument("--client-id", dest="client_id", default="",
+                            help="your GitHub OAuth app's client id, with device flow on")
+    gh_connect.add_argument("--from-gh", dest="from_gh", action="store_true",
+                            help="copy the GitHub CLI's login, after a yes")
+    gh_connect.add_argument("--token-stdin", dest="token_stdin", action="store_true",
+                            help="read a token from stdin")
+    gh_connect.add_argument("--org", action="store_true",
+                            help="also ask for admin:org, for organisation secrets")
+    gh_connect.add_argument("--yes", action="store_true")
+    gh_connect.add_argument("--json", action="store_true")
+    gh_connect.add_argument("--app", default="", help="who is asking; recorded")
+    gh_connect.set_defaults(func=cmd_github_connect)
+    gh_disconnect = github_subs.add_parser("disconnect", help="forget the GitHub connection")
+    gh_disconnect.add_argument("--yes", action="store_true")
+    gh_disconnect.add_argument("--json", action="store_true")
+    gh_disconnect.add_argument("--app", default="", help="who is asking; recorded")
+    gh_disconnect.set_defaults(func=cmd_github_disconnect)
+    gh_targets = github_subs.add_parser("targets", help="repositories and organisations you can use")
+    gh_targets.add_argument("--json", action="store_true")
+    gh_targets.set_defaults(func=cmd_github_targets)
+    gh_envs = github_subs.add_parser("environments", help="a repository's deployment environments")
+    gh_envs.add_argument("repo")
+    gh_envs.add_argument("--json", action="store_true")
+    gh_envs.set_defaults(func=cmd_github_environments)
+    gh_check = github_subs.add_parser("check", help="which secret names already exist there")
+    gh_check.add_argument("names", nargs="+")
+    gh_check.add_argument("--repo", default="")
+    gh_check.add_argument("--env", default="")
+    gh_check.add_argument("--org", default="")
+    gh_check.add_argument("--visibility", default="private", choices=["private", "all"])
+    gh_check.add_argument("--json", action="store_true")
+    gh_check.set_defaults(func=cmd_github_check)
+    gh_push = github_subs.add_parser(
+        "push", help="send keys as GitHub secrets; asks for everything it is not told")
+    gh_push.add_argument("keys", nargs="*", metavar="KEY")
+    gh_push.add_argument("--repo", default="", help="OWNER/NAME")
+    gh_push.add_argument("--env", default="", help="a deployment environment of --repo")
+    gh_push.add_argument("--org", default="", help="an organisation secret instead")
+    gh_push.add_argument("--visibility", default="private", choices=["private", "all"])
+    gh_push.add_argument("--name", action="append", default=[], metavar="KEY=SECRET_NAME",
+                         help="send KEY under another secret name; repeatable")
+    gh_push.add_argument("--overwrite", action="store_true",
+                         help="replace secrets that already exist")
+    gh_push.add_argument("--yes", action="store_true", help="skip the review question")
+    gh_push.add_argument("--plan-stdin", dest="plan_stdin", action="store_true",
+                         help="read {target, items, overwrite} as JSON from stdin (the window)")
+    gh_push.add_argument("--app", default="", help="who is asking; recorded")
+    gh_push.set_defaults(func=cmd_github_push)
 
     used_in_cmd = subs.add_parser(
         "used-in", help="places a key lives that PassBook cannot push to, noted by hand",
@@ -6526,12 +7251,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     sink_cmd = subs.add_parser(
         "sink", help="a push no installed tool can do by name (used by recorded commands)")
-    sink_cmd.add_argument("sink_kind", choices=["cf-secrets-store"])
-    sink_cmd.add_argument("store", help="the Secrets Store id")
-    sink_cmd.add_argument("name", help="the secret's name in that store")
-    sink_cmd.add_argument("--scopes", default="workers", help="for a new secret; comma-separated")
-    sink_cmd.add_argument("--token-key", dest="token_key", default="CLOUDFLARE_API_TOKEN")
-    sink_cmd.add_argument("--account-key", dest="account_key", default="CLOUDFLARE_ACCOUNT_ID")
+    sink_cmd.add_argument("sink_kind", choices=["cf-secrets-store", "gh-secret"])
+    sink_cmd.add_argument("rest", nargs=argparse.REMAINDER,
+                          help="cf-secrets-store STORE NAME [--scopes S] | "
+                               "gh-secret NAME (--repo R [--env E] | --org O [--visibility V])")
     sink_cmd.set_defaults(func=cmd_sink)
 
     standing_parser = subs.add_parser(
@@ -7122,6 +7845,10 @@ def main(argv: list[str] | None = None) -> int:
     if argv and argv[0] in ("--version", "-V"):
         print(installed_version() or "unknown (running from a checkout)")
         return 0
+    # `passbook connect github` reads the way people say it; `connect` itself
+    # is the managed-app enrollment and keeps its own flags.
+    if argv[:2] in (["connect", "github"], ["disconnect", "github"]):
+        argv = ["github", argv[0], *argv[2:]]
     args = build_parser().parse_args(argv)
     if getattr(args, "version", False):
         print(installed_version() or "unknown (running from a checkout)")

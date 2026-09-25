@@ -684,6 +684,136 @@ fn oauth_connect(id: String) -> Result<Value, String> {
     Ok(Value::Bool(true))
 }
 
+// ── GitHub: a connection, and keys sent as Actions secrets ─────────────────
+//
+// Everything goes through `passbook github …`, like the rest of this window.
+// The only value that ever crosses here is a token the person pasted, and it
+// goes to the CLI's stdin, never an argument; the secrets themselves are read,
+// sealed to GitHub's key and sent by the CLI, and never reach the webview.
+
+#[tauri::command(async)]
+fn github_state() -> Result<Value, String> {
+    run_json(&["github", "status", "--json"])
+}
+
+/// Write `input` to a PassBook command's stdin and return its stdout, parsed.
+/// A non-zero exit still returns stdout when it is JSON: `github push` reports
+/// every secret, including the ones that failed.
+fn run_with_input(args: &[&str], input: &str) -> Result<Value, String> {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = passbook_command()
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("Could not run PassBook: {error}"))?;
+    {
+        let stdin = child.stdin.as_mut().ok_or("Could not write to PassBook")?;
+        stdin
+            .write_all(input.as_bytes())
+            .map_err(|error| format!("Could not write to PassBook: {error}"))?;
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("PassBook did not finish: {error}"))?;
+    let stdout = Zeroizing::new(output.stdout);
+    let parsed = serde_json::from_slice::<Value>(&stdout);
+    if output.status.success() || parsed.is_ok() {
+        return parsed.map_err(|error| format!("PassBook returned something unreadable: {error}"));
+    }
+    Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+}
+
+/// Connect with a token the person pasted. It goes to stdin and is wiped here.
+#[tauri::command(async)]
+fn github_connect_token(token: String) -> Result<Value, String> {
+    let token = Zeroizing::new(token);
+    if token.trim().is_empty() {
+        return Err("Paste a token first.".into());
+    }
+    run_with_input(&["github", "connect", "--token-stdin", "--json"], token.trim())?;
+    github_state()
+}
+
+/// Copy the GitHub CLI's login. The window has already asked the person.
+#[tauri::command(async)]
+fn github_connect_gh() -> Result<Value, String> {
+    run(&["github", "connect", "--from-gh", "--yes", "--json"])?;
+    github_state()
+}
+
+/// Start a device sign-in and return at once; the code appears in
+/// `github_state().pending` for the window to show while GitHub waits.
+#[tauri::command(async)]
+fn github_connect_device(client_id: String) -> Result<Value, String> {
+    use std::process::Stdio;
+
+    let mut args = vec!["github", "connect", "--device", "--json"];
+    if !client_id.trim().is_empty() {
+        args.push("--client-id");
+        args.push(client_id.trim());
+    }
+    passbook_command()
+        .args(&args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("Could not start the sign-in: {error}"))?;
+    Ok(Value::Bool(true))
+}
+
+#[tauri::command(async)]
+fn github_disconnect() -> Result<Value, String> {
+    run(&["github", "disconnect", "--yes"])?;
+    github_state()
+}
+
+#[tauri::command(async)]
+fn github_targets() -> Result<Value, String> {
+    run_json(&["github", "targets", "--json"])
+}
+
+#[tauri::command(async)]
+fn github_environments(repo: String) -> Result<Value, String> {
+    if repo.trim().is_empty() {
+        return Err("Which repository?".into());
+    }
+    run_json(&["github", "environments", repo.trim(), "--json"])
+}
+
+/// Which of these names already exist at the target, and when they changed.
+#[tauri::command(async)]
+fn github_check(repo: String, env: String, org: String, visibility: String,
+                names: Vec<String>) -> Result<Value, String> {
+    if names.is_empty() {
+        return Ok(serde_json::json!({ "secrets": [] }));
+    }
+    let mut args: Vec<&str> = vec!["github", "check"];
+    args.extend(names.iter().map(|name| name.as_str()));
+    for (flag, value) in [("--repo", &repo), ("--env", &env), ("--org", &org)] {
+        if !value.trim().is_empty() {
+            args.push(flag);
+            args.push(value.trim());
+        }
+    }
+    if !org.trim().is_empty() && !visibility.trim().is_empty() {
+        args.push("--visibility");
+        args.push(visibility.trim());
+    }
+    args.push("--json");
+    run_json(&args)
+}
+
+/// Send the reviewed plan: names and a target, never a value.
+#[tauri::command(async)]
+fn github_push(plan: Value) -> Result<Value, String> {
+    run_with_input(&["github", "push", "--plan-stdin"], &plan.to_string())
+}
+
 // ── organising the store: groups, audiences, the matrix ────────────────────
 //
 // These change who can read what, so they go through the same CLI every other
@@ -2101,7 +2231,9 @@ fn main() {
             set_key_projects, set_confirmation,
             pending_ask, dismiss_ask, apply_ask, inspect_env, import_env,
             pending_authorization, dismiss_authorization, decide_authorization,
-            pending_web_link, dismiss_web_link, decide_web_link
+            pending_web_link, dismiss_web_link, decide_web_link,
+            github_state, github_connect_token, github_connect_gh, github_connect_device,
+            github_disconnect, github_targets, github_environments, github_check, github_push
         ])
         .run(tauri::generate_context!())
         .expect("PassBook failed to start");

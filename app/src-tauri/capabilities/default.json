@@ -69,7 +69,16 @@
     "allow-decide-authorization",
     "allow-pending-web-link",
     "allow-dismiss-web-link",
-    "allow-decide-web-link"
+    "allow-decide-web-link",
+    "allow-github-state",
+    "allow-github-connect-token",
+    "allow-github-connect-gh",
+    "allow-github-connect-device",
+    "allow-github-disconnect",
+    "allow-github-targets",
+    "allow-github-environments",
+    "allow-github-check",
+    "allow-github-push"
   ],
   "remote": {
     "urls": [

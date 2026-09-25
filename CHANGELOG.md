@@ -4,6 +4,8 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [1.10.1] — 2026-09-25
+
 ### `passbook run` no longer calls an open vault locked
 
 - **The false alarm.** `run --only NAME` decided whether the vault was locked

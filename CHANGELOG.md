@@ -4,6 +4,27 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+### `passbook run` no longer calls an open vault locked
+
+- **The false alarm.** `run --only NAME` decided whether the vault was locked
+  after `--only` had narrowed the environment. A name the store does not hold,
+  such as a typo or `--only A,B` (read as one key called "A,B"), left nothing
+  resolved. `run` then printed "The credential store is encrypted and locked …
+  Sign in first: passbook signin" on a signed-in machine and ran the command
+  with neither key. The command failed against its service, and agents that
+  saw both messages told the owner to sign in again, about ten times across
+  sessions. The lock is now judged on the whole store before `--only` applies.
+- **`--only A,B` is two keys**, the same as `--only A --only B`.
+- **Names are named.** A requested key the store lacks gets "Not in the store:
+  NAME. Nothing is locked". A requested key that is present but encrypted and
+  unreadable gets its own line with the sign-in hint. A store that really is
+  shut still says locked.
+- **The brief has a fifth state**, "rejected by its service": set and
+  delivered, but the service answers 401 or "invalid token". The fix is a new
+  key, not a sign-in. It also says to ask for `passbook signin` only when
+  `passbook vault` says locked. The brief's size cap went from 2750 to 3000 for
+  it.
+
 ## [1.10.0] — 2026-09-25
 
 ### Connect GitHub and send keys to it as secrets

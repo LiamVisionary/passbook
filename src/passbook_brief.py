@@ -144,7 +144,7 @@ output with the value removed.
 ```bash
 passbook check OPENAI_API_KEY          # is it here, and can I use it
 passbook list                          # every name, no values
-passbook run --only NAME -- <command>  # <-- the one to reach for
+passbook run --only A,B -- <command>   # <-- the one to reach for
 passbook grants                        # what holds credentials right now
 ```
 
@@ -158,7 +158,7 @@ Never list process environments (`ps e`, `ps -E`, `ps eww`, `/proc/*/environ`):
 `passbook run` hands secrets to children in their environment, which other
 same-user processes can read. Use `pgrep -f` for pids only.
 
-**A key you cannot read is not necessarily missing.** There are four states and
+**A key you cannot read is not necessarily missing.** There are five states and
 they have different repairs, so do not treat them alike:
 
 - **absent** — genuinely not in the store. `passbook add NAME` is the fix.
@@ -171,9 +171,12 @@ they have different repairs, so do not treat them alike:
 - **guarded, or reads sealed** — present and usable, never printed. Nothing is
   wrong and there is nothing to repair: run the command that needs it. Telling
   the owner this key is "missing" or "broken" is the specific mistake here.
+- **rejected by its service** — set and delivered, but the service says 401 or
+  "invalid token": revoked or expired there. Make a new one; `passbook add NAME`.
 
 Reporting a sealed, refused or guarded key as missing is what this note exists
-to prevent.
+to prevent. Ask for `passbook signin` only when `passbook vault` says locked; a
+service's auth error never means a locked vault.
 
 An agent that speaks MCP should use the server: `passbook mcp` on stdio.
 `list_credentials` gives names, `run_with_credentials` runs a command holding

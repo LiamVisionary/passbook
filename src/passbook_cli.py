@@ -2282,8 +2282,26 @@ def _rerun_under_grant(app: str, reason: str, keys: Iterable[str] | None = None)
     return int(answer.get("exit_code") or 0)
 
 
+def _split_only(names: Iterable[str] | None) -> list[str]:
+    """`--only A,B` is two keys, the same as `--only A --only B`.
+
+    A key name never contains a comma, and reading `A,B` as one name that no
+    key has used to hand the command neither key and then announce that the
+    vault was locked, which sent people to `passbook signin` on a machine that
+    was already signed in.
+    """
+    out: list[str] = []
+    for item in names or []:
+        for name in str(item).split(","):
+            name = name.strip()
+            if name and name not in out:
+                out.append(name)
+    return out
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     """Run a command with the store loaded as a base. The process env wins."""
+    args.only = _split_only(args.only)
     command = list(args.command)
     if command and command[0] == "--":
         command.pop(0)
@@ -2309,7 +2327,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             _record_sinks(*plan)
         return sealed
     _use_broker_for_sealed_values(who, f"run {Path(command[0]).name}", args.only or ())
-    child = dict(_store_values())
+    resolved = dict(_store_values())
+    child = dict(resolved)
     if args.only:
         # Named keys only. `run` handing over the whole store was the reason an
         # app that needed three credentials held three hundred, and every one of
@@ -2331,10 +2350,28 @@ def cmd_run(args: argparse.Namespace) -> int:
     # lists keys and not one of them came back, the vault is shut rather than the
     # machine being empty. Saying so here saves the child failing later with an
     # auth error that names the wrong problem.
+    #
+    # Judged on the whole store, before `--only` narrows it. Judged after, a
+    # name the store does not hold (a typo, or `A,B` before it was split) left
+    # nothing resolved and read as a locked vault on a machine that was signed
+    # in, and every agent that hit it told its owner to sign in again.
     stored = passbook.key_names()
-    if stored and not any(child.get(name) for name in stored):
+    store_locked = bool(stored) and not any(resolved.get(name) for name in stored)
+    if store_locked:
         print("The credential store is encrypted and locked; running without it.", file=sys.stderr)
         print("Sign in first:  passbook signin", file=sys.stderr)
+    elif args.only:
+        held = set(stored)
+        absent = [name for name in args.only if name not in held and not os.environ.get(name)]
+        if absent:
+            print(f"Not in the store: {', '.join(absent)}. Nothing is locked; check the "
+                  "name with  passbook list", file=sys.stderr)
+        shut = [name for name in args.only
+                if name in held and not resolved.get(name) and not os.environ.get(name)
+                and not _sealed_refusal([name])]
+        if shut:
+            print(f"In the store but encrypted, and not readable here: {', '.join(shut)}. "
+                  "Sign in to read them:  passbook signin", file=sys.stderr)
     child.update({key: value for key, value in os.environ.items() if value})
     # Hand the name down. Whatever this runs may call PassBook itself — a test
     # script asking for one key, a tool that shells out — and those reads belong

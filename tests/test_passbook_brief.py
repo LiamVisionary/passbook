@@ -172,8 +172,10 @@ def test_the_brief_is_short_enough_to_carry_everywhere():
 
     Raised from 2500 in 1.9.0 for one paragraph that earns it: agents were
     listing process environments to debug, and `passbook run` puts secrets in
-    exactly those."""
-    assert len(brief.block()) < 2750, len(brief.block())
+    exactly those. Raised again in 1.10.1 for the fifth state: with only four,
+    agents filed a service's 401 under "locked" and asked the owner to sign in
+    to a vault that was open, about ten times across sessions."""
+    assert len(brief.block()) < 3000, len(brief.block())
 
 
 def test_the_brief_forbids_listing_process_environments():

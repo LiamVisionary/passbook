@@ -4,6 +4,25 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [1.10.2] — 2026-09-25
+
+### A change reaches the other machines when it is made
+
+- **The gap.** Replication was pull-only: a key added or rotated here waited for
+  each peer to come and ask, and this machine can only answer with a sealed
+  value while its vault is open. Three rotated Cloudflare keys stayed on the Mac
+  they were set on while the others kept the revoked token.
+- **Now.** `passbook add` (a typed key or `KEY=value`) and `passbook rotate`
+  send the new value to every machine on the tailnet running a collector. A
+  machine that does not take it — asleep, or holding the key back because its
+  own vault is shut — is queued for `passbook sync --retry-pending`.
+- Piped writes (`--stdin`, `--from-env`) stay local unless `--sync` is given:
+  that is how a peer applies our push, and replicating it would bounce every
+  change around the fleet. `--no-sync` keeps any write local.
+- `PASSBOOK_FLEET=off` hides the tailnet from a process and its children. The
+  test suite sets it; a run without it had written its test keys into three
+  real stores.
+
 ## [1.10.1] — 2026-09-25
 
 ### `passbook run` no longer calls an open vault locked

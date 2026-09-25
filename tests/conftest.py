@@ -22,6 +22,12 @@ from pathlib import Path
 
 import pytest
 
+# Nothing in the suite may reach a real tailnet. Set on the process so every
+# subprocess a test starts inherits it. `add` and `rotate` send what they write
+# to the tailnet's collectors, and on 2026-09-25 a full run seeded a developer's
+# three real stores with API_KEY, DEPLOY_TOKEN, KEEP_ME and the rest.
+os.environ["PASSBOOK_FLEET"] = "off"
+
 BEGIN = "<!-- BEGIN PASSBOOK -->"
 END = "<!-- END PASSBOOK -->"
 

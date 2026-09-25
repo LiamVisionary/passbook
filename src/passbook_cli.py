@@ -487,12 +487,51 @@ def cmd_add(args: argparse.Namespace) -> int:
     if result["kept"] and not args.replace:
         sys.stdout.flush()
         print("\nPass --replace to overwrite a key another app may be using.", file=sys.stderr)
+    # Tell the other machines now rather than waiting for them to ask: a pull
+    # can only be answered while this vault is open. Piped writes stay local
+    # unless asked, because that is how a peer applies OUR push, and a peer that
+    # pushed it back would bounce every change round the fleet.
+    piped = bool(args.stdin or getattr(args, "from_env", ""))
+    if not getattr(args, "no_sync", False) and (getattr(args, "sync", False) or not piped):
+        _replicate_write([*result["added"], *result["updated"]], values)
     # A replaced key whose old value also lives on a Worker, a VPS or a CI
     # secret store is only half rotated. Offer to push it the rest of the way.
     # A push that was asked for and did not land is a failure of this command:
     # a script running `--update-services all` read exit 0 as "rotated
     # everywhere" while a service kept the old value.
     return _offer_service_updates(result["updated"], values, args)
+
+
+def _replicate_write(keys, values) -> None:
+    """Send keys this command just wrote to every reachable machine on the tailnet.
+
+    Best effort by design: the write has already happened and is the part that
+    matters. A machine that does not take it is queued for
+    `passbook sync --retry-pending`, and this says so rather than staying quiet.
+    """
+    chosen = {k: values[k] for k in keys if k in values}
+    if not chosen:
+        return
+    try:
+        import passbook_fleet
+        import passbook_sync
+    except ImportError:
+        return
+    try:
+        peers = passbook_fleet.reachable()
+    except Exception:  # noqa: BLE001 — no tailnet is not a failed write
+        return
+    if not peers:
+        return
+    policy = _access().read_policy() if _access() is not None else None
+    outcome = passbook_sync.replicate(chosen, peers, policy=policy)
+    if outcome["sent"]:
+        print(f"sent to {len(outcome['sent'])} machine(s): {', '.join(outcome['sent'])}")
+    for host, why in sorted(outcome["failed"].items()):
+        print(f"  not sent to {host} ({why}); queued for  passbook sync --retry-pending --apply",
+              file=sys.stderr)
+    if outcome["withheld"]:
+        print(f"kept on this machine by its reach: {', '.join(sorted(outcome['withheld']))}")
 
 
 def _service_lines(items) -> list[str]:
@@ -1316,6 +1355,8 @@ def cmd_rotate(args: argparse.Namespace) -> int:
         services.write_rotations(state)
         return 1
     print(f"replaced: {key}")
+    if not getattr(args, "no_sync", False):
+        _replicate_write([key], {key: fresh})
 
     results: list = []
     code = 0
@@ -6976,6 +7017,11 @@ def build_parser() -> argparse.ArgumentParser:
                      help="read KEY=value lines from a plain .env file")
     add.add_argument("--if-absent", dest="if_absent", action="store_true",
                      help="only add keys that are not already set; never prompts")
+    add.add_argument("--sync", action="store_true",
+                     help="also send piped (--stdin/--from-env) keys to the other machines "
+                          "now; typed keys are sent by default")
+    add.add_argument("--no-sync", dest="no_sync", action="store_true",
+                     help="keep this change on this machine; peers pick it up on their next pull")
     add.add_argument("--app", default="", help="who is asking; recorded")
     add.set_defaults(func=cmd_add)
 
@@ -7281,6 +7327,8 @@ def build_parser() -> argparse.ArgumentParser:
                                  "that got the new one")
     rotate_cmd.add_argument("--no-push", dest="no_push", action="store_true",
                             help="change the store only; push later with services update")
+    rotate_cmd.add_argument("--no-sync", dest="no_sync", action="store_true",
+                            help="do not send the new value to the other machines now")
     rotate_cmd.add_argument("--only", default="",
                             help="push to these services only: numbers or names, e.g. 1,3")
     rotate_cmd.add_argument("--app", default="", help="who is asking; recorded")

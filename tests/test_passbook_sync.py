@@ -586,3 +586,79 @@ def test_a_refused_write_says_the_key_was_not_written_and_gives_one_command(
     # The mechanism is kept, but subordinate — it is for diagnosis, not the headline.
     assert "no broker is running" in said
     assert said.count("could not be sealed") == 0, "the doubled phrasing is gone"
+
+
+# ── a change made here goes out now, not when a peer next asks ─────────────
+
+def _pusher(refuse=()):
+    calls = []
+
+    def push(host, port, values, *, address=""):
+        calls.append((host, dict(values)))
+        return (False, "asleep") if host in refuse else (True, "")
+    return push, calls
+
+
+PEERS = [{"host": "nyc", "port": "8787", "address": "a"},
+         {"host": "hel", "port": "8787", "address": "b"}]
+
+
+def test_a_write_is_sent_to_every_reachable_peer(tmp_path):
+    """The case that stranded three rotated keys: nothing pushed, and the pull
+    that should have carried them needed a vault that was shut."""
+    push, calls = _pusher()
+    out = sync.replicate({"TOKEN": "new"}, PEERS, policy=None, pusher=push, root=tmp_path)
+    assert out["sent"] == ["hel", "nyc"] and not out["failed"]
+    assert calls == [("nyc", {"TOKEN": "new"}), ("hel", {"TOKEN": "new"})]
+    assert sync.read_pending(tmp_path) == {}
+
+
+def test_a_peer_that_does_not_take_a_write_is_owed_it(tmp_path):
+    push, _ = _pusher(refuse={"hel"})
+    out = sync.replicate({"TOKEN": "new"}, PEERS, policy=None, pusher=push, root=tmp_path)
+    assert out["failed"] == {"hel": "asleep"}
+    assert sync.read_pending(tmp_path)["TOKEN"]["owed"] == ["hel"]
+    assert sync.plan_retry(sync.read_pending(tmp_path), ["hel", "nyc"]) == {"hel": ["TOKEN"]}
+
+
+def test_a_replicated_write_respects_reach_and_never_sends_ciphertext(tmp_path):
+    push, calls = _pusher()
+    out = sync.replicate({"HIVE_ENV_FILE": "/x", "BLOB": "hive-sealed:v2:abc", "OK": "1"},
+                         PEERS[:1], policy=None, pusher=push, root=tmp_path)
+    assert calls == [("nyc", {"OK": "1"})]
+    assert "HIVE_ENV_FILE" in out["withheld"]
+
+
+def test_nothing_to_send_touches_no_peer(tmp_path):
+    push, calls = _pusher()
+    sync.replicate({"HIVE_ENV_FILE": "/x"}, PEERS, policy=None, pusher=push, root=tmp_path)
+    assert calls == []
+
+
+def test_a_key_the_peer_held_back_is_not_counted_as_delivered():
+    """A shut peer keeps its own sealed copy rather than take ours. That is a
+    push that did not land, so it has to stay queued."""
+    import http.server
+    import json as _json
+    import threading
+
+    class Peer(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            self.rfile.read(int(self.headers.get("content-length") or 0))
+            body = _json.dumps({"ok": True, "updated": 0, "heldBack": ["TOKEN"]}).encode()
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Peer)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        ok, why = sync.push("127.0.0.1", str(server.server_port), {"TOKEN": "new"})
+    finally:
+        server.shutdown()
+    assert ok is False
+    assert "held back 1" in why

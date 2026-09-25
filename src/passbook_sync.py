@@ -259,6 +259,48 @@ def plan_retry(pending: Mapping[str, Mapping[str, Any]],
     return {host: sorted(keys) for host, keys in sorted(plan.items())}
 
 
+def replicate(values: Mapping[str, str], peers: Iterable[Mapping[str, str]], *,
+              policy: Mapping[str, Any] | None = None, pusher=None,
+              root: Path | None = None) -> dict[str, Any]:
+    """Send a change a person just made to every reachable peer, now.
+
+    Replication was pull-only: a new value waited for each peer's collector to
+    come and ask, and this machine's collector can only answer with a sealed
+    value while the vault is open. A key replaced here while the vault was shut
+    — or at any time on a machine whose broker had stalled — never left. On
+    2026-09-25 three rotated Cloudflare keys sat on one Mac while the others
+    kept using the revoked one.
+
+    At write time the plaintext is already in hand, so no vault is needed.
+    A peer that does not take it is written to the pending queue, which
+    `passbook sync --retry-pending` (and `--maintenance`) resends.
+
+    Only for writes a person made. A peer applies an incoming push with
+    `passbook add --stdin`, so a caller that replicated every write would send
+    each change back and forth for ever.
+    """
+    allowed, withheld = sendable(values, policy=policy)
+    allowed = {k: v for k, v in allowed.items() if not _looks_sealed(v)}
+    send = pusher or push
+    sent: list[str] = []
+    failed: dict[str, str] = {}
+    if allowed:
+        for peer in peers:
+            host = str(peer.get("host") or "")
+            if not host:
+                continue
+            ok, why = send(host, str(peer.get("port") or ""), allowed,
+                           address=str(peer.get("address") or ""))
+            if ok:
+                sent.append(host)
+                note_delivered(sorted(allowed), host, root=root)
+            else:
+                failed[host] = why
+        if failed:
+            note_undelivered(sorted(allowed), failed, root=root)
+    return {"keys": sorted(allowed), "withheld": withheld, "sent": sorted(sent), "failed": failed}
+
+
 def may_leave_machine(key: str, policy: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """May this key be sent to another machine at all?
 
@@ -500,6 +542,11 @@ def push(host: str, port: str, values: Mapping[str, str], *, address: str = "",
     except Exception as error:  # noqa: BLE001 — an unreachable peer is not a crash
         return False, str(error)
     if answer.get("ok") is True:
+        # A collector whose vault is shut holds back keys it has but cannot
+        # open, rather than let a peer's copy replace them. Those did not land.
+        held = answer.get("heldBack")
+        if isinstance(held, list) and held:
+            return False, f"held back {len(held)} key(s) until that machine is signed in"
         return True, ""
     return False, str(answer.get("error") or "the collector refused it")
 

@@ -161,3 +161,16 @@ def test_the_tailscale_status_subprocess_runs_once_per_call(tailnet, monkeypatch
     fleet.describe(fresh=True, root=tailnet)
 
     assert len(runs) == 1, f"tailscale status ran {len(runs)} times"
+
+
+def test_the_suite_never_sees_a_real_tailnet(monkeypatch):
+    """conftest turns the fleet off; with it off nothing is discovered, so a
+    test's `add` cannot reach a developer's real collectors."""
+    import os
+
+    assert os.environ.get("PASSBOOK_FLEET") == "off"
+    fleet._STATUS_CACHE = None
+    monkeypatch.setattr(fleet, "_tailscale_cli", lambda: pytest.fail("asked tailscale"))
+    assert fleet._read_status() == {}
+    assert fleet.reachable() == []
+    fleet._STATUS_CACHE = None

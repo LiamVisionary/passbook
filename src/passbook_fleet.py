@@ -108,7 +108,18 @@ def _status() -> dict[str, Any]:
     return _STATUS_CACHE
 
 
+def fleet_disabled() -> bool:
+    """`PASSBOOK_FLEET=off` hides the tailnet from this process and its children.
+
+    The test suite sets it. A CLI test that ran `passbook add` once reached the
+    developer's real peers, and their collectors stored the test's keys.
+    """
+    return os.environ.get("PASSBOOK_FLEET", "").strip().lower() in ("off", "0", "false", "no")
+
+
 def _read_status() -> dict[str, Any]:
+    if fleet_disabled():
+        return {}
     cli = _tailscale_cli()
     if not cli:
         return {}

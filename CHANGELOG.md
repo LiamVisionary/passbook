@@ -4,6 +4,85 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [1.9.0] — 2026-09-25
+
+### PassBook remembers where each key went, and rotates it everywhere
+
+`passbook services` could already push a replaced key to every service holding
+it, but the list was empty on the machine it was built for. The only way to
+fill it was `passbook services attach`, typed by hand after the fact. Keys were
+reaching Workers and GitHub through `passbook run` the whole time, and PassBook
+threw that information away.
+
+- **`passbook run` records pushes it recognises.** With `--only KEY`,
+  `wrangler secret put` / `versions secret put` / `secret bulk` /
+  `pages secret put` / `secrets-store secret create`, `gh secret set`,
+  `gh variable set` (flagged as not secret), `vercel env add` and
+  `fly secrets set` are recorded after the command exits 0, directly or inside
+  `sh -c`. When it can't tell which key went where, nothing is recorded and the
+  run says so. The recorded command pushes on stdin or in `$KEY`, never on
+  argv. The worker comes from `wrangler.toml`, the repo from the git remote.
+- **`passbook run --used-in WHERE [--push-command CMD --push-stdin]`** records
+  a place or a push for a script PassBook can't read.
+- **`passbook push KEY --to SINK`** pushes and records in one step
+  (`wrangler:`, `wrangler-pages:`, `gh:`, `gh-env:`, `gh-org:`, `gh-var:`,
+  `vercel:`, `fly:`, `cf-secrets-store:`). Without `--to` it pushes to
+  everywhere already recorded. Cloudflare Secrets Store goes through the new
+  `passbook sink cf-secrets-store`, which finds the secret by name over the API.
+- **`passbook used-in KEY add|remove|list`** notes places nothing can push to.
+  They show in `services list`, `history KEY` and `rotate`.
+- **`passbook rotate KEY`** takes the new value (hidden, asked twice, or
+  `--stdin`), replaces it, pushes to every recorded service, prints a result per
+  service and lists the places to update by hand. The previous value is kept,
+  as the store held it (ciphertext on a sealed store), until `--confirm`.
+  `--rollback` restores it and pushes it back to every service that got the new
+  one.
+- Every push is a `use` row in the access record, named after the service.
+- MCP: `list_services` (names and commands, no values) and `record_used_in` (a
+  place, never a command: a command recorded by an agent would run during the
+  owner's next rotation holding the new value). A successful
+  `run_with_credentials` is recorded the same way `run` is.
+
+### Fixed in the existing push path
+
+- **A stale environment was pushed over the new value.** `services update` and
+  `retry` read the value with the process environment winning. An agent started
+  by `passbook run` holds the launch-time value, and pushed that. They now read
+  the store.
+- **On a machine that seals reads, pushes said the key "is not set here".** It
+  was set and encrypted: the wrong one of the four states, and the wrong fix. A
+  push now re-runs under a grant for that one key, the way sync does.
+- **The record could be wiped.** It was read through the environment (a
+  `passbook run` child carries a launch-time copy), and a sealed copy read as
+  empty. Either way, the next attach wrote a one-entry record over the whole
+  thing. It is now read from the store files, and a record this process cannot
+  open refuses the change and names the fix. `seal` and the broker's
+  seal-on-write leave both records readable. They hold names and commands, not
+  values, and no longer count as readable secrets in `status`.
+- **Changes to the record never replicated.** It was written without the age
+  sync compares, and sync never overwrites a copy of unknown age. So the first
+  version reached other machines and nothing after it did. Writes are dated now.
+- **`add --replace --update-services all` exited 0 when a push failed.** A
+  script read that as "rotated everywhere". It now exits 1.
+- **Correcting a failed service's command made `retry` forget it.** The service
+  still held the old value. A failed status now survives the correction.
+- **Pushes that ran for minutes wrote back an old copy of the record,** undoing
+  anything recorded meanwhile. The record is re-read before the results go in.
+- **Re-running under a grant from a checkout failed** with "Exec format error":
+  `passbook_cli.py` is executable but has no interpreter line. It now runs
+  through Python.
+
+Service labels may now contain `:` `/` `@` `+` (`github:owner/repo@production`).
+Leading slashes, `..` and shell characters are still refused.
+
+### The brief tells agents not to list process environments
+
+`passbook run` hands secrets to child processes through their environment, and
+other processes of the same user can read it. The text written into agents'
+instructions now says never to use `ps e`, `ps -E`, `ps eww` or
+`/proc/*/environ`, and to use `pgrep -f` for pids. Agents pick up the new text
+the next time any `passbook` command runs.
+
 ## [1.8.5] — 2026-09-24
 
 ### The key list refreshes while you search

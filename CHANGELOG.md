@@ -4,6 +4,42 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [1.10.0] — 2026-09-25
+
+### Connect GitHub and send keys to it as secrets
+
+- **`passbook github connect`** (or `passbook connect github`) connects an
+  account three ways, none of them silent. You can copy your `gh` login after a
+  yes, paste a token (hidden prompt, or `--token-stdin`), or use a device-flow
+  code with your own OAuth app's client id. The token is checked against GitHub
+  before anything is saved. It is stored as `PASSBOOK_GITHUB_TOKEN` (encrypted
+  on a sealed store) and the connection is listed beside the other sign-ins.
+  `status`, `disconnect`. On a machine that seals reads, connecting binds the
+  token to api.github.com, so lookups go through the broker's proxy.
+- **`passbook github push`** asks for what it isn't told: keys, repository or
+  organisation, environment, and each secret's name (defaults to the key's
+  name). It checks GitHub's naming rules and shows which names already exist
+  and when they were updated. Replacing one needs a yes or `--overwrite`. Then
+  it shows a review and sends. `--repo/--env/--org/--visibility/--name KEY=NAME`
+  do the same by flags; `--plan-stdin` is the window's form.
+- **`passbook push KEY --to gh:owner/repo[:NAME] [--env E]`** and
+  `gh-org:ORG[:NAME] --visibility …` go through the connection when there is one
+  (and through `gh` as before when there isn't). Each value is sealed on this
+  machine to the target's public key, a libsodium sealed box built from
+  `cryptography`'s X25519 and Poly1305 plus XSalsa20. It matches libsodium byte
+  for byte. The push is recorded under the chosen name, so `rotate` sends there
+  again.
+- **The window**: a GitHub group on Sign-ins (connect, disconnect), and **Send to
+  GitHub** on selected keys. It goes connect, place, names (with replace
+  ticks), review, and shows a result per key. Values never enter the page, and
+  a pasted token goes straight to the CLI's stdin.
+
+### Fixed
+
+- Error text in the window's sheets (a request, an import, the sign-in gate)
+  used colour variables that were never defined, so errors showed in plain
+  ink. They are red now.
+
 ## [1.9.0] — 2026-09-25
 
 ### PassBook remembers where each key went, and rotates it everywhere

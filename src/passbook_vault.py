@@ -793,6 +793,14 @@ PUBLIC_PREFIXES = (
 
 DEFAULT_SKIP = tuple(f"{prefix}*" for prefix in PUBLIC_PREFIXES)
 
+#: PassBook's own records of where keys were sent (`passbook services`,
+#: `passbook used-in`). Service names and commands, never a value, and read by
+#: processes that cannot sign in. Sealed, they read as empty, and the next
+#: change wrote a one-entry record over the whole thing. Never sealed, never
+#: counted as a readable secret. Named here rather than imported so the vault
+#: does not depend on the services module.
+NEVER_SEALED = ("PASSBOOK_SERVICE_BINDINGS", "PASSBOOK_USED_IN")
+
 
 def matches_skip(name: str, patterns: Iterable[str]) -> bool:
     """Exact names, or a trailing `*` for a family.
@@ -1023,7 +1031,7 @@ def seal_store(
     patterns = set(skip_list(root=root)) | {str(name).strip() for name in skip if str(name).strip()}
     if skip:
         patterns = set(set_skip_list(patterns, root=root))
-    exempt = {n for n in current if matches_skip(n, patterns)}
+    exempt = {n for n in current if matches_skip(n, patterns) or n in NEVER_SEALED}
 
     plain = {n: v for n, v in current.items()
              if not is_sealed(v) and not is_sealed_v1(v) and n not in exempt}
@@ -1124,7 +1132,8 @@ def status(*, root: Path | None = None, path: Path | None = None) -> dict[str, A
         current = {}
     sealed = sorted(n for n, v in current.items() if is_sealed(v))
     legacy = sorted(n for n, v in current.items() if is_sealed_v1(v))
-    plain = sorted(n for n, v in current.items() if not is_sealed(v) and not is_sealed_v1(v))
+    plain = sorted(n for n, v in current.items() if not is_sealed(v) and not is_sealed_v1(v)
+                   and n not in NEVER_SEALED)
     known = profiles(root=root)
     return {
         "supported": ok,

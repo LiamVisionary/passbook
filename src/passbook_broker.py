@@ -638,6 +638,7 @@ def _seal_values(payload: Mapping[str, Any], root: Path | None,
 
     app = str(payload.get("app") or "passbook")
     sealed: dict[str, str] = {}
+    readable: dict[str, str] = {}
     for name, value in incoming.items():
         name = str(name)
         if not isinstance(value, str) or not value:
@@ -646,9 +647,22 @@ def _seal_values(payload: Mapping[str, Any], root: Path | None,
         # would be wrapped around a blob rather than a secret.
         if passbook_vault.is_sealed(value) or passbook_vault.is_sealed_v1(value):
             continue
+        if name in getattr(passbook_vault, "NEVER_SEALED", ()):
+            # PassBook's own record of where keys went. It arrives here from
+            # sync like any other key, and sealed it is unreadable to the CLI
+            # that maintains it. Written as it came.
+            readable[name] = value
+            continue
         sealed[name] = passbook_vault.seal_value(name, value, dek, profile_id=profile)
+    if readable:
+        try:
+            passbook.set_values(readable, overwrite=True, exact=True,
+                                workspace_id=workspace, environ=source)
+        except Exception as error:  # noqa: BLE001 — surface, never crash the daemon
+            return {"ok": False, "error": str(error)}
     if not sealed:
-        return {"ok": True, "sealed": [], "detail": "nothing needed sealing"}
+        return {"ok": True, "sealed": [], "written": sorted(readable),
+                "detail": "nothing needed sealing"}
 
     try:
         result = passbook.set_values(sealed, overwrite=True, exact=True,
@@ -658,7 +672,8 @@ def _seal_values(payload: Mapping[str, Any], root: Path | None,
 
     _record("write", sorted(sealed), app=app, granted=True,
             reason=f"sealed {len(sealed)} value(s) on write", workspace=workspace, root=root)
-    return {"ok": True, "sealed": sorted(sealed), "path": result.get("path", "")}
+    return {"ok": True, "sealed": sorted(sealed), "path": result.get("path", ""),
+            "written": sorted({*sealed, *readable})}
 
 
 def _confirm(payload: Mapping[str, Any], root: Path | None,

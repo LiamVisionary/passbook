@@ -154,6 +154,10 @@ by reading the store file directly. `passbook list`, `passbook check` and
 is not; on many machines it is refused outright, and that refusal is the policy
 working rather than a fault to route around.
 
+Never list process environments (`ps e`, `ps -E`, `ps eww`, `/proc/*/environ`):
+`passbook run` hands secrets to children in their environment, which other
+same-user processes can read. Use `pgrep -f` for pids only.
+
 **A key you cannot read is not necessarily missing.** There are four states and
 they have different repairs, so do not treat them alike:
 

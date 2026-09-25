@@ -487,8 +487,10 @@ def cmd_add(args: argparse.Namespace) -> int:
         print("\nPass --replace to overwrite a key another app may be using.", file=sys.stderr)
     # A replaced key whose old value also lives on a Worker, a VPS or a CI
     # secret store is only half rotated. Offer to push it the rest of the way.
-    _offer_service_updates(result["updated"], values, args)
-    return 0
+    # A push that was asked for and did not land is a failure of this command:
+    # a script running `--update-services all` read exit 0 as "rotated
+    # everywhere" while a service kept the old value.
+    return _offer_service_updates(result["updated"], values, args)
 
 
 def _service_lines(items) -> list[str]:
@@ -503,7 +505,8 @@ def _service_lines(items) -> list[str]:
     return out
 
 
-def _run_service_updates(key: str, value: str, chosen, *, registry=None) -> int:
+def _run_service_updates(key: str, value: str, chosen, *, registry=None,
+                         collected: list | None = None) -> int:
     """Push to each service in turn, printing as it goes, and remember the result.
 
     Prints per service rather than at the end because these are writes to other
@@ -513,6 +516,7 @@ def _run_service_updates(key: str, value: str, chosen, *, registry=None) -> int:
     import passbook_services as services
 
     failed: list[str] = []
+    del registry  # read fresh below; kept in the signature for callers
 
     def announce(entry):
         print(f"  {'ok  ' if entry['ok'] else 'FAIL'} {entry['service']}"
@@ -522,11 +526,16 @@ def _run_service_updates(key: str, value: str, chosen, *, registry=None) -> int:
             failed.append(entry["service"])
 
     results = services.update(key, value, chosen, on_result=announce)
-    working = registry if registry is not None else services.read()
-    for entry in results:
-        working = services.record(key, entry["service"], ok=entry["ok"],
-                                  error=entry["detail"], registry=working)
+    if collected is not None:
+        collected.extend(results)
     try:
+        # Read again rather than reusing the copy from before the pushes. They
+        # can take minutes, and writing back that older copy undid anything
+        # recorded meanwhile — another run's services, another key's retry.
+        working = services.read()
+        for entry in results:
+            working = services.record(key, entry["service"], ok=entry["ok"],
+                                      error=entry["detail"], registry=working)
         services.write(working)
     except Exception as error:  # noqa: BLE001 — a push that landed must not be forgotten over a write
         print(f"could not record the outcome: {error}", file=sys.stderr)
@@ -550,13 +559,15 @@ def _offer_service_updates(replaced, values, args) -> None:
     """
     mode = str(getattr(args, "update_services", "ask") or "ask")
     if mode == "none" or not replaced:
-        return
+        return 0
     try:
         import passbook_services as services
 
         registry = services.read()
-    except Exception:  # noqa: BLE001 — an unreadable registry must not fail the add
-        return
+    except Exception as error:  # noqa: BLE001 — an unreadable registry must not fail the add
+        print(f"\nCould not check which services hold it: {error}", file=sys.stderr)
+        return 0
+    worst = 0
     for key in replaced:
         items = services.bindings(key, registry)
         if not items:
@@ -585,29 +596,56 @@ def _offer_service_updates(replaced, values, args) -> None:
                     continue
             else:
                 chosen = items
-        _run_service_updates(key, values.get(key, ""), chosen, registry=registry)
+        worst = max(worst, _run_service_updates(key, values.get(key, ""), chosen,
+                                                registry=registry))
+    return worst
+
+
+def _place_lines(items) -> list[str]:
+    out = []
+    for item in items:
+        note = f" — {item.get('note')}" if item.get("note") else ""
+        out.append(f"  by hand: {item.get('where', '')}{note}")
+    return out
 
 
 def cmd_services(args: argparse.Namespace) -> int:
     """Everything the store knows about where its keys have been copied to."""
     import passbook_services as services
 
-    registry = services.read()
-    wanted = [args.key] if getattr(args, "key", "") else services.keys_with_bindings(registry)
+    try:
+        registry = services.read()
+        record = services.read_places()
+    except services.ServiceError as error:
+        return _fail(str(error))
+    if getattr(args, "key", ""):
+        wanted = [args.key]
+    else:
+        wanted = sorted(set(services.keys_with_bindings(registry))
+                        | set(services.keys_with_places(record)))
     if not wanted:
         print("No service is recorded against any key yet.")
-        print("Record one with: passbook services attach KEY SERVICE --command '…'")
+        print("They are recorded when you push a key:  passbook push KEY --to wrangler:WORKER")
+        print("or by hand:  passbook used-in KEY add \"where it lives\"")
         return 0
     if getattr(args, "json", False):
-        print(json.dumps({key: services.bindings(key, registry) for key in wanted}, indent=2))
+        # The shape stays {KEY: [bindings]}: scripts read it. Places by hand
+        # have their own: passbook used-in list --json.
+        print(json.dumps({key: services.bindings(key, registry) for key in wanted
+                          if services.bindings(key, registry) or getattr(args, "key", "")},
+                         indent=2))
         return 0
     for key in wanted:
         items = services.bindings(key, registry)
-        if not items:
+        spots = services.places(key, record)
+        if not items and not spots:
             print(f"{key}: no services recorded")
             continue
-        print(f"{key} — {len(items)} service(s)")
+        print(f"{key} — {len(items)} service(s)"
+              + (f", {len(spots)} place(s) to update by hand" if spots else ""))
         for line in _service_lines(items):
+            print(line)
+        for line in _place_lines(spots):
             print(line)
     return 0
 
@@ -617,7 +655,7 @@ def cmd_services_attach(args: argparse.Namespace) -> int:
 
     try:
         registry = services.attach(args.key, args.service, args.command,
-                                   stdin=args.stdin, cwd=args.cwd)
+                                   stdin=args.stdin, cwd=args.cwd, source="attach")
         services.write(registry)
     except services.ServiceError as error:
         return _fail(str(error))
@@ -630,7 +668,10 @@ def cmd_services_attach(args: argparse.Namespace) -> int:
 def cmd_services_detach(args: argparse.Namespace) -> int:
     import passbook_services as services
 
-    registry, removed = services.detach(args.key, args.service)
+    try:
+        registry, removed = services.detach(args.key, args.service)
+    except services.ServiceError as error:
+        return _fail(str(error))
     if not removed:
         return _fail(f"{args.key} has no service called {args.service!r}.")
     services.write(registry)
@@ -644,13 +685,13 @@ def cmd_services_update(args: argparse.Namespace) -> int:
 
     import passbook_services as services
 
-    registry = services.read()
+    try:
+        registry = services.read()
+    except services.ServiceError as error:
+        return _fail(str(error))
     items = services.bindings(args.key, registry)
     if not items:
         return _fail(f"No service is recorded against {args.key}.")
-    value = passbook.load().get(args.key, "")
-    if not value:
-        return _fail(f"{args.key} is not set here, so there is nothing to push.")
     try:
         chosen = services.select(items, args.only or "all")
     except services.ServiceError as error:
@@ -660,6 +701,9 @@ def cmd_services_update(args: argparse.Namespace) -> int:
         for item in chosen:
             print(f"  {item.get('service')}: {item.get('command')}")
         return 0
+    value, stop = _value_for_push(args.key, caller("passbook-services", args))
+    if stop is not None:
+        return stop
     print(f"pushing {args.key} to {len(chosen)} service(s)")
     return _run_service_updates(args.key, value, chosen, registry=registry)
 
@@ -670,26 +714,546 @@ def cmd_services_retry(args: argparse.Namespace) -> int:
 
     import passbook_services as services
 
-    registry = services.read()
+    try:
+        registry = services.read()
+    except services.ServiceError as error:
+        return _fail(str(error))
     outstanding = [(key, item) for key, item in services.failures(registry)
                    if not getattr(args, "key", "") or key == args.key]
     if not outstanding:
         print("Nothing is outstanding.")
         return 0
-    values = passbook.load()
     worst = 0
-    for key in sorted({key for key, _ in outstanding}):
-        value = values.get(key, "")
+    pending = sorted({key for key, _ in outstanding})
+    for key in pending:
         chosen = [item for that_key, item in outstanding if that_key == key]
-        if not value:
-            print(f"{key} is not set here, so its {len(chosen)} service(s) were skipped.",
-                  file=sys.stderr)
+        # One key per grant: a retry of several keys on a sealed store re-runs
+        # itself for the first, so it is asked for one key at a time.
+        value, stop = _value_for_push(key, caller("passbook-services", args),
+                                      rerun=len(pending) == 1)
+        if stop is not None:
+            if len(pending) == 1:
+                return stop  # the reason is printed, or a re-run did the work
+            print(f"{key}: its {len(chosen)} service(s) were skipped.", file=sys.stderr)
             worst = 1
             continue
         print(f"retrying {key} on {len(chosen)} service(s)")
         worst = max(worst, _run_service_updates(key, value, chosen, registry=registry))
         registry = services.read()
     return worst
+
+
+def _value_for_push(key: str, app: str, *, rerun: bool = True) -> tuple[str, int | None]:
+    """The STORE's value of `key`, for pushing it somewhere. ("", code) if not.
+
+    Not `passbook.load()`, which lets the process environment win: an agent
+    started by `passbook run` an hour ago holds the value from then, and
+    `services update` pushed that stale copy over the new one on every
+    service. The one environment that is trusted is a grant's, which the broker
+    filled from the store a moment ago.
+
+    Three reasons it may not be readable, and they are said apart: not in the
+    store, refused by policy, or sealed with the vault shut. On a machine that
+    seals reads, the command re-runs itself under a grant for this one key —
+    the way `sync` does — and `code` is that run's exit status.
+    """
+    if os.environ.get("PASSBOOK_GRANT") and os.environ.get(key):
+        return os.environ[key], None
+    _use_broker_for_sealed_values(app, f"push {key} to the services that hold it", (key,))
+    value = ""
+    for path in passbook._scoped_paths():
+        value = passbook._read(path).get(key, value)
+    if value:
+        return value, None
+    if key not in set(passbook.key_names()):
+        return "", _fail(f"{key} is not in this store, so there is nothing to push.",
+                         f"Add it:  passbook add {key}")
+    refused = _refusals([key], app)
+    if key in refused:
+        return "", _fail(f"Refused: {key} — {refused[key]}")
+    if rerun and not os.environ.get("PASSBOOK_GRANT"):
+        again = _rerun_under_grant(app, f"push {key} to the services that hold it", keys=[key])
+        if again is not None:
+            return "", again
+    return "", _fail(f"{key} is in this store, but encrypted and the vault is shut.",
+                     "Sign in to push it:  passbook signin")
+
+
+def _record_sinks(sinks, places=(), *, quiet: bool = False) -> None:
+    """Write down where a successful command just put keys. Never fails the run:
+    the command already did its job, and the record is the extra."""
+    import passbook_services as services
+    import passbook_sinks
+
+    try:
+        if sinks:
+            registry = services.read()
+            for sink in sinks:
+                registry = services.attach(
+                    sink["key"], sink["service"], sink["command"], stdin=sink["stdin"],
+                    cwd=sink.get("cwd", ""), registry=registry, source=sink.get("source", "run"),
+                    extra=passbook_sinks.binding_fields(sink))
+                registry = services.record(sink["key"], sink["service"], ok=True,
+                                           registry=registry)
+            services.write(registry)
+        if places:
+            record = services.read_places()
+            for key, where, note in places:
+                record = services.add_place(key, where, note=note, record=record,
+                                            source="passbook run")
+            services.write_places(record)
+    except services.ServiceError as error:
+        print(f"passbook: not recorded — {error}", file=sys.stderr)
+        return
+    if quiet:
+        return
+    for sink in sinks:
+        print(f"passbook: recorded {sink['key']} on {sink['service']}; a rotation pushes "
+              f"there too (passbook services list {sink['key']})", file=sys.stderr)
+        if sink.get("warning"):
+            print(f"passbook: note — {sink['warning']}", file=sys.stderr)
+    for key, where, _ in places:
+        print(f"passbook: noted that {key} lives in {where}", file=sys.stderr)
+
+
+def _run_recording_plan(command: list[str], args: argparse.Namespace):
+    """What this run should record if it succeeds: (sinks, places), or None.
+
+    None inside a push (`PASSBOOK_SERVICE` is set): that command is replaying a
+    record, and re-recording it from there would only echo it.
+    """
+    if os.environ.get("PASSBOOK_SERVICE"):
+        return None
+    try:
+        import passbook_services as services
+        import passbook_sinks
+    except ImportError:  # optional, like every module beside passbook.py
+        return None
+
+    only = list(dict.fromkeys(getattr(args, "only", None) or []))
+    used_in = str(getattr(args, "used_in", "") or "").strip()
+    push_command = str(getattr(args, "push_command", "") or "").strip()
+    sinks: list = []
+    places: list = []
+    if used_in:
+        if push_command:
+            services.check_service(used_in)
+            key = only[0]
+            if services.INTERPOLATION.search(push_command):
+                raise services.ServiceError(
+                    f"Do not interpolate the value into --push-command: say ${key}.")
+            sinks.append({"key": key, "kind": "custom", "service": used_in,
+                          "command": push_command, "stdin": bool(getattr(args, "push_stdin", False)),
+                          "cwd": os.getcwd(), "secretName": key, "nonSecret": False,
+                          "source": "passbook run --used-in"})
+        else:
+            for key in only:
+                places.append((key, used_in, str(getattr(args, "note", "") or "")))
+    found, notes = passbook_sinks.detect(command, only, cwd=os.getcwd())
+    if only:
+        taken = {(sink["key"], sink["service"]) for sink in sinks}
+        sinks.extend(sink for sink in found if (sink["key"], sink["service"]) not in taken)
+        if not used_in:
+            for note in notes:
+                print(f"passbook: {note}", file=sys.stderr)
+    elif found:
+        where = ", ".join(sink["service"] for sink in found[:3])
+        print(f"passbook: this puts a secret on {where}. Name the key with --only KEY and "
+              "PassBook will remember it went there.", file=sys.stderr)
+    return (sinks, places) if (sinks or places) else None
+
+
+def cmd_push(args: argparse.Namespace) -> int:
+    """Put a key on a service and remember that it is there.
+
+    `--to` names the service in a short form; the push is the same command
+    `passbook services` would record by hand, and it is recorded whether or not
+    it lands, so a failure is still on the list for `services retry`. Without
+    `--to`, the key goes everywhere it is already recorded.
+    """
+    import passbook_services as services
+    import passbook_sinks
+
+    key = args.key
+    who = caller("passbook-push", args)
+    if not args.to:
+        try:
+            items = services.bindings(key, services.read())
+        except services.ServiceError as error:
+            return _fail(str(error))
+        if not items:
+            return _fail(f"{key} is not recorded on any service yet.",
+                         f"Say where it goes:  passbook push {key} --to wrangler:WORKER\n"
+                         f"{passbook_sinks.SPEC_HELP}")
+        chosen = items
+    else:
+        try:
+            sinks = [passbook_sinks.parse_spec(spec, key, cwd=os.getcwd()) for spec in args.to]
+        except passbook_sinks.SinkError as error:
+            return _fail(str(error))
+        chosen = [{"service": sink["service"], "command": sink["command"], "stdin": sink["stdin"],
+                   "cwd": sink["cwd"], "warning": sink.get("warning", ""), "_sink": sink}
+                  for sink in sinks]
+    if args.dry_run:
+        print(f"would push {key} to {len(chosen)} service(s):")
+        for item in chosen:
+            print(f"  {item.get('service')}: {item.get('command')}"
+                  + ("   (value on stdin)" if item.get("stdin") else ""))
+        return 0
+    if key not in set(passbook.key_names()) and not os.environ.get("PASSBOOK_GRANT"):
+        return _fail(f"{key} is not in this store, so there is nothing to push.",
+                     f"Add it:  passbook add {key}")
+    value, stop = _value_for_push(key, who)
+    if stop is not None:
+        return stop
+    if args.to:
+        # Recorded before pushing, so a push that fails or is interrupted is
+        # still on the list that `services retry` works through.
+        try:
+            registry = services.read()
+            for item in chosen:
+                sink = item["_sink"]
+                registry = services.attach(key, sink["service"], sink["command"],
+                                           stdin=sink["stdin"], cwd=sink["cwd"],
+                                           registry=registry, source="passbook push",
+                                           extra=passbook_sinks.binding_fields(sink))
+            services.write(registry)
+        except services.ServiceError as error:
+            return _fail(str(error))
+        for item in chosen:
+            if item.get("warning"):
+                print(f"note: {item['service']}: {item['warning']}", file=sys.stderr)
+    print(f"pushing {key} to {len(chosen)} service(s)")
+    return _run_service_updates(key, value, chosen)
+
+
+def cmd_used_in(args: argparse.Namespace) -> int:
+    """Where a key lives that PassBook cannot push to, written down by hand.
+
+        passbook used-in KEY add "NYC Mac launchd plist" --note "restart after"
+        passbook used-in KEY remove "NYC Mac launchd plist"
+        passbook used-in [KEY] [list]
+    """
+    import passbook_services as services
+
+    words = list(args.words or [])
+    verbs = {"add", "remove", "rm", "list", "ls"}
+    if words and words[0] in verbs and len(words) > 1 and words[1] not in verbs:
+        words[0], words[1] = words[1], words[0]  # `used-in add KEY WHERE` reads the same
+    key = words[0] if words and words[0] not in verbs else ""
+    rest = words[1:] if key else words
+    verb = rest[0] if rest else "list"
+    where = " ".join(rest[1:]).strip()
+    try:
+        record = services.read_places()
+        registry = services.read()
+    except services.ServiceError as error:
+        return _fail(str(error))
+    if verb in {"add", "remove", "rm"}:
+        if not key or not where:
+            return _fail(f"Say which key and where:  passbook used-in KEY {verb} \"where it lives\"")
+        if verb == "add":
+            if key not in set(passbook.key_names()):
+                print(f"note: {key} is not in this store (yet); noted anyway.", file=sys.stderr)
+            try:
+                record = services.add_place(key, where, note=args.note or "", record=record)
+                services.write_places(record)
+            except services.ServiceError as error:
+                return _fail(str(error))
+            print(f"noted: {key} lives in {where}")
+            print(f"A rotation lists it as one to update by hand:  passbook rotate {key}")
+            return 0
+        try:
+            record, removed = services.remove_place(key, where, record=record)
+            if not removed:
+                return _fail(f"{key} has no place called {where!r}.",
+                             f"See them:  passbook used-in {key}")
+            services.write_places(record)
+        except services.ServiceError as error:
+            return _fail(str(error))
+        print(f"forgotten: {where} for {key}")
+        return 0
+    if verb not in {"list", "ls"}:
+        return _fail(f"Unknown action {verb!r}.",
+                     "Usage: passbook used-in [KEY] [add|remove|list] [\"where\"] [--note …]")
+    keys = [key] if key else sorted(set(services.keys_with_places(record))
+                                    | set(services.keys_with_bindings(registry)))
+    if args.json:
+        print(json.dumps({name: {"services": [
+            {field: item.get(field) for field in ("service", "kind", "lastStatus", "lastRunAt",
+                                                  "source")}
+            for item in services.bindings(name, registry)],
+            "places": services.places(name, record)} for name in keys}, indent=2))
+        return 0
+    if not keys:
+        print("Nothing is recorded yet.")
+        print("Pushes record themselves (passbook push KEY --to …, or passbook run --only KEY -- "
+              "wrangler secret put …).")
+        print("For anywhere else:  passbook used-in KEY add \"where it lives\"")
+        return 0
+    for name in keys:
+        items = services.bindings(name, registry)
+        spots = services.places(name, record)
+        print(f"{name}")
+        for item in items:
+            print(f"  pushed:  {item.get('service')}  ({item.get('lastStatus', 'never')})")
+        for line in _place_lines(spots):
+            print(line)
+        if not items and not spots:
+            print("  nothing recorded")
+    return 0
+
+
+def _footprint_lines(key: str) -> list[str]:
+    """Where a key has been sent, for `history` and `rotate`. Names only."""
+    try:
+        import passbook_services as services
+
+        items = services.bindings(key, services.read())
+        spots = services.places(key, services.read_places())
+    except Exception:  # noqa: BLE001 — history must not fail over the record
+        return []
+    out = []
+    for item in items:
+        status = str(item.get("lastStatus") or "never")
+        when = item.get("lastRunAt") or 0
+        stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(when)) if when else ""
+        out.append(f"  pushed to  {item.get('service', '')}  — last push {status}"
+                   + (f" {stamp}" if stamp else ""))
+    for item in spots:
+        out.append(f"  by hand    {item.get('where', '')}"
+                   + (f" — {item.get('note')}" if item.get("note") else ""))
+    return out
+
+
+def _rotation_table(results) -> None:
+    if not results:
+        return
+    width = max(len(str(entry["service"])) for entry in results)
+    print(f"\n  {'service':<{width}}  result")
+    for entry in results:
+        verdict = "ok" if entry["ok"] else f"FAILED — {entry['detail']}"
+        print(f"  {str(entry['service']):<{width}}  {verdict}")
+
+
+def cmd_rotate(args: argparse.Namespace) -> int:
+    """Replace a key, push it everywhere it lives, and keep the old one until
+    you say the new one works.
+
+        passbook rotate KEY              ask for the new value, replace, push
+        passbook rotate KEY --confirm    the new one works; drop the old one
+        passbook rotate KEY --rollback   put the old one back, and push that
+    """
+    import passbook_services as services
+
+    key = args.key
+    who = caller("passbook-rotate", args)
+    state = services.read_rotations()
+    pending = state.get(key)
+
+    if args.confirm:
+        if not pending:
+            print(f"No rotation of {key} is waiting to be confirmed.")
+            return 0
+        state.pop(key, None)
+        services.write_rotations(state)
+        print(f"confirmed: the previous value of {key} is no longer kept by PassBook.")
+        return 0
+
+    if args.rollback:
+        if not pending:
+            return _fail(f"No rotation of {key} is waiting, so there is nothing to roll back.")
+        if not pending.get("restored"):
+            if not _confirm_change("modify", [key], reason="roll back a rotation", app=who):
+                return 1
+            try:
+                result = passbook.set_values({key: pending["previous"]}, overwrite=True,
+                                             exact=True, path=Path(pending["path"]))
+            except (OSError, ValueError, KeyError) as error:
+                return _fail(f"Could not put the previous value back: {error}")
+            _record_write_age(result)
+            pending["restored"] = True
+            state[key] = pending
+            services.write_rotations(state)
+            print(f"restored: {key} is back to the value it had before "
+                  f"{time.strftime('%Y-%m-%d %H:%M', time.localtime(pending.get('startedAt', 0)))}")
+        # Every service that has been given a value since the rotation began,
+        # not only the ones the rotation itself reached: a `services retry` in
+        # between put the new value on the ones that failed first time.
+        started = float(pending.get("startedAt") or 0)
+        pushed = {name for name, ok in (pending.get("pushed") or {}).items() if ok}
+        items = [item for item in services.bindings(key)
+                 if item.get("service") in pushed
+                 or (str(item.get("lastStatus")) == "ok"
+                     and float(item.get("lastRunAt") or 0) >= started)]
+        pushed = sorted(str(item.get("service")) for item in items)
+        results: list = []
+        code = 0
+        if items and not args.no_push:
+            value, stop = _value_for_push(key, who)
+            if stop is not None:
+                return stop
+            print(f"putting the previous value back on {len(items)} service(s) that got the new one")
+            code = _run_service_updates(key, value, items, collected=results)
+            _rotation_table(results)
+        elif items:
+            print(f"Not pushed. These still hold the new value: {', '.join(pushed)}")
+            print(f"Push the restored one with:  passbook services update {key}")
+        if code == 0:
+            state = services.read_rotations()
+            state.pop(key, None)
+            services.write_rotations(state)
+        else:
+            sys.stdout.flush()
+            print(f"\nThe store is rolled back; {sum(not r['ok'] for r in results)} service(s) "
+                  f"did not take it. Retry:  passbook services retry {key}", file=sys.stderr)
+        return code
+
+    # ── a new rotation ──
+    if key not in set(passbook.key_names()):
+        return _fail(f"{key} is not in this store, so there is nothing to rotate.",
+                     f"Add it:  passbook add {key}")
+    if pending:
+        started = time.strftime("%Y-%m-%d %H:%M", time.localtime(pending.get("startedAt", 0)))
+        return _fail(f"A rotation of {key} from {started} is still open, and its previous "
+                     "value is the one being kept.",
+                     f"Finish it first:  passbook rotate {key} --confirm   "
+                     f"(or --rollback to undo it)")
+    target = passbook.target_path()
+    try:
+        on_disk = passbook.parse_env_text(target.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        on_disk = {}
+    if key not in on_disk:
+        return _fail(f"{key} comes from another store than the one this workspace writes to "
+                     f"({target}), so a rotation here would shadow it rather than replace it.",
+                     "Switch to that workspace first:  passbook workspace")
+    previous = on_disk[key]
+
+    if args.stdin:
+        fresh = sys.stdin.read().strip()
+    elif sys.stdin.isatty():
+        try:
+            fresh = hidden_input(f"New value for {key}: ").strip()
+            again = hidden_input("Again, to be sure: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print(file=sys.stderr)
+            return _fail("Cancelled; nothing was changed.")
+        if fresh != again:
+            return _fail("Those did not match; nothing was changed.")
+    else:
+        return _fail("No terminal to ask on.",
+                     f"Pipe the new value in:  … | passbook rotate {key} --stdin")
+    if not fresh:
+        return _fail("No new value given; nothing was changed.")
+    if fresh == previous:
+        return _fail(f"That is the value {key} already has; nothing was changed.")
+
+    try:
+        items = services.bindings(key)
+        spots = services.places(key)
+        chosen = services.select(items, args.only) if (args.only and items) else items
+    except services.ServiceError as error:
+        return _fail(str(error))
+
+    # Kept BEFORE the store changes, so there is no moment at which the old
+    # value exists nowhere.
+    state[key] = {"startedAt": time.time(), "path": str(target), "previous": previous,
+                  "previousSealed": previous.startswith("hive-sealed:"), "pushed": {},
+                  "restored": False}
+    services.write_rotations(state)
+    if not _confirm_change("modify", [key], reason="rotate a credential", app=who):
+        state.pop(key, None)
+        services.write_rotations(state)
+        return 1
+    try:
+        written = _write_values({key: fresh}, overwrite=True, app=who,
+                                interactive=sys.stdin.isatty() and not args.stdin)
+    except (passbook.ContainerisedHomeError, ValueError) as error:
+        written = None
+        print(str(error), file=sys.stderr)
+    if written is None:
+        state.pop(key, None)
+        services.write_rotations(state)
+        return 1
+    print(f"replaced: {key}")
+
+    results: list = []
+    code = 0
+    if chosen and not args.no_push:
+        print(f"pushing to {len(chosen)} service(s)")
+        code = _run_service_updates(key, fresh, chosen, collected=results)
+        state = services.read_rotations()
+        if key in state:
+            state[key]["pushed"] = {entry["service"]: bool(entry["ok"]) for entry in results}
+            services.write_rotations(state)
+        _rotation_table(results)
+    elif chosen:
+        print(f"Not pushed ({len(chosen)} service(s) still hold the old value). "
+              f"Push with:  passbook services update {key}")
+    else:
+        print(f"No service is recorded for {key}, so nothing was pushed.")
+        print(f"Record where it goes:  passbook push {key} --to …")
+    if spots:
+        print(f"\nUpdate these by hand — PassBook cannot reach them:")
+        for line in _place_lines(spots):
+            print(line)
+    kept = "encrypted, as the store holds it" if previous.startswith("hive-sealed:") else "as it was"
+    print(f"\nThe previous value is kept ({kept}) until you confirm the new one works:")
+    print(f"    passbook rotate {key} --confirm")
+    print(f"or undo the whole rotation:  passbook rotate {key} --rollback")
+    if code:
+        sys.stdout.flush()
+        print(f"\nSome services did not take it; retry them:  passbook services retry {key}",
+              file=sys.stderr)
+    return code
+
+
+def cmd_sink(args: argparse.Namespace) -> int:
+    """Pushes that no installed tool can do by name. Used by recorded commands.
+
+    `cf-secrets-store`: the Cloudflare API edits a Secrets Store secret by id
+    and wrangler's `update` wants the id too, so there is no single command to
+    replay. This looks the name up and creates or replaces it. The value comes
+    from `$PASSBOOK_KEY`'s variable (set by a push), else stdin.
+    """
+    import passbook_sinks
+
+    if args.sink_kind != "cf-secrets-store":
+        return _fail(f"Unknown sink {args.sink_kind!r}.")
+    source = os.environ.get("PASSBOOK_KEY", "")
+    value = os.environ.get(source, "") if source else ""
+    if not value and not sys.stdin.isatty():
+        value = sys.stdin.read().strip()
+    if not value:
+        return _fail("No value to push: run this through `passbook push`, or pipe the value in.")
+    token = os.environ.get(args.token_key, "")
+    account = os.environ.get(args.account_key, "")
+    if not token or not account:
+        missing = [name for name, got in ((args.token_key, token), (args.account_key, account))
+                   if not got]
+        return _fail(f"Needs {', '.join(missing)} in the environment.",
+                     f"Run it under:  passbook run --only {args.token_key} --only "
+                     f"{args.account_key} -- passbook sink …")
+    scopes = [part.strip() for part in (args.scopes or "workers").split(",") if part.strip()]
+    ok, detail = passbook_sinks.cf_store_put(args.store, args.name, value, account=account,
+                                             token=token, scopes=scopes)
+    import passbook_services
+
+    detail = passbook_services.redact(detail, value)
+    if not ok:
+        return _fail(f"Secrets Store: {detail}")
+    print(f"Secrets Store: {args.name} {detail}")
+    return 0
+
+
+def _sink_help() -> str:
+    try:
+        import passbook_sinks
+
+        return passbook_sinks.SPEC_HELP
+    except ImportError:
+        return ""
 
 
 def _standing_source(name: str) -> tuple[str, str]:
@@ -1011,7 +1575,7 @@ def _sealed_run(command: list[str], who: str, args: argparse.Namespace) -> int |
     return int(answer.get("exit_code") or 0)
 
 
-def _rerun_under_grant(app: str, reason: str) -> int | None:
+def _rerun_under_grant(app: str, reason: str, keys: Iterable[str] | None = None) -> int | None:
     """Re-run this exact command as a child the broker started, holding values.
 
     Replication is the one job that genuinely needs plaintext: copying a key to
@@ -1041,11 +1605,16 @@ def _rerun_under_grant(app: str, reason: str) -> int | None:
     # otherwise the module, which works when PassBook is running as a library
     # or from `python -c` and `sys.argv[0]` is not a program at all.
     argv0 = sys.argv[0] if sys.argv[0] and os.access(sys.argv[0], os.X_OK) else ""
-    command = ([argv0, *sys.argv[1:]] if argv0
-               else [sys.executable, "-m", "passbook_cli", *sys.argv[1:]])
+    if argv0.endswith(".py"):
+        # The module file itself, run from a checkout: executable, but with no
+        # interpreter line, so exec'ing it fails as "Exec format error".
+        command = [sys.executable, argv0, *sys.argv[1:]]
+    else:
+        command = ([argv0, *sys.argv[1:]] if argv0
+                   else [sys.executable, "-m", "passbook_cli", *sys.argv[1:]])
     answer = passbook_broker.spawn_streaming(
-        command, passbook.key_names(), app=app, reason=reason,
-        project=passbook.project())
+        command, list(keys) if keys is not None else passbook.key_names(), app=app,
+        reason=reason, project=passbook.project())
     if answer is None:
         return _fail("The broker did not answer.", "Check it:  passbook broker start")
     if not answer.get("ok"):
@@ -1061,8 +1630,23 @@ def cmd_run(args: argparse.Namespace) -> int:
     if not command:
         return _fail("Nothing to run.", "Usage: passbook-run -- your-command --flags")
     who = caller("passbook-run", args)
+    # Where this command is about to put a key, worked out before it runs and
+    # written down only if it succeeds. `--used-in` says it for a command that
+    # cannot be read (a script); a recognised one says it for itself.
+    if getattr(args, "used_in", "") and not args.only:
+        return _fail("--used-in needs --only KEY, to say which key lives there.")
+    if getattr(args, "push_command", "") and not getattr(args, "used_in", ""):
+        return _fail("--push-command needs --used-in, to name the service it pushes to.")
+    if getattr(args, "push_command", "") and len(set(args.only)) != 1:
+        return _fail("--push-command pushes one key; give exactly one --only KEY.")
+    try:
+        plan = _run_recording_plan(command, args)
+    except Exception as error:  # noqa: BLE001 — a bad label fails before anything runs
+        return _fail(str(error))
     sealed = _sealed_run(command, who, args)
     if sealed is not None:
+        if plan and sealed == 0:
+            _record_sinks(*plan)
         return sealed
     _use_broker_for_sealed_values(who, f"run {Path(command[0]).name}", args.only or ())
     child = dict(_store_values())
@@ -1101,6 +1685,20 @@ def cmd_run(args: argparse.Namespace) -> int:
     # exiting, so this process returns before the child has written anything
     # and whoever captured our output gets an empty string and a success code.
     # Wait for it instead, and hand its exit code back as our own.
+    #
+    # A run with something to record waits too, everywhere: an exec leaves
+    # nobody behind to see the exit status, and a push that failed must not be
+    # recorded as a service that holds the key.
+    if plan:
+        try:
+            code = subprocess.run(command, env=child).returncode
+        except FileNotFoundError:
+            return _fail(f"{command[0]}: command not found")
+        except KeyboardInterrupt:
+            return 130
+        if code == 0:
+            _record_sinks(*plan)
+        return code
     if os.name == "nt":
         try:
             return subprocess.run(command, env=child).returncode
@@ -4484,7 +5082,18 @@ def cmd_history(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(rows, indent=2))
         return 0
+    # Where the key has been sent belongs to its history as much as who read
+    # it: a rotation that forgets one of these leaves a dead copy running.
+    footprint = _footprint_lines(args.key)
+    if footprint:
+        print(f"Where {args.key} lives:")
+        for line in footprint:
+            print(line)
+        print()
     if not rows:
+        if footprint:
+            print(f"No reads or writes of {args.key} are recorded yet.")
+            return 0
         return _fail(f"Nothing recorded for {args.key} yet.")
     for row in rows:
         flag = "" if row["granted"] else "  DENIED"
@@ -5685,6 +6294,15 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--keep", action="append", metavar="NAME", default=[],
                      help="this name is MY configuration, not a credential: do not "
                           "let a stored value of the same name replace it; repeatable")
+    run.add_argument("--used-in", dest="used_in", default="", metavar="WHERE",
+                     help="record that the --only key(s) live here once the command "
+                          "succeeds; for commands PassBook cannot read for itself")
+    run.add_argument("--push-command", dest="push_command", default="", metavar="CMD",
+                     help="with --used-in: how to push the key there again on rotation "
+                          "(the value is in $KEY, never on the command line)")
+    run.add_argument("--push-stdin", dest="push_stdin", action="store_true",
+                     help="with --push-command: also give it the value on stdin")
+    run.add_argument("--note", default="", help="with --used-in: a note kept beside it")
     run.add_argument("command", nargs=argparse.REMAINDER)
     run.set_defaults(func=cmd_run)
 
@@ -5867,6 +6485,54 @@ def build_parser() -> argparse.ArgumentParser:
         "retry", help="push again to the services whose last push failed")
     services_retry.add_argument("key", nargs="?", default="")
     services_retry.set_defaults(json=False, func=cmd_services_retry)
+
+    push_cmd = subs.add_parser(
+        "push", help="put a key on a service (Worker, GitHub, Vercel, Fly…) and remember it",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="sinks for --to:\n" + _sink_help())
+    push_cmd.add_argument("key")
+    push_cmd.add_argument("--to", action="append", default=[], metavar="SINK",
+                          help="where to put it; repeatable. Omit to push everywhere it "
+                               "is already recorded")
+    push_cmd.add_argument("--dry-run", action="store_true", help="show the commands; run nothing")
+    push_cmd.add_argument("--app", default="", help="who is asking; recorded")
+    push_cmd.set_defaults(func=cmd_push)
+
+    used_in_cmd = subs.add_parser(
+        "used-in", help="places a key lives that PassBook cannot push to, noted by hand",
+        description="passbook used-in KEY add \"where\" [--note …] | "
+                    "passbook used-in KEY remove \"where\" | passbook used-in [KEY] [list]")
+    used_in_cmd.add_argument("words", nargs="*", metavar="KEY add|remove|list WHERE")
+    used_in_cmd.add_argument("--note", default="", help="kept beside the place")
+    used_in_cmd.add_argument("--json", action="store_true")
+    used_in_cmd.set_defaults(func=cmd_used_in)
+
+    rotate_cmd = subs.add_parser(
+        "rotate", help="replace a key, push it everywhere it lives, keep the old one until "
+                       "you confirm")
+    rotate_cmd.add_argument("key")
+    rotate_cmd.add_argument("--stdin", action="store_true", help="read the new value from stdin")
+    rotate_cmd.add_argument("--confirm", action="store_true",
+                            help="the new value works: stop keeping the previous one")
+    rotate_cmd.add_argument("--rollback", action="store_true",
+                            help="put the previous value back, and push it to the services "
+                                 "that got the new one")
+    rotate_cmd.add_argument("--no-push", dest="no_push", action="store_true",
+                            help="change the store only; push later with services update")
+    rotate_cmd.add_argument("--only", default="",
+                            help="push to these services only: numbers or names, e.g. 1,3")
+    rotate_cmd.add_argument("--app", default="", help="who is asking; recorded")
+    rotate_cmd.set_defaults(func=cmd_rotate)
+
+    sink_cmd = subs.add_parser(
+        "sink", help="a push no installed tool can do by name (used by recorded commands)")
+    sink_cmd.add_argument("sink_kind", choices=["cf-secrets-store"])
+    sink_cmd.add_argument("store", help="the Secrets Store id")
+    sink_cmd.add_argument("name", help="the secret's name in that store")
+    sink_cmd.add_argument("--scopes", default="workers", help="for a new secret; comma-separated")
+    sink_cmd.add_argument("--token-key", dest="token_key", default="CLOUDFLARE_API_TOKEN")
+    sink_cmd.add_argument("--account-key", dest="account_key", default="CLOUDFLARE_ACCOUNT_ID")
+    sink_cmd.set_defaults(func=cmd_sink)
 
     standing_parser = subs.add_parser(
         "standing", help="keys an app may use while the vault is locked")

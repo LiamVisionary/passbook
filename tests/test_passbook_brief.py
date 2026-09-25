@@ -168,8 +168,18 @@ def test_the_brief_points_at_the_mcp_server():
 
 def test_the_brief_is_short_enough_to_carry_everywhere():
     """It is prepended to every prompt in every session of every runtime, so
-    length is a running cost rather than a one-off."""
-    assert len(brief.block()) < 2500, len(brief.block())
+    length is a running cost rather than a one-off.
+
+    Raised from 2500 in 1.9.0 for one paragraph that earns it: agents were
+    listing process environments to debug, and `passbook run` puts secrets in
+    exactly those."""
+    assert len(brief.block()) < 2750, len(brief.block())
+
+
+def test_the_brief_forbids_listing_process_environments():
+    text = brief.block()
+    for form in ("ps e", "ps -E", "ps eww", "/proc/*/environ", "pgrep -f"):
+        assert form in text, form
 
 
 # ── through the command line ────────────────────────────────────────────────

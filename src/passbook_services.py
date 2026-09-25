@@ -33,14 +33,31 @@ import os
 import re
 import subprocess
 import time
+from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 REGISTRY_KEY = "PASSBOOK_SERVICE_BINDINGS"
+#: Places a key lives that PassBook cannot push to: "the NYC Mac's launchd
+#: plist", "GitHub Actions in repo X". A separate key rather than a field of the
+#: registry, because a machine still on an older PassBook rewrites the registry
+#: with only the fields it knows and would silently drop these.
+USED_IN_KEY = "PASSBOOK_USED_IN"
+#: Both are a map of where keys went — names and commands, never a value — and
+#: stay readable in a sealed store, the way `NEXT_PUBLIC_*` does. Sealed, the
+#: CLI could not read the record, would take it for empty, and the next attach
+#: would write a one-entry record over the whole thing.
+METADATA_KEYS = (REGISTRY_KEY, USED_IN_KEY)
 VERSION = 1
 DEFAULT_TIMEOUT = 180.0
+ROTATIONS_FILENAME = "rotations.json"
 
-#: A service name is a label, not a path or a shell fragment.
-SERVICE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$")
+#: A service name is a label, not a path or a shell fragment. `:` `/` `@` are
+#: allowed so a recorded service can say what it is (`worker:api`,
+#: `github:owner/repo@production`); a leading slash or dot, `..`, and anything
+#: a shell would act on are not.
+SERVICE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._:/@+-]{0,95}$")
+#: Where a key lives, said by a person. Free text on one line.
+PLACE = re.compile(r"^[^\x00-\x1f\x7f]{1,200}$")
 #: A store key, matching what `passbook add` accepts.
 KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 #: A command that writes the value into itself would put the secret on a command
@@ -52,6 +69,14 @@ Binding = dict[str, Any]
 
 class ServiceError(ValueError):
     """Something about a binding is wrong. The message is for a person."""
+
+
+class RecordLocked(ServiceError):
+    """The record is encrypted in the store and this process cannot open it.
+
+    Raised rather than reading as empty: an empty read followed by a write is
+    how a whole record gets replaced by the one entry just added.
+    """
 
 
 # ── the record ─────────────────────────────────────────────────────────────
@@ -97,16 +122,63 @@ def dump(registry: Mapping[str, Any]) -> str:
                       separators=(",", ":"), sort_keys=True)
 
 
-def read(*, environ: Mapping[str, str] | None = None) -> dict[str, Any]:
+def _stored(name: str, *, environ: Mapping[str, str] | None = None) -> str | None:
+    """The record's text as the STORE holds it. None when there is none.
+
+    Read from the store files, never from `passbook.load()`: that merges the
+    process environment over the store, and a process started by `passbook run`
+    carries the record as it was at launch. Reading that, adding one entry and
+    writing it back undid every change made since the process started.
+    """
     import passbook
 
-    return parse(passbook.load(environ=environ).get(REGISTRY_KEY))
+    found: str | None = None
+    for path in passbook._scoped_paths(environ):
+        try:
+            raw = passbook.parse_env_text(Path(path).read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError):
+            continue
+        if name in raw:
+            found = raw[name]
+    if found is None or not found.startswith("hive-sealed:"):
+        return found
+    opened = passbook._unseal({name: found}).get(name)
+    if opened:
+        return opened
+    raise RecordLocked(
+        f"The record of where keys are used ({name}) is encrypted in this store, and "
+        "this process cannot open it, so nothing was changed.\n"
+        f"It holds service names and commands, never a value. Leave it readable with:\n"
+        f"    passbook unseal --only {name}")
+
+
+def _write_text(name: str, text: str) -> None:
+    """Write one metadata key, readable, and date it so sync can replicate it.
+
+    `set_values` alone recorded no age, and sync never overwrites a copy whose
+    age it does not know: the first version of the record reached other
+    machines and no later change ever did.
+    """
+    import passbook
+
+    _stored(name)  # refuse to overwrite a record this process cannot read
+    result = passbook.set_values({name: text}, overwrite=True)
+    changed = list(result.get("added", [])) + list(result.get("updated", []))
+    if changed:
+        try:
+            import passbook_sync
+
+            passbook_sync.touch_meta(Path(result["path"]), changed)
+        except (ImportError, OSError, ValueError):
+            pass
+
+
+def read(*, environ: Mapping[str, str] | None = None) -> dict[str, Any]:
+    return parse(_stored(REGISTRY_KEY, environ=environ))
 
 
 def write(registry: Mapping[str, Any], *, app: str = "passbook-services") -> None:
-    import passbook
-
-    passbook.set_values({REGISTRY_KEY: dump(registry)}, overwrite=True)
+    _write_text(REGISTRY_KEY, dump(registry))
     del app  # recorded by the store itself; named here for callers' clarity
 
 
@@ -122,17 +194,26 @@ def keys_with_bindings(registry: Mapping[str, Any] | None = None) -> list[str]:
 
 # ── changing it ────────────────────────────────────────────────────────────
 
+def check_service(service: str) -> None:
+    if not SERVICE.match(service or "") or ".." in service:
+        raise ServiceError("A service name is letters, digits, spaces and . _ - : / @ +, "
+                           "starting with a letter or digit.")
+
+
 def attach(key: str, service: str, command: str, *, stdin: bool = False, cwd: str = "",
-           registry: Mapping[str, Any] | None = None) -> dict[str, Any]:
+           registry: Mapping[str, Any] | None = None, source: str = "attach",
+           extra: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Record that `service` holds `key`, and how to put it there again.
 
     Replaces an existing binding with the same service name, so re-running this
     with a corrected command is the way to fix one rather than a second entry.
+    A binding whose last push FAILED keeps that status through the correction:
+    the service is still on the old value, and `retry` is how it gets the new
+    one. Resetting it to "never pushed" made `retry` report nothing outstanding.
     """
     if not KEY.match(key or ""):
         raise ServiceError(f"{key!r} is not a key name.")
-    if not SERVICE.match(service or ""):
-        raise ServiceError("A service name is letters, digits, spaces, dot, dash or underscore.")
+    check_service(service)
     command = (command or "").strip()
     if not command:
         raise ServiceError("Give the command that puts the key on that service.")
@@ -142,9 +223,11 @@ def attach(key: str, service: str, command: str, *, stdin: bool = False, cwd: st
             f"The command runs with ${key} in its environment, and with --stdin it also "
             "receives the value on stdin.")
     working = parse(dump(registry if registry is not None else read()))
+    previous = [item for item in working["bindings"].get(key, [])
+                if str(item.get("service")) == service]
     items = [item for item in working["bindings"].get(key, [])
              if str(item.get("service")) != service]
-    items.append({
+    entry = {
         "service": service,
         "command": command,
         "stdin": bool(stdin),
@@ -153,7 +236,15 @@ def attach(key: str, service: str, command: str, *, stdin: bool = False, cwd: st
         "lastRunAt": 0.0,
         "lastStatus": "never",
         "lastError": "",
-    })
+        "source": str(source or "attach"),
+    }
+    if previous and str(previous[0].get("lastStatus")) == "failed":
+        for field in ("addedAt", "lastRunAt", "lastStatus", "lastError"):
+            entry[field] = previous[0].get(field, entry[field])
+    for field, value in (extra or {}).items():
+        if field not in entry:
+            entry[field] = value
+    items.append(entry)
     working["bindings"][key] = items
     return working
 
@@ -254,11 +345,27 @@ def update(key: str, value: str, chosen: Iterable[Mapping[str, Any]], *,
     for binding in chosen:
         service = str(binding.get("service", ""))
         ok, detail = run_binding(key, value, binding, timeout=timeout, runner=runner)
+        _stamp_push(key, service, ok)
         entry = {"service": service, "ok": ok, "detail": detail}
         results.append(entry)
         if on_result:
             on_result(entry)
     return results
+
+
+def _stamp_push(key: str, service: str, ok: bool) -> None:
+    """A push is a use of the key, and belongs in its history beside the reads.
+
+    `use`, not `read`: the value went to a service's command, not to whoever
+    asked for the push.
+    """
+    try:
+        import passbook_stamp
+
+        passbook_stamp.stamp(op="use", keys=[key], app="passbook-push",
+                             reason=f"pushed to {service}" + ("" if ok else " (failed)"))
+    except Exception:  # noqa: BLE001 — a missing ledger must not fail a push
+        pass
 
 
 def select(items: list[Binding], choice: str) -> list[Binding]:
@@ -290,3 +397,117 @@ def select(items: list[Binding], choice: str) -> list[Binding]:
     if not picked:
         raise ServiceError("Nothing was picked.")
     return picked
+
+
+# ── places a key lives that nothing can push to ────────────────────────────
+
+def parse_places(raw: str | None) -> dict[str, Any]:
+    blank = {"version": VERSION, "places": {}}
+    if not raw:
+        return blank
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return blank
+    if not isinstance(data, dict) or not isinstance(data.get("places"), dict):
+        return blank
+    clean: dict[str, list[dict[str, Any]]] = {}
+    for key, items in data["places"].items():
+        if isinstance(key, str) and isinstance(items, list):
+            kept = [item for item in items
+                    if isinstance(item, dict) and isinstance(item.get("where"), str)]
+            if kept:
+                clean[key] = kept
+    return {"version": VERSION, "places": clean}
+
+
+def dump_places(record: Mapping[str, Any]) -> str:
+    places = {key: sorted(items, key=lambda item: str(item.get("where", "")).lower())
+              for key, items in sorted(record.get("places", {}).items()) if items}
+    return json.dumps({"version": VERSION, "places": places}, separators=(",", ":"), sort_keys=True)
+
+
+def read_places(*, environ: Mapping[str, str] | None = None) -> dict[str, Any]:
+    return parse_places(_stored(USED_IN_KEY, environ=environ))
+
+
+def write_places(record: Mapping[str, Any]) -> None:
+    _write_text(USED_IN_KEY, dump_places(record))
+
+
+def places(key: str, record: Mapping[str, Any] | None = None) -> list[dict[str, Any]]:
+    source = record if record is not None else read_places()
+    return list(source.get("places", {}).get(key, []))
+
+
+def add_place(key: str, where: str, *, note: str = "", source: str = "by hand",
+              record: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Note that `key` also lives at `where`. The same place twice updates it."""
+    if not KEY.match(key or ""):
+        raise ServiceError(f"{key!r} is not a key name.")
+    where = str(where or "").strip()
+    note = str(note or "").strip()
+    if not PLACE.match(where):
+        raise ServiceError("Say where, on one line, in at most 200 characters.")
+    if note and not PLACE.match(note):
+        raise ServiceError("A note is one line of at most 200 characters.")
+    working = parse_places(dump_places(record if record is not None else read_places()))
+    items = [item for item in working["places"].get(key, [])
+             if str(item.get("where", "")).lower() != where.lower()]
+    items.append({"where": where, "note": note, "addedAt": time.time(), "source": source})
+    working["places"][key] = items
+    return working
+
+
+def remove_place(key: str, where: str, record: Mapping[str, Any] | None = None) -> tuple[dict[str, Any], bool]:
+    working = parse_places(dump_places(record if record is not None else read_places()))
+    items = working["places"].get(key, [])
+    kept = [item for item in items if str(item.get("where", "")).lower() != str(where).strip().lower()]
+    if len(kept) == len(items):
+        return working, False
+    if kept:
+        working["places"][key] = kept
+    else:
+        working["places"].pop(key, None)
+    return working, True
+
+
+def keys_with_places(record: Mapping[str, Any] | None = None) -> list[str]:
+    source = record if record is not None else read_places()
+    return sorted(key for key, items in source.get("places", {}).items() if items)
+
+
+# ── a rotation in progress ─────────────────────────────────────────────────
+#
+# The previous value is kept exactly as the store held it: ciphertext when the
+# store is sealed, so keeping it recoverable does not leave a readable copy of
+# a live credential lying beside an encrypted store. Local to this machine and
+# owner-only, like the store; it is never synced, because a rollback is a
+# decision about this machine's copy.
+
+def rotations_path() -> Path:
+    import passbook
+
+    return Path(passbook.root()) / ROTATIONS_FILENAME
+
+
+def read_rotations() -> dict[str, Any]:
+    try:
+        data = json.loads(rotations_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def write_rotations(state: Mapping[str, Any]) -> None:
+    path = rotations_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".tmp")
+    descriptor = os.open(str(temporary), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        json.dump(dict(state), handle, indent=2, sort_keys=True)
+    os.replace(temporary, path)
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass

@@ -231,6 +231,41 @@ TOOLS = [
         },
     },
     {
+        "name": "list_services",
+        "title": "Where a credential has been sent",
+        "description": (
+            "Which services hold each credential (a Worker, a GitHub secret, a Vercel "
+            "env var…), how it was put there and whether the last push landed, plus "
+            "places noted by hand. Names and commands only, never values. Check this "
+            "before rotating a key, so no copy is left on the old value."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "One credential; omit for all."},
+            },
+        },
+    },
+    {
+        "name": "record_used_in",
+        "title": "Note where a credential lives",
+        "description": (
+            "Record that a credential is also used somewhere PassBook cannot push to "
+            "— a launchd plist on another machine, a CI secret set by hand — so the "
+            "owner is told to update it when the key is rotated. Takes a place, not a "
+            "command; pushes are recorded by `passbook run` and `passbook push`."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "The credential's name."},
+                "where": {"type": "string", "description": "Where it lives, one line."},
+                "note": {"type": "string", "description": "Optional, one line."},
+            },
+            "required": ["name", "where"],
+        },
+    },
+    {
         "name": "vault_status",
         "title": "Is the store unlocked",
         "description": (
@@ -442,7 +477,12 @@ def _tool_run_with_credentials(arguments: Mapping[str, Any],
         "reason": str(arguments.get("reason") or "")[:200],
         "project": passbook.project(), "workspace": passbook.workspace() or "main",
     }, root=state.get("root")) or {}
-    return answer or {"ok": False, "error": "the broker did not answer"}
+    if not answer:
+        return {"ok": False, "error": "the broker did not answer"}
+    recorded = _record_run_sinks(command, keys, str(arguments.get("cwd") or ""), answer)
+    if recorded:
+        answer = {**answer, "recordedServices": recorded}
+    return answer
 
 
 def _tool_proxy_request(arguments: Mapping[str, Any],
@@ -573,6 +613,72 @@ def _tool_get_oauth_token(arguments: Mapping[str, Any], state: Mapping[str, Any]
             "state": shape["state"], "account": values.get(keys.get("account", ""), "")}
 
 
+def _tool_list_services(arguments: Mapping[str, Any], state: Mapping[str, Any]) -> dict[str, Any]:
+    import passbook_services as services
+
+    try:
+        registry = services.read()
+        record = services.read_places()
+    except services.ServiceError as error:
+        return {"ok": False, "error": str(error)}
+    wanted = str(arguments.get("name") or "").strip()
+    names = [wanted] if wanted else sorted(set(services.keys_with_bindings(registry))
+                                           | set(services.keys_with_places(record)))
+    fields = ("service", "kind", "command", "stdin", "lastStatus", "lastRunAt", "lastError",
+              "source", "nonSecret")
+    return {"ok": True, "credentials": {
+        name: {"services": [{field: item.get(field) for field in fields if field in item}
+                            for item in services.bindings(name, registry)],
+               "usedIn": services.places(name, record)}
+        for name in names}}
+
+
+def _tool_record_used_in(arguments: Mapping[str, Any], state: Mapping[str, Any]) -> dict[str, Any]:
+    """A place, never a command. A command recorded here would run later, during
+    the owner's rotation, holding the NEW value — a way for an agent to collect
+    a credential it was never given. Places are only ever shown to a person."""
+    import passbook_services as services
+
+    name = str(arguments.get("name") or "").strip()
+    where = str(arguments.get("where") or "").strip()
+    try:
+        record = services.add_place(name, where, note=str(arguments.get("note") or ""),
+                                    source=f"mcp:{_client_name(state)}")
+        services.write_places(record)
+    except services.ServiceError as error:
+        return {"ok": False, "error": str(error)}
+    return {"ok": True, "name": name, "where": where}
+
+
+def _record_run_sinks(command: list[str], keys: list[str], cwd: str, answer: Mapping[str, Any]) -> list[str]:
+    """After a successful `run_with_credentials`, note where it put the keys.
+
+    The same recogniser `passbook run` uses, so a Worker secret an agent sets is
+    on the list the next rotation pushes to. The recorded command is PassBook's
+    own rebuild of a recognised shape, never the agent's text.
+    """
+    if not answer.get("ok") or int(answer.get("exit_code") or 0) != 0 or not keys:
+        return []
+    try:
+        import passbook_services as services
+        import passbook_sinks
+
+        sinks, _ = passbook_sinks.detect(command, keys, cwd=cwd or str(Path.cwd()))
+        if not sinks:
+            return []
+        registry = services.read()
+        for sink in sinks:
+            registry = services.attach(sink["key"], sink["service"], sink["command"],
+                                       stdin=sink["stdin"], cwd=sink.get("cwd", ""),
+                                       registry=registry, source="mcp run_with_credentials",
+                                       extra=passbook_sinks.binding_fields(sink))
+            registry = services.record(sink["key"], sink["service"], ok=True, registry=registry)
+        services.write(registry)
+        return [f"{sink['key']} → {sink['service']}" for sink in sinks]
+    except Exception:  # noqa: BLE001 — the command ran; the record is the extra
+        return []
+
+
 HANDLERS: dict[str, Callable[[Mapping[str, Any], Mapping[str, Any]], dict[str, Any]]] = {
     "list_credentials": _tool_list_credentials,
     "get_credential": _tool_get_credential,
@@ -582,6 +688,8 @@ HANDLERS: dict[str, Callable[[Mapping[str, Any], Mapping[str, Any]], dict[str, A
     "vault_status": _tool_vault_status,
     "list_sign_ins": _tool_list_sign_ins,
     "get_oauth_token": _tool_get_oauth_token,
+    "list_services": _tool_list_services,
+    "record_used_in": _tool_record_used_in,
 }
 
 

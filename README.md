@@ -41,6 +41,7 @@ you see here, you can do from a terminal.
 - [Signing in](#signing-in)
 - [Encryption](#encryption)
 - [Who can read what](#who-can-read-what)
+- [Where a key lives, and rotating it](#where-a-key-lives-and-rotating-it)
 - [Activity](#activity)
 - [Fleet replication](#fleet-replication)
 - [Devices](#devices)
@@ -367,6 +368,10 @@ it is leaving readable, and why, before it does anything.
 
 Add your own with `--skip`, for a feature flag some boot hook reads.
 
+PassBook's own record of where keys were sent (`PASSBOOK_SERVICE_BINDINGS`,
+`PASSBOOK_USED_IN`) is never sealed either. It holds service names and commands,
+never a value, and the commands that maintain it run without signing in.
+
 ### If you forget the password
 
 A vault wrapped by one password is one forgotten password away from gone.
@@ -576,6 +581,82 @@ is written until you answer, and two things count as no. **No broker running**
 refuses the change rather than letting it through, because a toggle whose
 enforcement disappears with a daemon is not a toggle. **Nobody answering** times
 out and the key is left alone.
+
+---
+
+## Where a key lives, and rotating it
+
+Replacing a key in the store is half a rotation. The copies on a Worker, in a
+GitHub secret, on Vercel or Fly keep the old value until someone pushes the new
+one to each of them. PassBook keeps the list of those copies next to the key,
+with the command that put each one there.
+
+**Pushes record themselves.** Put a key somewhere through PassBook and it is
+written down:
+
+```bash
+passbook push OPENAI_API_KEY --to wrangler:site-api --to gh:acme/app
+passbook run --only OPENAI_API_KEY -- sh -c 'printf %s "$OPENAI_API_KEY" | npx wrangler secret put OPENAI_API_KEY'
+```
+
+`run` recognises `wrangler secret put` (and `versions secret put`, `secret
+bulk`, `pages secret put`, `secrets-store secret create`), `gh secret set`,
+`gh variable set` (flagged: not secret), `vercel env add` and `fly secrets set`,
+directly or inside `sh -c`. It records only after the command exits 0, and only
+when it can tell which `--only` key went where. When it can't tell, it records
+nothing and says so. What it records is a command that pushes the value on stdin
+or in `$KEY`, never on the command line, even if yours used `--body "$KEY"`.
+The worker comes from `--name` or `wrangler.toml`, the repo from `--repo` or the
+git remote.
+
+For a script PassBook can't read, say it yourself:
+
+```bash
+passbook run --only KEY --used-in "deploy box" --push-command 'ssh box "cat > /etc/app/key"' --push-stdin -- ./deploy.sh
+```
+
+`passbook push --help` lists every `--to` form: `wrangler:WORKER[:NAME]`,
+`wrangler-pages:PROJECT`, `gh:OWNER/REPO`, `gh-env:OWNER/REPO:ENV`, `gh-org:ORG`,
+`gh-var:OWNER/REPO`, `vercel:ENVIRONMENT`, `fly:APP`,
+`cf-secrets-store:STORE_ID[:NAME]`. Cloudflare Secrets Store has no put-by-name
+command, so that one goes through `passbook sink cf-secrets-store`, which finds
+the secret by name over the API with `CLOUDFLARE_API_TOKEN` and
+`CLOUDFLARE_ACCOUNT_ID` from the store.
+
+**Places nothing can push to** are noted by hand, and show up in the same list:
+
+```bash
+passbook used-in OPENAI_API_KEY add "NYC Mac launchd plist" --note "restart the agent"
+passbook used-in OPENAI_API_KEY          # everything recorded for it
+passbook services list                   # every key, every service, every place
+passbook history OPENAI_API_KEY          # the same footprint, then who read it
+```
+
+**Rotating** uses all of it:
+
+```bash
+passbook rotate OPENAI_API_KEY           # asks for the new value twice, hidden
+passbook rotate OPENAI_API_KEY --confirm # the new one works; drop the old one
+passbook rotate OPENAI_API_KEY --rollback
+```
+
+`rotate` replaces the key, pushes it to every recorded service, prints a result
+per service, and lists the places you have to update by hand. The previous value
+stays recoverable until `--confirm`: it is kept in `rotations.json` beside the
+store, exactly as the store held it, so on an encrypted store it is ciphertext.
+`--rollback` puts it back and pushes it to every service that got the new one,
+including any you fixed with `passbook services retry` in between. A push that
+fails is kept as failed and `rotate` exits non-zero. `passbook services retry`
+works through the failed ones. Every push is a `use` row in the
+record, named after the service.
+
+On a machine that seals reads, a push can't read the value itself. It re-runs
+under a grant for that one key, the way replication does. The record is two
+store keys, `PASSBOOK_SERVICE_BINDINGS` and `PASSBOOK_USED_IN`. They hold names
+and commands, never values, so they replicate like any other key and stay
+readable when the store is sealed. Agents see the same record over MCP with
+`list_services`, and `record_used_in` lets them note a place, but never a
+command.
 
 ---
 
@@ -1251,6 +1332,8 @@ are the sort of promise that erodes one convenience at a time.
 | `passbook_oauth.py` | sign-ins that stay alive, renewed on read |
 | `passbook_broker.py` | one door for reads, and a record of them |
 | `passbook_stamp.py` | a tamper evident record of who read what |
+| `passbook_services.py` | where each key lives, and pushing it there again |
+| `passbook_sinks.py` | recognising a push in a command, and `--to` specs |
 | `passbook_link.py` | lending named keys to a second device |
 | `passbook_peer.py` | asking the kernel who is calling (macOS) |
 | `bin/passbook` | the command line |

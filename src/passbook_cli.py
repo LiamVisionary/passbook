@@ -178,7 +178,8 @@ def cmd_check(args: argparse.Namespace) -> int:
     held = set(passbook.key_names())
 
     refused = _refusals([k for k in args.keys if k in held], caller("passbook-check", args))
-    missing, locked, sealed_off = [], [], []
+    missing, locked, sealed_off, unavailable = [], [], [], []
+    transport = None
     for key in args.keys:
         value = values.get(key, "")
         if value and key not in refused:
@@ -199,6 +200,14 @@ def cmd_check(args: argparse.Namespace) -> int:
             if not args.quiet:
                 print(f"{key}: set, never printed here")
         elif key in held:
+            if transport is None:
+                import passbook_broker
+                transport = passbook_broker.vault_status()
+            if transport.get("status") == "unavailable":
+                unavailable.append(key)
+                if not args.quiet:
+                    print(f"{key}: present; cannot access PassBook from this process")
+                continue
             locked.append(key)
             if not args.quiet:
                 print(f"{key}: locked")
@@ -207,6 +216,9 @@ def cmd_check(args: argparse.Namespace) -> int:
             if not args.quiet:
                 print(f"{key}: missing")
 
+    if unavailable:
+        return _fail("Present, but their current availability could not be checked: " + ", ".join(unavailable),
+                     transport.get("error", "Check this process's access to PassBook."))
     if sealed_off and not missing and not locked and not refused:
         print(f"\nPresent and usable, never printed: {', '.join(sealed_off)}")
         print("Run what needs them:  passbook run --only "
@@ -2398,21 +2410,35 @@ def cmd_run(args: argparse.Namespace) -> int:
     # in, and every agent that hit it told its owner to sign in again.
     stored = passbook.key_names()
     store_locked = bool(stored) and not any(resolved.get(name) for name in stored)
+    held = set(stored)
+    shut = [name for name in args.only
+            if name in held and not resolved.get(name) and not os.environ.get(name)
+            and not _sealed_refusal([name])]
+    unavailable = False
+    if store_locked or shut:
+        # Empty values are not proof of a locked vault: this process may be
+        # unable to reach the broker. Read only its status, never another key;
+        # this diagnosis must not change the child's environment or authority.
+        import passbook_broker
+        unavailable = passbook_broker.vault_status().get("status") == "unavailable"
     if store_locked:
-        print("The credential store is encrypted and locked; running without it.", file=sys.stderr)
-        print("Sign in first:  passbook signin", file=sys.stderr)
+        if unavailable:
+            print("This process cannot access PassBook; running without the stored credentials.", file=sys.stderr)
+        else:
+            print("The credential store is encrypted and locked; running without it.", file=sys.stderr)
+            print("Sign in first:  passbook signin", file=sys.stderr)
     elif args.only:
-        held = set(stored)
         absent = [name for name in args.only if name not in held and not os.environ.get(name)]
         if absent:
-            print(f"Not in the store: {', '.join(absent)}. Nothing is locked; check the "
-                  "name with  passbook list", file=sys.stderr)
-        shut = [name for name in args.only
-                if name in held and not resolved.get(name) and not os.environ.get(name)
-                and not _sealed_refusal([name])]
+            detail = "Check the name" if unavailable else "Nothing is locked; check the name"
+            print(f"Not in the store: {', '.join(absent)}. {detail} with  passbook list", file=sys.stderr)
         if shut:
-            print(f"In the store but encrypted, and not readable here: {', '.join(shut)}. "
-                  "Sign in to read them:  passbook signin", file=sys.stderr)
+            if unavailable:
+                print(f"Present but this process cannot access PassBook: {', '.join(shut)}. "
+                      "Running without those stored credentials.", file=sys.stderr)
+            else:
+                print(f"In the store but encrypted, and not readable here: {', '.join(shut)}. "
+                      "Sign in to read them:  passbook signin", file=sys.stderr)
     child.update({key: value for key, value in os.environ.items() if value})
     # Hand the name down. Whatever this runs may call PassBook itself — a test
     # script asking for one key, a tool that shells out — and those reads belong
@@ -2604,7 +2630,7 @@ def cmd_status(args: argparse.Namespace) -> int:
             import passbook_broker
 
             live = passbook_broker.vault_status()
-            print(f"vault: {'open' if live.get('unlocked') else 'locked'}"
+            print(f"vault: {'unavailable to this process' if live.get('status') == 'unavailable' else 'open' if live.get('unlocked') else 'locked'}"
                   f" ({len(vault_state['profiles'])} profile"
                   f"{'' if len(vault_state['profiles']) == 1 else 's'})")
     else:
@@ -3166,8 +3192,10 @@ def cmd_vault(args: argparse.Namespace) -> int:
         live = passbook_broker.vault_status()
         answer = {
             "supported": state["supported"],
-            "running": bool(live.get("running")),
-            "unlocked": bool(live.get("unlocked")),
+            "running": live.get("running") if live.get("status") == "unavailable" else bool(live.get("running")),
+            "unlocked": live.get("unlocked") if live.get("status") == "unavailable" else bool(live.get("unlocked")),
+            "status": live.get("status", "open" if live.get("unlocked") else "locked"),
+            **({"error": live["error"]} if live.get("status") == "unavailable" else {}),
             "signed_in_profile": live.get("profile", ""),
             "factor": live.get("factor", ""),
             "expires_in": live.get("expires_in", 0),
@@ -3194,8 +3222,11 @@ def cmd_vault(args: argparse.Namespace) -> int:
         }
     if getattr(args, "json", False):
         print(json.dumps(answer, indent=2))
-        return 0
+        return 1 if answer.get("status") == "unavailable" else 0
     print(answer["detail"])
+    if answer.get("status") == "unavailable":
+        print(answer["error"])
+        return 1
     if answer.get("supported"):
         print("Vault is open." if answer["unlocked"] else "Vault is locked.")
     return 0

@@ -2123,7 +2123,8 @@ def _dial(root: Path | None, timeout: float):
         yield client
 
 
-def _ask(payload: Mapping[str, Any], *, root: Path | None = None, timeout: float | None = None):
+def _ask(payload: Mapping[str, Any], *, root: Path | None = None, timeout: float | None = None,
+         report_transport_error: bool = False):
     if timeout is None:
         timeout = REQUEST_TIMEOUT if payload.get("op") == "request" else CONNECT_TIMEOUT
     try:
@@ -2138,7 +2139,17 @@ def _ask(payload: Mapping[str, Any], *, root: Path | None = None, timeout: float
                 if b"\n" in chunk:
                     break
         return json.loads(b"".join(chunks).decode("utf-8").strip())
-    except (OSError, ValueError, UnicodeDecodeError):
+    except PermissionError:
+        if report_transport_error:
+            return {"ok": False, "status": "unavailable", "running": None, "unlocked": None,
+                    "error": "This process cannot access PassBook. Check its sandbox or system permissions; the vault's sign-in state is unknown."}
+        return None
+    except (TimeoutError, ValueError, UnicodeDecodeError):
+        if report_transport_error:
+            return {"ok": False, "status": "unavailable", "running": None, "unlocked": None,
+                    "error": "PassBook could not confirm its status. Try again from an accessible terminal."}
+        return None
+    except OSError:
         return None
 
 
@@ -2339,11 +2350,11 @@ def vault_status(*, root: Path | None = None, workspace: str = "") -> dict[str, 
     payload = {"op": "vault", "workspace": workspace or _here(root)}
     if workspace:
         payload["workspace"] = workspace
-    answer = _ask(payload, root=root)
+    answer = _ask(payload, root=root, report_transport_error=True)
     if answer is None:
         return {"ok": False, "running": False, "unlocked": False,
                 "error": "no broker is running"}
-    return {**answer, "running": True}
+    return answer if answer.get("status") == "unavailable" else {**answer, "running": True}
 
 
 # ── lifecycle ──────────────────────────────────────────────────────────────

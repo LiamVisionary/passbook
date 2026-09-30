@@ -4,6 +4,12 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+### 2026-09-27 12:32 +08:00 — Report blocked access accurately (Uncommitted)
+
+- `vault`, `status`, `check`, and `run` distinguish a process that cannot contact PassBook from a vault that is actually locked. A sandbox permission failure no longer tells an already signed-in user to sign in again.
+- Verification: reproduced the same open vault reporting locked inside the sandbox; 81 focused transport, grant, and vault-broker tests pass; the run-command regression group passes all30 tests. No credential access rules or running broker state change.
+- Intended commit: `fix: distinguish blocked broker access from a locked vault`.
+
 ## [1.10.2] — 2026-09-25
 
 ### A change reaches the other machines when it is made

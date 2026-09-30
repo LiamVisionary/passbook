@@ -161,6 +161,95 @@ def test_a_script_that_does_not_mention_the_key_is_not_a_push_of_it(tmp_path):
     assert found == []
 
 
+def test_a_key_that_only_logs_wrangler_in_is_not_the_secret_it_wrote(tmp_path):
+    """Shipped in 1.10.2, reproduced 2026-09-30: the admin key was copied into
+    CLOUDFLARE_API_TOKEN so wrangler could sign in, the secret's value came in
+    on stdin, and the run recorded the admin key on the Pages secret because
+    it was the only key the command mentioned. A rotation would then have
+    written the admin token into HIVEVERSE_EARLY_ACCESS_CODES."""
+    found, notes = sinks.detect(
+        ["sh", "-c", 'CLOUDFLARE_API_TOKEN="$CLOUDFLARE_INFRA_ADMIN_API_KEY" npx wrangler pages '
+                     'secret put HIVEVERSE_EARLY_ACCESS_CODES --project-name lv-hivemindos'],
+        ["CLOUDFLARE_INFRA_ADMIN_API_KEY", "CLOUDFLARE_ACCOUNT_ID"], cwd=str(tmp_path))
+    assert found == []
+    assert len(notes) == 1
+    assert '--used-in "pages:lv-hivemindos"' in notes[0]
+    assert "CLOUDFLARE_INFRA_ADMIN_API_KEY" in notes[0] and "login" in notes[0], \
+        "the hint says why the key it did see was not taken"
+
+
+def test_a_key_piped_into_a_secret_of_its_own_name_is_recorded(tmp_path):
+    sink = _one(["sh", "-c", 'printf %s "$FOO" | wrangler secret put FOO'], ["FOO"], tmp_path)
+    assert sink["key"] == "FOO" and sink["secretName"] == "FOO"
+
+
+@pytest.mark.parametrize("command, keys", [
+    (["wrangler", "secret", "put", "CLOUDFLARE_API_TOKEN", "--name", "w"], ["CLOUDFLARE_API_TOKEN"]),
+    (["sh", "-c", 'CLOUDFLARE_API_TOKEN="$ADMIN" wrangler secret put ADMIN --name w'], ["ADMIN"]),
+    (["sh", "-c", 'export CLOUDFLARE_API_TOKEN="$ADMIN"; wrangler secret put ADMIN --name w'],
+     ["ADMIN"]),
+    (["sh", "-c", 'GH_TOKEN="$ADMIN" gh secret set ADMIN --repo acme/app'], ["ADMIN"]),
+    (["sh", "-c", 'vercel env add ADMIN production --token "$ADMIN"'], ["ADMIN"]),
+])
+def test_a_login_named_like_the_secret_is_not_assumed_to_be_its_value(command, keys, tmp_path):
+    """The secret shares the key's name, but the tool signs in with the key and
+    the value comes from stdin nobody can see. It may be the same token or a
+    different one; that is the owner's call, so the run asks for --used-in."""
+    found, notes = sinks.detect(command, keys, cwd=str(tmp_path))
+    assert found == [] and "--used-in" in notes[0]
+
+
+def test_a_login_piped_in_as_the_value_is_recorded(tmp_path):
+    sink = _one(["sh", "-c", 'printf %s "$CLOUDFLARE_API_TOKEN" | '
+                             'wrangler secret put CLOUDFLARE_API_TOKEN --name w'],
+                ["CLOUDFLARE_API_TOKEN"], tmp_path)
+    assert sink["key"] == "CLOUDFLARE_API_TOKEN"
+
+
+def test_the_value_decides_not_the_name(tmp_path):
+    sink = _one(["sh", "-c", 'printf %s "$B" | wrangler secret put A --name w'], ["A", "B"], tmp_path)
+    assert sink["key"] == "B" and sink["service"] == "worker:w/A"
+    found, _ = sinks.detect(["sh", "-c", "echo literal | wrangler secret put A --name w"], ["A"],
+                            cwd=str(tmp_path))
+    assert found == [], "named after the key, but what went in was the literal"
+
+
+def test_a_key_mentioned_upstream_is_not_thereby_the_value(tmp_path):
+    found, notes = sinks.detect(
+        ["sh", "-c", 'curl -H "Authorization: Bearer $TOKEN" https://vault.example | '
+                     'wrangler secret put OTHER --name w'], ["TOKEN"], cwd=str(tmp_path))
+    assert found == [] and notes
+
+
+def test_one_key_handed_over_is_not_assumed_to_be_what_stdin_carried(tmp_path):
+    """A run handing over one key used to record it on whatever the command put,
+    since it was the only candidate. Nothing in the run puts it on stdin."""
+    for command in (["gh", "secret", "set", "OTHER", "--repo", "acme/app"],
+                    ["npx", "wrangler", "secret", "bulk", "--name", "w"],
+                    ["fly", "secrets", "import", "--app", "api"]):
+        found, notes = sinks.detect(command, ["API_KEY"], cwd=str(tmp_path))
+        assert found == [] and notes, command
+
+
+def test_a_here_string_is_the_value_and_a_file_is_not_known(tmp_path):
+    sink = _one(["sh", "-c", 'wrangler secret put OTHER --name w <<< "$API_KEY"'],
+                ["API_KEY"], tmp_path)
+    assert sink["key"] == "API_KEY" and sink["service"] == "worker:w/OTHER"
+    found, _ = sinks.detect(["sh", "-c", "wrangler secret put API_KEY --name w < ./api.key"],
+                            ["API_KEY"], cwd=str(tmp_path))
+    assert found == []
+
+
+def test_bulk_and_import_pair_each_name_with_the_key_that_fills_it(tmp_path):
+    bulk = _one(["sh", "-c", 'printf \'{"X":"%s"}\' "$A" | wrangler secret bulk --name w'],
+                ["A"], tmp_path)
+    assert (bulk["key"], bulk["secretName"]) == ("A", "X")
+    found, _ = sinks.detect(
+        ["sh", "-c", 'printf \'A=%s\\nB=%s\\n\' "$B" "$A" | fly secrets import --app api'],
+        ["A", "B"], cwd=str(tmp_path))
+    assert sorted((sink["secretName"], sink["key"]) for sink in found) == [("A", "B"), ("B", "A")]
+
+
 def test_ordinary_commands_are_not_sinks(tmp_path):
     for command in (["wrangler", "deploy"], ["gh", "pr", "list"], ["node", "server.js"],
                     ["sh", "-c", "wrangler secret list"], ["vercel", "env", "ls"]):

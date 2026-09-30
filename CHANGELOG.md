@@ -10,6 +10,34 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 - Verification: reproduced the same open vault reporting locked inside the sandbox; 81 focused transport, grant, and vault-broker tests pass; the run-command regression group passes all30 tests. No credential access rules or running broker state change.
 - Intended commit: `fix: distinguish blocked broker access from a locked vault`.
 
+### `passbook run` records a key only where its value went
+
+- **The false record.** `passbook run --only CLOUDFLARE_INFRA_ADMIN_API_KEY
+  --only CLOUDFLARE_ACCOUNT_ID -- sh -c 'CLOUDFLARE_API_TOKEN="$CLOUDFLARE_INFRA_ADMIN_API_KEY"
+  npx wrangler pages secret put HIVEVERSE_EARLY_ACCESS_CODES …'`, with an
+  access code on stdin, printed "recorded CLOUDFLARE_INFRA_ADMIN_API_KEY on
+  pages:lv-hivemindos/HIVEVERSE_EARLY_ACCESS_CODES". The admin key only logged
+  wrangler in. It was recorded because it was the only key the command
+  mentioned, and `passbook rotate` would have pushed the admin token into the
+  access-code secret. A run handing over a single key made the same mistake
+  without mentioning it at all.
+- **Now.** A key is recorded against a secret only when it is the value
+  written: piped in whole (`printf %s "$KEY" |`, `<<< "$KEY"`), given whole
+  (`--body "$KEY"`, `--value "$KEY"`, `NAME="$KEY"`), or, when the value comes
+  from stdin PassBook cannot see, the secret has the key's own name. This
+  covers `wrangler secret put`, `wrangler pages secret put`, `wrangler secret
+  bulk`, `gh secret set`, `vercel env add`, `fly secrets set` and `import`,
+  and the MCP `run_with_credentials` tool.
+- **A login is not a value.** A key the tool signs in with
+  (`CLOUDFLARE_API_TOKEN`, `GH_TOKEN`, `VERCEL_TOKEN`, `FLY_API_TOKEN` and the
+  like, by name, copied into one, or passed as `--token`) is not recorded on
+  the strength of a secret's name. When the run cannot tell, it records nothing
+  and prints one line naming the login and the `--used-in "WHERE"` that says it
+  explicitly.
+- A bulk upload or `fly secrets import` pairs each secret name with the key
+  that fills it, instead of recording every key the script mentions under its
+  own name.
+
 ## [1.10.2] — 2026-09-25
 
 ### A change reaches the other machines when it is made

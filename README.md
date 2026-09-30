@@ -603,8 +603,12 @@ passbook run --only OPENAI_API_KEY -- sh -c 'printf %s "$OPENAI_API_KEY" | npx w
 bulk`, `pages secret put`, `secrets-store secret create`), `gh secret set`,
 `gh variable set` (flagged: not secret), `vercel env add` and `fly secrets set`,
 directly or inside `sh -c`. It records only after the command exits 0, and only
-when it can tell which `--only` key went where. When it can't tell, it records
-nothing and says so. What it records is a command that pushes the value on stdin
+when an `--only` key is the value written: piped in whole (`printf %s "$KEY" |`),
+given whole (`--body "$KEY"`), or, when the value comes from stdin PassBook
+cannot see, the secret has the key's own name. A key that only signs the tool
+in (`CLOUDFLARE_API_TOKEN="$ADMIN_KEY" wrangler …`) is not the value. When it
+can't tell, it records nothing and says so; say it yourself with `--used-in`.
+What it records is a command that pushes the value on stdin
 or in `$KEY`, never on the command line, even if yours used `--body "$KEY"`.
 The worker comes from `--name` or `wrangler.toml`, the repo from `--repo` or the
 git remote.

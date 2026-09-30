@@ -23,6 +23,14 @@ clear which of the run's keys went there, nothing is recorded and the run says
 so — a wrong record is worse than none, because rotating would then push a
 key to a service that never held it.
 
+A key is recorded against a secret only when it is the value written: piped in
+whole (`printf %s "$KEY" |`, `<<< "$KEY"`), given whole (`--body "$KEY"`,
+`NAME="$KEY"`), or, when the value comes from stdin PassBook cannot see, the
+secret is named after the key and the tool does not sign in with it. Being
+mentioned is not enough. `CLOUDFLARE_API_TOKEN="$ADMIN_KEY" wrangler pages
+secret put CODES` mentions the admin key only to log wrangler in; 1.10.2
+recorded it, and a rotation would have written the admin token into CODES.
+
 ## The command that is recorded is not the command that ran
 
 What is kept is a command that does the same push again with the value on
@@ -43,6 +51,7 @@ import shutil
 import subprocess
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -60,6 +69,27 @@ LAUNCHERS = (("npx", "--yes"), ("npx", "-y"), ("npx",), ("pnpm", "exec"), ("pnpm
 CF_API = "https://api.cloudflare.com/client/v4"
 CF_TOKEN_KEY = "CLOUDFLARE_API_TOKEN"
 CF_ACCOUNT_KEY = "CLOUDFLARE_ACCOUNT_ID"
+
+#: What each tool reads from its environment to sign in or pick an account. A
+#: key handed over under one of these names, or copied into one
+#: (`CLOUDFLARE_API_TOKEN="$ADMIN_KEY" wrangler …`), is the tool's login, which
+#: says nothing about the value the command writes.
+LOGINS = {
+    "wrangler": frozenset({"CLOUDFLARE_API_TOKEN", "CLOUDFLARE_API_KEY", "CLOUDFLARE_EMAIL",
+                           "CLOUDFLARE_ACCOUNT_ID", "CF_API_TOKEN", "CF_API_KEY", "CF_EMAIL",
+                           "CF_ACCOUNT_ID"}),
+    "gh": frozenset({"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"}),
+    "vercel": frozenset({"VERCEL_TOKEN", "VERCEL_ORG_ID", "VERCEL_PROJECT_ID"}),
+    "fly": frozenset({"FLY_API_TOKEN", "FLY_ACCESS_TOKEN"}),
+}
+#: Where a command's value visibly comes from: (template, variables), each
+#: `%s` in the template filled by the variable in its place, so `printf %s
+#: "$KEY" |` is ("%s", ["KEY"]). A literal, a file, or a producer this cannot
+#: read has no variables. None, where a Feed is expected, is stdin the run
+#: inherited, which PassBook never sees.
+Feed = tuple
+OPAQUE: Feed = ("", [])
+REF = re.compile(r"\$(?:([A-Za-z_][A-Za-z0-9_]*)|\{([A-Za-z_][A-Za-z0-9_]*)\})")
 
 Sink = dict  # {key, kind, service, command, stdin, cwd, secretName, nonSecret, warning}
 
@@ -214,8 +244,8 @@ def _strip_prefixes(argv: list[str]) -> list[str]:
     return out
 
 
-def _segments(script: str) -> list[tuple[list[str], str]]:
-    """A shell script as simple commands, each with the text of its pipeline.
+def _segments(script: str) -> list[tuple[list[str], list[list[str]]]]:
+    """A shell script as simple commands, each with the commands piped into it.
 
     Good enough for the one-liners people wrap in `sh -c`; anything it cannot
     split is simply not recognised, which is the safe direction.
@@ -228,7 +258,7 @@ def _segments(script: str) -> list[tuple[list[str], str]]:
         return []
     pipelines: list[list[list[str]]] = [[[]]]
     for token in tokens:
-        if token == "|":
+        if token in {"|", "|&"}:
             pipelines[-1].append([])
         elif token in {";", "&&", "||", "&", "\n"} or set(token) <= set(";&|"):
             pipelines.append([[]])
@@ -236,123 +266,257 @@ def _segments(script: str) -> list[tuple[list[str], str]]:
             pipelines[-1][-1].append(token)
     out = []
     for pipeline in pipelines:
-        text = " ".join(" ".join(part) for part in pipeline)
-        for command in pipeline:
+        for index, command in enumerate(pipeline):
             if command:
-                out.append((command, text))
+                out.append((command, [part for part in pipeline[:index] if part]))
     return out
 
 
-def _referenced(text: str, keys: Iterable[str]) -> list[str]:
-    return [key for key in keys if re.search(r"\$\{?" + re.escape(key) + r"\b", text)]
+def _assignments(commands: Iterable[list[str]]) -> dict[str, set[str]]:
+    """VAR → the variables copied whole into it (`VAR="$KEY" cmd`, `env`,
+    `export`) anywhere in a script."""
+    out: dict[str, set[str]] = {}
+    for argv in commands:
+        head = _strip_prefixes(argv)
+        tokens = argv[:len(argv) - len(head)]
+        if head and head[0] in {"export", "declare", "typeset", "readonly", "local"}:
+            tokens += head[1:]
+        for token in tokens:
+            name, eq, value = token.partition("=")
+            if eq and NAME.match(name) and _ref(value):
+                out.setdefault(name, set()).add(_ref(value))
+    return out
+
+
+# ── where the value comes from ─────────────────────────────────────────────
+
+def _ref(token: str) -> str:
+    """KEY when the whole token is `$KEY` or `${KEY}`, else ""."""
+    found = REF.fullmatch(token)
+    return (found.group(1) or found.group(2)) if found else ""
+
+
+def _given(value: str, direct: bool) -> Feed:
+    """A value on the command line. Under a shell `"$KEY"` is that key's value;
+    started directly nothing expanded it, and it is only the text `$KEY`."""
+    name = "" if direct else _ref(value)
+    return ("%s", [name]) if name else (value, [])
+
+
+def _piped(upstream: list[list[str]]) -> Feed:
+    """What the command piped into this one writes, when it can be read: one
+    `printf` or `echo` whose arguments are each a whole `$VAR`. Anything else,
+    such as two stages, `cat file`, or `curl` with a key in a header, is OPAQUE:
+    a key named there is not thereby the value that arrives."""
+    if len(upstream) != 1:
+        return OPAQUE
+    argv = _strip_prefixes(upstream[0])
+    tool, args = (Path(argv[0]).name, argv[1:]) if argv else ("", [])
+    if tool == "printf":
+        args = args[1:] if args[:1] == ["--"] else args
+        template, values = (args[0], args[1:]) if args else ("", [])
+    elif tool == "echo":
+        while args and re.fullmatch(r"-[neE]+", args[0]):
+            args = args[1:]
+        template, values = " ".join(["%s"] * len(args)), args
+    else:
+        return OPAQUE
+    names = [_ref(value) for value in values]
+    return (template, names) if names and all(names) else OPAQUE
+
+
+def _redirected(argv: list[str], direct: bool) -> tuple[list[str], Feed | None]:
+    """Take stdin redirections out of a command: (the rest, what they feed).
+
+    `<<< "$KEY"` reads like a value on the command line; `< file` and a heredoc
+    are OPAQUE. Run directly, no shell saw them, so they are arguments.
+    """
+    if direct:
+        return argv, None
+    rest: list[str] = []
+    feed = None
+    index = 0
+    while index < len(argv):
+        token = argv[index]
+        if token.startswith("<"):
+            operand = token.lstrip("<")
+            if not operand and index + 1 < len(argv):
+                index += 1
+                operand = argv[index]
+            feed = _given(operand, False) if token.startswith("<<<") else OPAQUE
+        else:
+            rest.append(token)
+        index += 1
+    return rest, feed
+
+
+def _whole(feed: Feed) -> str:
+    """The one variable a feed writes, with nothing around it: `printf %s "$KEY"`."""
+    template, names = feed
+    return names[0] if len(names) == 1 and re.fullmatch(r"%s(?:\\n|\n)?", template) else ""
+
+
+JSON_PAIR = (r"\"([A-Za-z_][A-Za-z0-9_]*)\"\s*:\s*\"$", r"\"")
+LINE_PAIR = (r"(?:^|\n|\\n)([A-Za-z_][A-Za-z0-9_]*)=$", r"(?:\n|\\n|$)")
+
+
+def _named(feed: Feed | None, shape: tuple[str, str]) -> list[tuple[str, str]]:
+    """(name, variable) for each `%s` in the feed that is a whole value under a
+    name: `{"NAME":"%s"}` for a bulk upload, `NAME=%s` lines for an import."""
+    if not feed:
+        return []
+    template, names = feed
+    chunks = template.split("%s")
+    if len(chunks) != len(names) + 1:
+        return []
+    before, after = shape
+    pairs = []
+    for index, variable in enumerate(names):
+        found = re.search(before, chunks[index])
+        if found and re.match(after, chunks[index + 1]):
+            pairs.append((found.group(1), variable))
+    return pairs
 
 
 # ── recognising one command ────────────────────────────────────────────────
 
-def _which_key(dest: str, keys: Sequence[str], context: str, *, direct: bool) -> str:
-    """Which of the run's keys went to `dest`. "" when it cannot be told.
+@dataclass
+class _Seen:
+    """One recognised command, as far as telling its key goes."""
+    keys: list[str]
+    cwd: str
+    feed: Feed | None  # its stdin; None is stdin the run inherited
+    logins: set[str]   # the run's keys the tool signs in or picks an account with
+    direct: bool       # started without a shell, so nothing in it was expanded
+    tool: str
+
+
+def _which_key(dest: str, keys: Sequence[str], feed: Feed | None, logins: set[str]) -> str:
+    """Which of the run's keys is the value written to `dest`. "" when it cannot be told.
+
+    The value is visibly one key, or it comes from stdin PassBook cannot see
+    and the secret is named after a key the tool does not sign in with.
+    Nothing else counts: a key that is only mentioned, such as a login or a
+    header on the `curl` that produced the value, is not what was written.
 
     With no keys at all (a run without `--only`) the answer is the destination
     name, so the caller can still say where the command put something.
     """
     if not keys:
         return dest
-    if dest in keys:
-        return dest
-    mentioned = _referenced(context, keys)
-    if len(mentioned) == 1:
-        return mentioned[0]
-    if direct and len(keys) == 1:
-        return keys[0]
-    return ""
+    if feed is not None:
+        written = _whole(feed)
+        return written if written in keys else ""
+    return dest if dest in keys and dest not in logins else ""
 
 
-def _recognise(argv: list[str], keys: Sequence[str], cwd: str, context: str,
-               direct: bool) -> tuple[list[Sink], list[str]]:
-    argv = _strip_prefixes(argv)
-    launcher, tool_argv = _strip_launcher(argv)
+def _recognise(argv: list[str], keys: Sequence[str], cwd: str, upstream: list[list[str]],
+               assigned: Mapping[str, set[str]], direct: bool) -> tuple[list[Sink], list[str]]:
+    argv, feed = _redirected(argv, direct)
+    if feed is None and upstream:
+        feed = _piped(upstream)
+    head = _strip_prefixes(argv)
+    settings = dict(token.split("=", 1) for token in argv[:len(argv) - len(head)]
+                    if NAME.match(token.partition("=")[0]) and "=" in token)
+    launcher, tool_argv = _strip_launcher(head)
     if not tool_argv:
         return [], []
     tool = Path(tool_argv[0]).name
     rest = tool_argv[1:]
+
+    def seen(family: str, names: Iterable[str] = ()) -> _Seen:
+        names = LOGINS.get(family, frozenset()) | set(names)
+        logins = {key for key in keys
+                  if key in names or any(key in assigned.get(name, ()) for name in names)}
+        return _Seen(list(keys), cwd, feed, logins, direct, tool)
+
     if tool == "wrangler":
-        return _wrangler(launcher + [tool_argv[0]], rest, keys, cwd, context, direct)
+        return _wrangler(launcher + [tool_argv[0]], rest, seen("wrangler"))
     if tool == "gh":
-        return _gh(rest, keys, cwd, context, direct)
+        return _gh(rest, seen("gh"))
     if tool == "vercel":
-        return _vercel(launcher + [tool_argv[0]], rest, keys, cwd, context, direct)
+        return _vercel(launcher + [tool_argv[0]], rest, seen("vercel"))
     if tool in {"fly", "flyctl"}:
-        return _fly(tool_argv[0], rest, keys, cwd, context, direct)
+        return _fly(tool_argv[0], rest, seen("fly"))
     if tool in {"passbook", "passbook-sink"}:
         positional, options, _ = _options(rest, {"--account-key", "--token-key", "--scopes"})
         if positional[:2] == ["sink", "cf-secrets-store"] and len(positional) >= 4:
-            return _cf_store(positional[2], positional[3], keys, context, direct)
+            this = seen("", [_opt(options, "--token-key") or CF_TOKEN_KEY,
+                             _opt(options, "--account-key") or CF_ACCOUNT_KEY])
+            if "PASSBOOK_KEY" in settings:
+                # The sink reads the variable $PASSBOOK_KEY names before stdin.
+                named = settings["PASSBOOK_KEY"]
+                this.feed = ("%s", [named]) if NAME.match(named) else OPAQUE
+            return _cf_store(positional[2], positional[3], this, this.feed)
     return [], []
 
 
-def _unmapped(dest: str, where: str) -> str:
-    return (f"{dest} went to {where}, but not which of this run's keys it was. "
-            f"Nothing was recorded; say it with --used-in \"{where}\".")
+def _unmapped(dest: str, where: str, seen: _Seen) -> str:
+    login = f" ({', '.join(sorted(seen.logins))}: {seen.tool}'s own login)" if seen.logins else ""
+    return (f"{dest} went to {where}, but not which of this run's keys, if any, it was{login}. "
+            f"Nothing was recorded; if one went there, say so with --used-in \"{where}\".")
 
 
-def _wrangler(prefix: list[str], rest: list[str], keys, cwd, context, direct):
+def _wrangler(prefix: list[str], rest: list[str], seen: _Seen):
     valued = {"--name", "--env", "-e", "--config", "-c", "--cwd", "--project-name",
               "--project", "--scopes", "--comment", "--secret-id", "--value", "--branch"}
     positional, options, _ = _options(rest, valued)
     config = _opt(options, "--config", "-c")
-    run_in = _opt(options, "--cwd") or cwd
+    run_in = _opt(options, "--cwd") or seen.cwd
     env = _opt(options, "--env", "-e")
     tail = (["--env", env] if env else []) + (["--config", config] if config else [])
+    worker = _opt(options, "--name") or _wrangler_name(run_in, config)
+    target = (worker or Path(run_in).name) + (f"@{env}" if env else "")
 
-    def worker_sinks(names: list[str], versions: bool) -> tuple[list[Sink], list[str]]:
-        worker = _opt(options, "--name") or _wrangler_name(run_in, config)
-        target = (worker or Path(run_in).name) + (f"@{env}" if env else "")
-        sinks, notes = [], []
-        for dest in names:
-            key = _which_key(dest, keys, context, direct=direct)
-            if not key:
-                notes.append(_unmapped(dest, f"worker:{target}"))
-                continue
-            verb = ["versions", "secret", "put"] if versions else ["secret", "put"]
-            command = _q(prefix + verb + [dest] + (["--name", worker] if worker else []) + tail)
-            sinks.append(_sink(key, "wrangler-secret", _label("worker", target, dest, key),
-                               command, cwd=run_in, secret_name=dest))
-        return sinks, notes
+    def worker_sinks(pairs: list[tuple[str, str]], versions: bool) -> list[Sink]:
+        verb = ["versions", "secret", "put"] if versions else ["secret", "put"]
+        return [_sink(key, "wrangler-secret", _label("worker", target, dest, key),
+                      _q(prefix + verb + [dest] + (["--name", worker] if worker else []) + tail),
+                      cwd=run_in, secret_name=dest) for dest, key in pairs]
+
+    def worker_put(dest: str, versions: bool) -> tuple[list[Sink], list[str]]:
+        key = _which_key(dest, seen.keys, seen.feed, seen.logins)
+        if not key:
+            return [], [_unmapped(dest, f"worker:{target}", seen)]
+        return worker_sinks([(dest, key)], versions), []
 
     if positional[:2] == ["secret", "put"] and len(positional) >= 3:
-        return worker_sinks([positional[2]], False)
+        return worker_put(positional[2], False)
     if positional[:3] == ["versions", "secret", "put"] and len(positional) >= 4:
-        return worker_sinks([positional[3]], True)
+        return worker_put(positional[3], True)
     if positional[:2] == ["secret", "bulk"]:
-        # A bulk upload names its secrets inside a JSON file or stdin, not on
-        # the command line. The keys this run holds and mentions are the ones
-        # it could have put there; each is recorded as its own `secret put`,
-        # which is the same push one key at a time.
-        mentioned = _referenced(context, keys) or (list(keys) if direct else [])
-        if not mentioned:
-            return [], [_unmapped("a bulk upload", "a worker")]
-        return worker_sinks(mentioned, False)
+        # A bulk upload names its secrets inside JSON, from a file or stdin.
+        # Only JSON built right here (`printf '{"A":"%s"}' "$A" |`) says which
+        # key went under which name; each is recorded as its own `secret put`,
+        # the same push one key at a time.
+        feed = OPAQUE if len(positional) > 2 else seen.feed
+        pairs = [(dest, key) for dest, key in _named(feed, JSON_PAIR) if key in seen.keys]
+        if not pairs:
+            return [], [_unmapped("a bulk upload", f"worker:{target}", seen)]
+        return worker_sinks(pairs, False), []
     if positional[:3] == ["pages", "secret", "put"] and len(positional) >= 4:
         dest = positional[3]
         project = _opt(options, "--project-name", "--project")
-        key = _which_key(dest, keys, context, direct=direct)
-        target = project or Path(run_in).name
+        key = _which_key(dest, seen.keys, seen.feed, seen.logins)
+        site = project or Path(run_in).name
         if not key:
-            return [], [_unmapped(dest, f"pages:{target}")]
+            return [], [_unmapped(dest, f"pages:{site}", seen)]
         command = _q(prefix + ["pages", "secret", "put", dest]
                      + (["--project-name", project] if project else []) + tail)
-        return [_sink(key, "wrangler-pages-secret", _label("pages", target, dest, key),
+        return [_sink(key, "wrangler-pages-secret", _label("pages", site, dest, key),
                       command, cwd=run_in, secret_name=dest)], []
     if positional[:3] == ["secrets-store", "secret", "create"] and len(positional) >= 4:
         dest = _opt(options, "--name")
         if not dest:
             return [], []
-        return _cf_store(positional[3], dest, keys, context, direct,
+        value = _opt(options, "--value")
+        return _cf_store(positional[3], dest, seen,
+                         _given(value, seen.direct) if value else seen.feed,
                          scopes=_opt(options, "--scopes") or "workers")
     return [], []
 
 
-def _gh(rest, keys, cwd, context, direct):
+def _gh(rest, seen: _Seen):
     valued = {"--repo", "-R", "--env", "-e", "--org", "-o", "--app", "-a", "--body", "-b",
               "--visibility", "-v", "--repos", "-r", "--env-file", "-f"}
     positional, options, flags = _options(rest, valued)
@@ -363,7 +527,10 @@ def _gh(rest, keys, cwd, context, direct):
                     "on the command line. Nothing was recorded; use --used-in."]
     variable = positional[0] == "variable"
     dest = positional[2]
-    key = _which_key(dest, keys, context, direct=direct)
+    cwd = seen.cwd
+    body = _opt(options, "--body", "-b")
+    key = _which_key(dest, seen.keys, _given(body, seen.direct) if body else seen.feed,
+                     seen.logins)
     repo = _opt(options, "--repo", "-R")
     org = _opt(options, "--org", "-o")
     env = _opt(options, "--env", "-e")
@@ -373,7 +540,7 @@ def _gh(rest, keys, cwd, context, direct):
     prefix = "github-var" if variable else ("github-org" if org else "github-user" if user else "github")
     target = (org or ("me" if user else (repo or Path(cwd).name))) + (f"@{env}" if env else "")
     if not key:
-        return [], [_unmapped(dest, f"{prefix}:{target}")]
+        return [], [_unmapped(dest, f"{prefix}:{target}", seen)]
     parts = ["gh", positional[0], "set", dest]
     if repo:
         parts += ["--repo", repo]
@@ -393,7 +560,7 @@ def _gh(rest, keys, cwd, context, direct):
     if app and not variable:
         parts += ["--app", app]
     warning = ""
-    if _opt(options, "--body", "-b"):
+    if body:
         warning = ("the value went on the command line (--body), where other processes can "
                    "see it; the recorded push sends it on stdin instead")
     if variable:
@@ -404,19 +571,24 @@ def _gh(rest, keys, cwd, context, direct):
                   non_secret=variable, warning=warning)], []
 
 
-def _vercel(prefix, rest, keys, cwd, context, direct):
+def _vercel(prefix, rest, seen: _Seen):
     valued = {"--scope", "-S", "--cwd", "--token", "-t", "--value", "-A", "--local-config",
               "-Q", "--global-config"}
     positional, options, flags = _options(rest, valued)
     if positional[:2] != ["env", "add"] or len(positional) < 3:
         return [], []
+    token = "" if seen.direct else _ref(_opt(options, "--token", "-t"))
+    if token in seen.keys:
+        seen.logins.add(token)
     dest = positional[2]
     environments = positional[3:5]
-    run_in = _opt(options, "--cwd") or cwd
-    key = _which_key(dest, keys, context, direct=direct)
+    run_in = _opt(options, "--cwd") or seen.cwd
+    value = _opt(options, "--value")
+    key = _which_key(dest, seen.keys, _given(value, seen.direct) if value else seen.feed,
+                     seen.logins)
     target = Path(run_in).name + (f"@{environments[0]}" if environments else "")
     if not key:
-        return [], [_unmapped(dest, f"vercel:{target}")]
+        return [], [_unmapped(dest, f"vercel:{target}", seen)]
     parts = prefix + ["env", "add", dest, *environments, "--force"]
     scope = _opt(options, "--scope", "-S")
     if scope:
@@ -425,7 +597,7 @@ def _vercel(prefix, rest, keys, cwd, context, direct):
         if flag in flags:
             parts.append(flag)
     warning = ("the value went on the command line (--value); the recorded push sends it on "
-               "stdin instead") if _opt(options, "--value") else ""
+               "stdin instead") if value else ""
     return [_sink(key, "vercel-env", _label("vercel", target, dest, key), _q(parts),
                   cwd=run_in, secret_name=dest, warning=warning)], []
 
@@ -438,10 +610,15 @@ def _fly_push(binary: str, dest: str, key: str, app: str, config: str) -> str:
     return f"printf '%s=%s\\n' {shlex.quote(dest)} \"${key}\" | {_q([binary, 'secrets', 'import', *target])}"
 
 
-def _fly(binary, rest, keys, cwd, context, direct):
-    positional, options, _ = _options(rest, {"--app", "-a", "--config", "-c"})
+def _fly(binary, rest, seen: _Seen):
+    positional, options, _ = _options(rest, {"--app", "-a", "--config", "-c",
+                                             "--access-token", "-t"})
     if positional[:1] != ["secrets"] or len(positional) < 2:
         return [], []
+    token = "" if seen.direct else _ref(_opt(options, "--access-token", "-t"))
+    if token in seen.keys:
+        seen.logins.add(token)
+    cwd = seen.cwd
     config = _opt(options, "--config", "-c")
     app = _opt(options, "--app", "-a") or _fly_app(cwd, config)
     target = app or Path(cwd).name
@@ -451,10 +628,9 @@ def _fly(binary, rest, keys, cwd, context, direct):
             dest, eq, value = pair.partition("=")
             if not eq or not NAME.match(dest):
                 continue
-            key = _which_key(dest, keys, value, direct=False) or (
-                dest if dest in keys else "")
+            key = _which_key(dest, seen.keys, _given(value, seen.direct), seen.logins)
             if not key:
-                notes.append(_unmapped(dest, f"fly:{target}"))
+                notes.append(_unmapped(dest, f"fly:{target}", seen))
                 continue
             sinks.append(_sink(key, "fly-secret", _label("fly", target, dest, key),
                                _fly_push(binary, dest, key, app, config), stdin=False,
@@ -462,23 +638,23 @@ def _fly(binary, rest, keys, cwd, context, direct):
                                warning="the value went on the command line; the recorded "
                                        "push sends it through stdin instead"))
     elif positional[1] == "import":
-        mentioned = _referenced(context, keys) or (list(keys) if direct and len(keys) == 1 else [])
-        if not mentioned:
-            notes.append(_unmapped("an import", f"fly:{target}"))
-        for key in mentioned:
-            sinks.append(_sink(key, "fly-secret", _label("fly", target, key, key),
-                               _fly_push(binary, key, key, app, config), stdin=False,
-                               cwd=cwd, secret_name=key))
+        pairs = [(dest, key) for dest, key in _named(seen.feed, LINE_PAIR) if key in seen.keys]
+        if not pairs:
+            notes.append(_unmapped("an import", f"fly:{target}", seen))
+        for dest, key in pairs:
+            sinks.append(_sink(key, "fly-secret", _label("fly", target, dest, key),
+                               _fly_push(binary, dest, key, app, config), stdin=False,
+                               cwd=cwd, secret_name=dest))
     return sinks, notes
 
 
-def _cf_store(store: str, dest: str, keys, context, direct, scopes: str = "workers"):
+def _cf_store(store: str, dest: str, seen: _Seen, feed: Feed | None, scopes: str = "workers"):
     if not PART.match(store) or not PART.match(dest):
         return [], []
-    key = _which_key(dest, keys, context, direct=direct)
+    key = _which_key(dest, seen.keys, feed, seen.logins)
     target = f"{store}/{dest}"
     if not key:
-        return [], [_unmapped(dest, f"cf-secrets-store:{target}")]
+        return [], [_unmapped(dest, f"cf-secrets-store:{target}", seen)]
     return [_sink(key, "cf-secrets-store", f"cf-secrets-store:{target}"[:96],
                   cf_store_command(store, dest, scopes=scopes), stdin=False,
                   secret_name=dest)], []
@@ -509,24 +685,25 @@ def detect(command: Sequence[str], keys: Sequence[str], *, cwd: str = "") -> tup
     argv = [str(part) for part in command]
     cwd = cwd or os.getcwd()
     keys = [key for key in keys if key]
-    probe = keys
     head = _strip_prefixes(argv)
-    candidates: list[tuple[list[str], str, bool]] = []
+    candidates: list[tuple[list[str], list[list[str]], bool]] = []
+    assigned: dict[str, set[str]] = {}
     if head and Path(head[0]).name in SHELLS:
         script = ""
         for index, token in enumerate(head[1:], start=1):
             if token.startswith("-") and "c" in token.lstrip("-") and not token.startswith("--"):
                 script = head[index + 1] if index + 1 < len(head) else ""
                 break
-        for segment, pipeline in _segments(script):
-            candidates.append((segment, pipeline, False))
+        segments = _segments(script)
+        assigned = _assignments(segment for segment, _ in segments)
+        candidates = [(segment, upstream, False) for segment, upstream in segments]
     else:
-        candidates.append((argv, " ".join(argv), True))
+        candidates.append((argv, [], True))
 
     sinks: list[Sink] = []
     notes: list[str] = []
-    for segment, context, direct in candidates:
-        found, said = _recognise(segment, probe, cwd, context, direct)
+    for segment, upstream, direct in candidates:
+        found, said = _recognise(segment, keys, cwd, upstream, assigned, direct)
         sinks.extend(found)
         notes.extend(said)
     if not keys:

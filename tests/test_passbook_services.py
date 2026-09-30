@@ -377,6 +377,48 @@ def test_a_run_that_puts_a_key_on_a_worker_records_it(box):
 
 
 @needs_a_posix_shell
+def test_a_key_that_only_signs_wrangler_in_is_not_recorded_on_the_secret(box):
+    """Shipped in 1.10.2, reproduced 2026-09-30 with this command: the admin key
+    only authenticated wrangler and the secret's value came from stdin, yet the
+    run printed "recorded CLOUDFLARE_INFRA_ADMIN_API_KEY on pages:…". Rotating
+    the admin key would then have pushed it into the access-code secret."""
+    admin, account, code = "fake-admin-token-333", "fake-account-444", "fake-access-code-555"
+    assert box.run(["add", f"CLOUDFLARE_INFRA_ADMIN_API_KEY={admin}"]).returncode == 0
+    assert box.run(["add", f"CLOUDFLARE_ACCOUNT_ID={account}"]).returncode == 0
+    done = box.run(["run", "--only", "CLOUDFLARE_INFRA_ADMIN_API_KEY",
+                    "--only", "CLOUDFLARE_ACCOUNT_ID", "--", "sh", "-c",
+                    'CLOUDFLARE_API_TOKEN="$CLOUDFLARE_INFRA_ADMIN_API_KEY" wrangler pages secret '
+                    'put EARLY_ACCESS_CODES --project-name site'], stdin=code)
+    assert done.returncode == 0, done.stderr
+    landed = "wrangler-pages_secret_put_EARLY_ACCESS_CODES_--project-name_site"
+    assert box.landed_value(landed) == code, "what the secret got came from stdin"
+    assert "passbook: recorded" not in done.stderr
+    assert '--used-in "pages:site"' in done.stderr
+    assert "No service is recorded" in box.run(["services"]).stdout
+
+    rotated = box.run(["rotate", "CLOUDFLARE_INFRA_ADMIN_API_KEY", "--stdin"],
+                      stdin="fake-admin-token-666\n")
+    assert rotated.returncode == 0, rotated.stderr
+    assert box.landed_value(landed) == code, "a rotation of the login leaves the secret alone"
+    for text in (done.stdout, done.stderr, rotated.stdout, rotated.stderr):
+        assert admin not in text and code not in text
+
+
+@needs_a_posix_shell
+def test_a_key_piped_into_a_secret_of_its_own_name_is_recorded_and_rotated_there(box):
+    assert box.run(["add", "FOO=fake-foo-777"]).returncode == 0
+    done = box.run(["run", "--only", "FOO", "--", "sh", "-c",
+                    'printf %s "$FOO" | wrangler secret put FOO'])
+    assert done.returncode == 0, done.stderr
+    assert "passbook: recorded FOO on worker:site-api" in done.stderr
+    assert box.landed_value("wrangler-secret_put_FOO") == "fake-foo-777"
+
+    rotated = box.run(["rotate", "FOO", "--stdin"], stdin="fake-foo-888\n")
+    assert rotated.returncode == 0, rotated.stderr
+    assert box.landed_value("wrangler-secret_put_FOO_--name_site-api") == "fake-foo-888"
+
+
+@needs_a_posix_shell
 def test_a_run_that_fails_records_nothing(box):
     """A push that did not land must not be listed as a service that holds it."""
     failed = box.run(["run", "--only", "API_KEY", "--", "sh", "-c",

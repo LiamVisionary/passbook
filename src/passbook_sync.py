@@ -65,6 +65,9 @@ UNOPENED = object()
 LOCAL_ONLY = frozenset({
     "HIVEMINDOS_DASHBOARD_AUTH_SECRET",
     "HIVEMINDOS_DASHBOARD_DEVICE_TOKEN",
+    # Each collector's own port: the NYC Mac runs on 8798 because its 8787 is
+    # another app, so a peer's 8787 arriving here sends callers to that app.
+    "AGENT_TELEMETRY_PORT",
     "HIVE_AGENT_ENV_FILE",
     "HIVE_ENV_BACKUP_DIR",
     "HIVE_ENV_COLLECTOR_PORT",

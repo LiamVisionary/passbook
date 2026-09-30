@@ -4634,6 +4634,36 @@ def cmd_forget(args: argparse.Namespace) -> int:
     return 0
 
 
+def _apply_pull(plan: dict, raw: dict, store: Path) -> tuple[list[str], str]:
+    """Write what `plan_pull` chose. Returns the keys written, and why nothing
+    was when the store is sealed and the incoming values could not be."""
+    import passbook_sync
+    import passbook_vault
+
+    # Writing back. If the store is sealed the incoming values must be sealed
+    # too, and if they cannot be, NOTHING is written — a peer's value landing
+    # as plaintext beside encrypted ones is the outcome this whole path exists
+    # to prevent, and there is deliberately no fallback that does it anyway.
+    store_sealed = any(passbook_vault.is_sealed(v) for v in raw.values())
+    if store_sealed:
+        import passbook_broker
+
+        answer = passbook_broker.seal_values(plan["apply"], app="passbook-sync",
+                                             workspace_id=passbook.workspace())
+        if not answer.get("ok"):
+            return [], str(answer.get("error") or "could not seal")
+        written = answer.get("written") or sorted(plan["apply"])
+    else:
+        result = passbook.set_values(plan["apply"], overwrite=True, exact=True)
+        written = sorted({*result.get("added", []), *result.get("updated", [])})
+
+    # Stamp what arrived so the next pass compares ages correctly. Without this
+    # the key looks older than every peer's copy and the write undoes itself.
+    if written:
+        passbook_sync.touch_meta(store, written)
+    return written, ""
+
+
 def cmd_sync(args: argparse.Namespace) -> int:
     """What replication would do, or does, between this machine and its peers.
 
@@ -4798,11 +4828,22 @@ def cmd_sync(args: argparse.Namespace) -> int:
             notice = f"could not record the machines: {error}"
             print(notice, file=sys.stderr)
 
+    # Pull before reporting, in both modes. The JSON answer used to return ahead
+    # of this, so `sync --json --apply` — how every collector's maintenance runs
+    # it — reported a pull and wrote nothing, and the same keys came back as
+    # "would pull" on every pass from 2026-08-26 until 2026-10-01.
+    pulled: list[str] = []
+    pull_error = ""
+    if args.apply and plan["apply"]:
+        pulled, pull_error = _apply_pull(plan, raw, store)
+
     if args.json:
         print(json.dumps({
             "peers": [p["host"] for p in peers],
             "unreachable": unreachable,
             "wouldPull": sorted(plan["apply"]),
+            "pulled": pulled,
+            **({"pullHeldBack": pull_error} if pull_error else {}),
             "skippedUnknownAge": plan["skippedUnknownAge"],
             "skippedSealedShut": plan["skippedSealedShut"],
             "refusedSealedFromPeer": plan["refusedSealedFromPeer"],
@@ -4900,31 +4941,10 @@ def cmd_sync(args: argparse.Namespace) -> int:
 
     if not plan["apply"]:
         return 0
-
-    # Writing back. If the store is sealed the incoming values must be sealed
-    # too, and if they cannot be, NOTHING is written — a peer's value landing
-    # as plaintext beside encrypted ones is the outcome this whole path exists
-    # to prevent, and there is deliberately no fallback that does it anyway.
-    store_sealed = any(passbook_vault.is_sealed(v) for v in raw.values())
-    if store_sealed:
-        import passbook_broker
-
-        answer = passbook_broker.seal_values(plan["apply"], app="passbook-sync",
-                                             workspace_id=passbook.workspace())
-        if not answer.get("ok"):
-            return _fail(
-                f"Held back {len(plan['apply'])} key(s): {answer.get('error', 'could not seal')}",
-                "Sign in so they can be written encrypted:  passbook signin")
-        written = answer.get("written") or sorted(plan["apply"])
-    else:
-        result = passbook.set_values(plan["apply"], overwrite=True, exact=True)
-        written = sorted({*result.get("added", []), *result.get("updated", [])})
-
-    # Stamp what arrived so the next pass compares ages correctly. Without this
-    # the key looks older than every peer's copy and the write undoes itself.
-    if written:
-        passbook_sync.touch_meta(store, written)
-    print(f"\nPulled {len(written)} key(s).")
+    if pull_error:
+        return _fail(f"Held back {len(plan['apply'])} key(s): {pull_error}",
+                     "Sign in so they can be written encrypted:  passbook signin")
+    print(f"\nPulled {len(pulled)} key(s).")
     return 0
 
 

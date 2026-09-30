@@ -4,6 +4,20 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+### `sync --json --apply` pulls again, and a collector's port stays on its machine
+
+- **Pulls never landed.** The JSON answer returned before the write, so
+  `passbook sync --json --apply`, which is how every collector's `hive-env-add
+  --sync-maintenance` runs it, reported keys as pulled and wrote nothing. The
+  same keys came back on every pass from 2026-08-26 until now: the NYC Mac
+  listed `PASSBOOK_SERVICE_BINDINGS` and `PASSBOOK_USED_IN` every ten minutes.
+  The pull now runs before either answer, and the JSON carries `pulled` (what
+  was written) beside `wouldPull`, plus `pullHeldBack` when a sealed store
+  could not take the values.
+- **`AGENT_TELEMETRY_PORT` is per-machine.** The NYC Mac's collector runs on
+  8798 because its 8787 is another app, so a peer's 8787 must never arrive
+  there. It joins the local-only list, which mirrors `hive-env-add`'s.
+
 ### 2026-09-27 12:32 +08:00 — Report blocked access accurately (Uncommitted)
 
 - `vault`, `status`, `check`, and `run` distinguish a process that cannot contact PassBook from a vault that is actually locked. A sandbox permission failure no longer tells an already signed-in user to sign in again.

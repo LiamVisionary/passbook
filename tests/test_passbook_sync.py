@@ -100,6 +100,15 @@ def test_per_machine_credentials_never_arrive_from_a_peer():
     assert plan["apply"] == {}
 
 
+def test_a_peers_collector_port_never_replaces_this_machines():
+    # The NYC Mac's collector runs on 8798 because its 8787 is another app. A
+    # newer 8787 from a peer must not arrive, and this machine's must not leave.
+    plan = sync.plan_pull({"AGENT_TELEMETRY_PORT": "8798"}, {"AGENT_TELEMETRY_PORT": OLDER}, [
+        ("peerA", payload({"AGENT_TELEMETRY_PORT": "8787"}, {"AGENT_TELEMETRY_PORT": NEWER}))])
+    assert plan["apply"] == {}
+    assert sync.may_leave_machine("AGENT_TELEMETRY_PORT", {})["allowed"] is False
+
+
 def test_a_malformed_key_name_is_ignored():
     plan = sync.plan_pull({}, {}, [("peerA", payload({"not a key": "x", "9BAD": "y"}, {}))])
     assert plan["apply"] == {}
@@ -521,6 +530,37 @@ def test_removing_a_key_that_was_not_there_writes_no_receipt(tmp_path, monkeypat
     assert _cli(tmp_path, monkeypatch, "remove", "NEVER_EXISTED") == 0
     assert not [r for r in passbook_stamp.read_stamps(limit=50, root=tmp_path)
                 if r.get("op") == "remove"]
+
+
+def test_sync_json_apply_writes_what_it_reports(tmp_path, monkeypatch, capsys):
+    """`sync --json --apply` is how every collector's maintenance runs, and its
+    JSON answer returned before the write: the pull was reported, nothing was
+    written, and the same keys came back as "would pull" on every pass."""
+    import json
+    import passbook_fleet
+
+    assert _cli(tmp_path, monkeypatch, "add", "SHARED=old") == 0
+    assert _cli(tmp_path, monkeypatch, "add", "AGENT_TELEMETRY_PORT=8798") == 0
+    store = tmp_path / ".env"
+    sync.touch_meta(store, ["SHARED", "AGENT_TELEMETRY_PORT"], when=OLDER)
+    peer = payload({"SHARED": "new", "AGENT_TELEMETRY_PORT": "8787"},
+                   {"SHARED": NEWER, "AGENT_TELEMETRY_PORT": NEWER})
+    monkeypatch.setattr(passbook_fleet, "reachable",
+                        lambda: [{"host": "peerA", "port": "8787", "address": "peerA"}])
+    monkeypatch.setattr(sync, "fetch", lambda *a, **k: peer)
+
+    capsys.readouterr()
+    assert _cli(tmp_path, monkeypatch, "sync", "--json", "--apply", "--no-adopt") == 0
+    answer = json.loads(capsys.readouterr().out)
+    text = store.read_text(encoding="utf-8")
+    assert "SHARED=new" in text
+    assert "AGENT_TELEMETRY_PORT=8798" in text
+    assert answer["wouldPull"] == ["SHARED"]
+    assert answer["pulled"] == ["SHARED"]
+
+    # Settled: the next pass has nothing left to pull.
+    assert _cli(tmp_path, monkeypatch, "sync", "--json", "--no-adopt") == 0
+    assert json.loads(capsys.readouterr().out)["wouldPull"] == []
 
 
 # ── seeding a peer, and refusing to guess ──────────────────────────────────

@@ -4,6 +4,8 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [1.10.3] — 2026-10-03
+
 ### A company host is sent no keys and asked for none
 
 - **The leak.** HivemindOS can move a company to another computer, often a

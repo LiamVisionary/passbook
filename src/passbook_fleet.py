@@ -208,6 +208,93 @@ def _probe_all(addresses: list[str]) -> list[str]:
     return [answers.get(ip, "") if ip else "" for ip in addresses]
 
 
+# ── company hosts ──────────────────────────────────────────────────────────
+#
+# HivemindOS can move a company to another computer, often a rented server,
+# installed with `--company-host`. That computer keeps ONLY the keys its owner
+# shares to it. On 2026-10-03 a fresh one held the whole store (~400 keys,
+# wallet keys among them) four minutes after joining the tailnet. Its collector
+# now says so in `/health` (`envSync.companyHost: true`, with `ready: false` for
+# older peers), refuses `GET /env`, and acknowledges `POST /env` unwritten.
+#
+# Acknowledged unwritten is still received. The TCP probe above cannot tell a
+# company host from any other collector, so before anything sends a value to a
+# peer, or asks one for the store, the peer's `/health` is read and a company
+# host is left out entirely: not a target, not a pull source, not "unreachable".
+# A peer whose `/health` does not answer is treated as it always was.
+
+HEALTH_TIMEOUT = 2.0
+COMPANY_HOST_FILENAME = "company-host.env"
+_TRUTHY = ("1", "true", "yes", "on")
+_COMPANY_HOSTS_SEEN: list[str] = []
+
+
+def collector_health(address: str, port: str, *,
+                     timeout: float = HEALTH_TIMEOUT) -> dict[str, Any] | None:
+    """A collector's `/health`, or None when it does not answer with JSON."""
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(f"http://{address}:{port}/health",
+                                    timeout=timeout) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except Exception:  # noqa: BLE001 — no answer is "unknown", never a crash
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def is_company_host(health: Any) -> bool:
+    """Does this `/health` say the machine keeps only keys shared to it?
+
+    Read where the collector puts it (`envSync.companyHost`) and at the top
+    level. Only a real `true` counts, as in HivemindOS's own reader.
+    """
+    if not isinstance(health, dict):
+        return False
+    if health.get("companyHost") is True:
+        return True
+    env_sync = health.get("envSync")
+    return isinstance(env_sync, dict) and env_sync.get("companyHost") is True
+
+
+def peer_is_company_host(address: str, port: str = "", *, every_port: bool = True,
+                         timeout: float = HEALTH_TIMEOUT) -> bool:
+    """Ask the peer. By default every collector port is checked, not only the
+    one that answered a connect: a port can belong to another app on that
+    machine (one of the fleet's Macs has a different app on 8787), and the
+    company host's own collector could be on the next one. `every_port=False`
+    asks only `port`, for a caller about to send to exactly that one."""
+    ports = [port] if port else []
+    if every_port or not ports:
+        ports += [p for p in COLLECTOR_PORTS if p not in ports]
+    return any(is_company_host(collector_health(address, p, timeout=timeout)) for p in ports)
+
+
+def company_host_mode(root: Path | None = None) -> bool:
+    """Is THIS machine a company host? Then it does not replicate at all.
+
+    The marker is the one HivemindOS's setup writes (`HIVE_COMPANY_HOST=1` in
+    `company-host.env` under the hive root) or the same variable in the
+    environment. Mirrors `company_host_mode` in HivemindOS's `hive-env-add`.
+    """
+    if os.environ.get("HIVE_COMPANY_HOST", "").strip().lower() in _TRUTHY:
+        return True
+    try:
+        if root is None:
+            import passbook
+
+            root = passbook.root()
+        text = (Path(root) / COMPANY_HOST_FILENAME).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError, ImportError):
+        return False
+    value = ""
+    for line in text.splitlines():
+        match = re.match(r"^\s*HIVE_COMPANY_HOST\s*=\s*(.*)$", line)
+        if match:
+            value = match.group(1)
+    return value.strip().strip("'\"").lower() in _TRUTHY
+
+
 def reachable(*, timeout: float = PROBE_TIMEOUT) -> list[dict[str, str]]:
     """Peers running a collector, WITH the address needed to reach them.
 
@@ -215,21 +302,61 @@ def reachable(*, timeout: float = PROBE_TIMEOUT) -> list[dict[str, str]]:
     address, and it exists to be handed straight to a socket. Nothing here is
     stored, logged or returned to a window: `describe()` is what the app gets,
     and it has no address in it.
+
+    Company hosts are not in it: see `reachable_split`. The ones a call left
+    out are kept for `company_hosts_seen()`, so callers (and the tests that
+    replace this function) keep using `reachable()` as the one way in.
+    """
+    global _COMPANY_HOSTS_SEEN
+    _COMPANY_HOSTS_SEEN = []
+    found, company = reachable_split(timeout=timeout)
+    _COMPANY_HOSTS_SEEN = company
+    return found
+
+
+def company_hosts_seen() -> list[str]:
+    """Company hosts the latest `reachable()` call in this process left out.
+
+    Host names only, never an address."""
+    return list(_COMPANY_HOSTS_SEEN)
+
+
+def reachable_split(*, timeout: float = PROBE_TIMEOUT) -> tuple[list[dict[str, str]], list[str]]:
+    """`(peers to replicate with, names of company hosts left out)`.
+
+    Every value PassBook sends and every store it pulls goes to a peer from
+    here, so this is where a company host is removed. Probed together: each
+    peer now costs a connect and a `/health` read.
     """
     data = _status()
-    out: list[dict[str, str]] = []
+    found: list[tuple[str, str]] = []
     for entry in (data.get("Peer") or {}).values():
         if not isinstance(entry, dict) or entry.get("Online") is False:
             continue
         host = _clean_host(entry)
         ip = next((str(v) for v in entry.get("TailscaleIPs") or []
                    if _IPV4.match(str(v))), "")
-        if not host or not ip:
-            continue
+        if host and ip:
+            found.append((host, ip))
+    if not found:
+        return [], []
+
+    def look(ip: str) -> tuple[str, bool]:
         port = _reachable_collector(ip)
-        if port:
+        return port, bool(port) and peer_is_company_host(ip, port)
+
+    with ThreadPoolExecutor(max_workers=min(PROBE_WORKERS, len(found))) as pool:
+        answers = list(pool.map(look, [ip for _, ip in found]))
+    out: list[dict[str, str]] = []
+    company: list[str] = []
+    for (host, ip), (port, is_company) in zip(found, answers):
+        if not port:
+            continue
+        if is_company:
+            company.append(host)
+        else:
             out.append({"host": host, "address": ip, "port": port})
-    return sorted(out, key=lambda row: row["host"])
+    return sorted(out, key=lambda row: row["host"]), sorted(set(company))
 
 
 def this_machine() -> dict[str, Any]:

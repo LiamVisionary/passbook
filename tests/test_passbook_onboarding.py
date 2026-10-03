@@ -299,7 +299,10 @@ def test_terminal_add_recovers_over_http_and_saves_without_reentry(machine):
                 break
         assert child.wait(timeout=2) == 0, transcript.decode(errors="replace")
         assert not prompts
-        assert requests == ["/env?scope=shared&runtime=passbook"]
+        # One pull for the recovery. The `/health` after it is the replication
+        # of the new key checking the peer is not a company host before
+        # sending it a value (a company host keeps only keys shared to it).
+        assert requests == ["/env?scope=shared&runtime=passbook", "/health"]
         assert b"synthetic-relay" not in transcript and PASSWORD.encode() not in transcript
         assert b"broker start" not in transcript
         assert broker.vault_status()["opens"] == 2

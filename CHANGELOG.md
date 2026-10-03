@@ -4,6 +4,42 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+### A company host is sent no keys and asked for none
+
+- **The leak.** HivemindOS can move a company to another computer, often a
+  rented Linux box installed with `--company-host`, and that computer keeps
+  only the keys its owner shares to it. HivemindOS fixed its own side on
+  2026-10-03 (core `121b5b10a`): the host's collector says
+  `envSync.companyHost: true` in `/health`, refuses `GET /env`, and
+  acknowledges `POST /env` without writing it. PassBook still found peers by a
+  TCP connect alone, so `passbook add` and `passbook rotate` sent every new
+  value to the rented box. Thrown away there, but it had still crossed the wire.
+- **Now.** Every peer PassBook would send to or pull from comes from
+  `passbook_fleet.reachable()`, which now reads each collector's `/health` and
+  leaves out any that says `companyHost: true` (nested under `envSync` or at the
+  top level; every collector port on that machine is checked). Affected: `add`,
+  `rotate`, `sync` (pull, `--push-missing`, `--retry-pending`, `--repair`,
+  `--maintenance`), and the peer recovery in `signin`. A company host is not
+  queued for retry and is not reported unreachable. `sync --json` lists it under
+  a new `companyHosts` field, the plain output says it was skipped, and
+  `sync --from HOST` naming one is refused. `passbook_sync.push` makes the same
+  check on its own port before posting, so a caller that found a peer another
+  way cannot send to one either.
+- **A peer whose `/health` does not answer** (an older collector, or another
+  app on that port) is treated exactly as before. Only a peer that says it is a
+  company host is skipped.
+- **Old debts are dropped.** A key queued for a machine before it became a
+  company host is removed from `sync-pending.json` on the next `sync --apply`
+  instead of being retried, which would send the value.
+- **On a company host itself** (`HIVE_COMPANY_HOST=1` in the environment or in
+  `company-host.env` under the hive root, the marker HivemindOS setup writes),
+  `passbook sync` pulls and sends nothing and says why (`"companyHost": true` in
+  `--json`), and `add`/`rotate` keep the write on that machine. This mirrors
+  `hive-env-add`, which already does nothing there.
+- Not changed: the Machines page (`passbook state`) still finds collectors by
+  TCP connect alone, so it can still list a company host as receiving the store.
+  It sends nothing; reading `/health` there is a follow-up.
+
 ### `sync --json --apply` pulls again, and a collector's port stays on its machine
 
 - **Pulls never landed.** The JSON answer returned before the write, so

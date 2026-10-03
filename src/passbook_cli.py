@@ -514,6 +514,10 @@ def cmd_add(args: argparse.Namespace) -> int:
     return _offer_service_updates(result["updated"], values, args)
 
 
+COMPANY_HOST_SELF_NOTE = ("this machine runs companies moved to it and keeps only the keys "
+                          "you share to it, so it does not sync with your other machines")
+
+
 def _replicate_write(keys, values) -> None:
     """Send keys this command just wrote to every reachable machine on the tailnet.
 
@@ -529,14 +533,26 @@ def _replicate_write(keys, values) -> None:
         import passbook_sync
     except ImportError:
         return
+    # A company host (a computer running companies moved to it) keeps the keys
+    # written on it to itself, as HivemindOS's own hive-env-add does there.
+    if passbook_fleet.company_host_mode():
+        print(f"kept on this machine: {COMPANY_HOST_SELF_NOTE}")
+        return
     try:
+        # Company hosts are left out here: they keep only the keys you share to
+        # them, and a value they discard on arrival has still been sent.
         peers = passbook_fleet.reachable()
+        company_hosts = passbook_fleet.company_hosts_seen()
     except Exception:  # noqa: BLE001 — no tailnet is not a failed write
         return
+    for host in company_hosts:
+        print(f"not sent to {host}: it keeps only the keys you share to it")
     if not peers:
         return
     policy = _access().read_policy() if _access() is not None else None
     outcome = passbook_sync.replicate(chosen, peers, policy=policy)
+    for host in outcome.get("companyHosts") or []:
+        print(f"not sent to {host}: it keeps only the keys you share to it")
     if outcome["sent"]:
         print(f"sent to {len(outcome['sent'])} machine(s): {', '.join(outcome['sent'])}")
     for host, why in sorted(outcome["failed"].items()):
@@ -4678,6 +4694,19 @@ def cmd_sync(args: argparse.Namespace) -> int:
         return _fail("Fleet sync is not installed on this machine.",
                      "Run:  passbook install")
 
+    # A company host neither pulls the store nor sends its keys anywhere. Its
+    # HivemindOS maintenance already skips this; a person running it by hand
+    # would otherwise have pulled every peer's store onto a rented box.
+    if passbook_fleet.company_host_mode():
+        if args.json:
+            print(json.dumps({"companyHost": True, "peers": [], "companyHosts": [],
+                              "unreachable": [], "wouldPull": [], "pulled": [],
+                              "wouldSeed": {}, "wouldRetry": {}, "sent": {},
+                              "note": COMPANY_HOST_SELF_NOTE}, indent=2))
+        else:
+            print(f"Nothing to sync: {COMPANY_HOST_SELF_NOTE}.")
+        return 0
+
     # Sealed reads answer only a caller the broker started, and replication has
     # to hold plaintext to do its job. So start over as one, rather than asking
     # for an exemption that anything could claim.
@@ -4693,19 +4722,33 @@ def cmd_sync(args: argparse.Namespace) -> int:
         args.retry_pending = True
         args.push_missing = True
 
+    # Company hosts are not peers here: never asked for the store, never sent a
+    # value, and not "unreachable" either. They keep only keys shared to them.
     peers = passbook_fleet.reachable()
+    company_hosts = passbook_fleet.company_hosts_seen()
     if args.from_peer:
         wanted = args.from_peer.split("@")[-1].strip().lower()
+        if wanted in (h.lower() for h in company_hosts):
+            return _fail(f"{args.from_peer} keeps only the keys you share to it, "
+                         "so PassBook does not sync with it.")
         peers = [p for p in peers
                  if wanted in (str(p.get("host", "")).lower(), str(p.get("address", "")).lower())]
         if not peers:
             return _fail(f"No peer here matches {args.from_peer}.",
                          "See who is reachable:  passbook sync --json")
 
+    # A key queued for a machine before it became a company host must not be
+    # retried (that sends the value) nor listed as owed for ever.
+    if args.apply:
+        for host in company_hosts:
+            passbook_sync.forget_host(host)
+
     if not peers:
         ok, detail = passbook_fleet.available()
-        if not ok:
+        if not ok and not company_hosts:
             return _fail(f"No tailnet here: {detail}")
+        for host in company_hosts:
+            print(f"skipped {host}: it keeps only the keys you share to it")
         print("No peers on this tailnet are running a collector.")
         return 0
 
@@ -4799,6 +4842,11 @@ def cmd_sync(args: argparse.Namespace) -> int:
             if ok:
                 sent[host] = len(payload)
                 passbook_sync.note_delivered(sorted(payload), host)
+            elif why == passbook_sync.COMPANY_HOST_REFUSAL:
+                # Became a company host since discovery: never a target, owed nothing.
+                passbook_sync.forget_host(host)
+                print(f"  not sent to {host}: it keeps only the keys you share to it",
+                      file=sys.stderr)
             else:
                 # Written down rather than logged and forgotten: the whole point
                 # of the queue is that an absence survives the outage that made it.
@@ -4840,6 +4888,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps({
             "peers": [p["host"] for p in peers],
+            "companyHosts": company_hosts,
             "unreachable": unreachable,
             "wouldPull": sorted(plan["apply"]),
             "pulled": pulled,
@@ -4869,6 +4918,8 @@ def cmd_sync(args: argparse.Namespace) -> int:
     for peer in peers:
         mark = "unreachable" if peer["host"] in unreachable else "ok"
         print(f"  {peer['host']}  ({mark})")
+    for host in company_hosts:
+        print(f"  {host}  (skipped: keeps only the keys you share to it)")
     print()
     print(f"would pull: {len(plan['apply'])} key(s)")
     for key in sorted(plan["apply"])[:20]:

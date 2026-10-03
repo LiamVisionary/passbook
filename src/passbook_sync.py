@@ -55,6 +55,11 @@ from typing import Any, Iterable, Mapping
 KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 WIRE_TIMEOUT = 20.0
 
+# What `push` answers for a company host: a machine that keeps only the keys
+# its owner shares to it. Callers compare against it, so it is never queued as
+# a delivery that failed.
+COMPANY_HOST_REFUSAL = "keeps only the keys you share to it; nothing was sent"
+
 # A local value that exists but could not be opened. Not None and not a string,
 # so it can never accidentally compare equal to a peer's value.
 UNOPENED = object()
@@ -246,6 +251,25 @@ def note_delivered(keys: Iterable[str], host: str, *, root: Path | None = None) 
     return entries
 
 
+def forget_host(host: str, *, root: Path | None = None) -> dict[str, dict[str, Any]]:
+    """Drop every debt owed to one machine, without delivering anything.
+
+    For a machine that turned out to be a company host, which keeps only the
+    keys its owner shares to it. A key queued for it before it became one must
+    not be retried (that sends the value), and must not sit in the queue as
+    owed on every pass either.
+    """
+    entries = read_pending(root)
+    target = str(host)
+    if not any(target in entry.get("owed", []) for entry in entries.values()):
+        return entries
+    for entry in entries.values():
+        entry["owed"] = [h for h in entry.get("owed", []) if h != target]
+    entries = {k: v for k, v in entries.items() if v["owed"]}
+    write_pending(entries, root)
+    return entries
+
+
 def plan_retry(pending: Mapping[str, Mapping[str, Any]],
                reachable: Iterable[str]) -> dict[str, list[str]]:
     """Which keys to resend to which reachable host. Pure.
@@ -287,6 +311,7 @@ def replicate(values: Mapping[str, str], peers: Iterable[Mapping[str, str]], *,
     send = pusher or push
     sent: list[str] = []
     failed: dict[str, str] = {}
+    company: list[str] = []
     if allowed:
         for peer in peers:
             host = str(peer.get("host") or "")
@@ -297,11 +322,16 @@ def replicate(values: Mapping[str, str], peers: Iterable[Mapping[str, str]], *,
             if ok:
                 sent.append(host)
                 note_delivered(sorted(allowed), host, root=root)
+            elif why == COMPANY_HOST_REFUSAL:
+                # Not a failed delivery: it is never a target, so nothing is owed.
+                company.append(host)
+                forget_host(host, root=root)
             else:
                 failed[host] = why
         if failed:
             note_undelivered(sorted(allowed), failed, root=root)
-    return {"keys": sorted(allowed), "withheld": withheld, "sent": sorted(sent), "failed": failed}
+    return {"keys": sorted(allowed), "withheld": withheld, "sent": sorted(sent), "failed": failed,
+            "companyHosts": sorted(company)}
 
 
 def may_leave_machine(key: str, policy: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -533,9 +563,20 @@ def push(host: str, port: str, values: Mapping[str, str], *, address: str = "",
         return False, f"refusing to send {len(blobs)} sealed value(s); the wire carries plaintext"
     if not values:
         return True, ""
+    where = address or host
+    # The last check before a value leaves. `passbook_fleet.reachable` already
+    # leaves company hosts out; this holds for any caller that found a peer
+    # some other way. A company host acknowledges a POST without writing it,
+    # which still means the value crossed the wire.
+    try:
+        import passbook_fleet
+
+        if passbook_fleet.peer_is_company_host(where, port, every_port=False):
+            return False, COMPANY_HOST_REFUSAL
+    except ImportError:
+        pass
     payload = json.dumps({"scope": "shared", "runtime": "passbook",
                           "entries": dict(values)}).encode("utf-8")
-    where = address or host
     request = urllib.request.Request(
         f"http://{where}:{port}/env", data=payload,
         headers={"content-type": "application/json"}, method="POST")

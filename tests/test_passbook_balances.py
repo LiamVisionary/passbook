@@ -180,7 +180,8 @@ def test_a_recent_reading_is_reused_only_for_the_same_key():
 def test_the_fingerprint_secret_stays_on_this_machine(tmp_path):
     salt = balances.salt_for(tmp_path)
     assert len(salt) == 32 and balances.salt_for(tmp_path) == salt
-    assert (tmp_path / balances.SALT_FILE).stat().st_mode & 0o077 == 0
+    if os.name != "nt":  # Windows has no POSIX modes; the file sits in the store's own folder
+        assert (tmp_path / balances.SALT_FILE).stat().st_mode & 0o077 == 0
 
 
 class _Server(http.server.BaseHTTPRequestHandler):
@@ -259,8 +260,12 @@ _READINGS = balances.readings
 
 
 def _balances(monkeypatch, capsys, **flags):
+    import passbook
     import passbook_cli
 
+    # The command installs the broker's unsealer for the life of its process; here that is the test run's,
+    # and a later test would read the store through it.
+    monkeypatch.setattr(passbook, "_UNSEALER", passbook._UNSEALER)
     calls = []
 
     def fetch(adapter, key, timeout=12.0):

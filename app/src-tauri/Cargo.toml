@@ -1,6 +1,6 @@
 [package]
 name = "passbook-app"
-version = "1.10.5"
+version = "1.10.6"
 description = "PassBook — the credentials this machine shares, and who may use them"
 authors = ["Rizzma Inc."]
 edition = "2021"
@@ -34,6 +34,8 @@ zeroize = { version = "1", features = ["alloc"] }
 # Copy happens on this side now. `navigator.clipboard.writeText` takes a string,
 # so leaving it in the window would re-materialise exactly what the veil avoids.
 tauri-plugin-clipboard-manager = "2"
+# The app replacing itself with a newer signed release. See src/update.rs.
+tauri-plugin-updater = "2"
 getrandom = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

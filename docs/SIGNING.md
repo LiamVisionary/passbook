@@ -98,3 +98,26 @@ Steps 4 and 5 are what turn `denied` in the record from "an app asked for
 something it is not set up to need" into "an intruder was turned away" — but
 only for the rows where the caller was a signed bundle. The record should carry
 that distinction per row rather than in a footnote.
+
+## The update-signing key
+
+Separate from both certificates above, and the one that cannot be replaced.
+
+From 1.10.6 the app updates itself (Settings → Updates). It installs an update
+only if the file's signature verifies against the public key compiled into it:
+`plugins.updater.pubkey` in `app/src-tauri/tauri.conf.json`. The private half is
+the repository secret `PASSBOOK_UPDATER_PRIVATE_KEY` (no password), used by the
+release workflow, and the maintainer keeps a copy in his own PassBook store under
+the same name. It is in no checkout.
+
+- **Losing it strands every installed copy.** A release signed with a new key is
+  one no existing app will take; those copies would need a hand-installed build
+  carrying the new public key. Apple and Microsoft will reissue a certificate.
+  Nobody reissues this.
+- **Leaking it** lets whoever has it sign an update the app would install, if
+  they could also put it at the release address. Rotate by shipping a release,
+  signed with the old key, whose config carries the new public key.
+- A build without the secret still works: it makes no update files and no
+  `latest.json`, and installed apps are not offered it.
+- Make one for your own fork with `cargo tauri signer generate`, and put its
+  public half in `tauri.conf.json`.

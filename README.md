@@ -52,6 +52,7 @@ you see here, you can do from a terminal.
 - [The broker](#the-broker)
 - [Backup](#backup)
 - [On screen](#on-screen)
+- [Updating](#updating)
 - [What it does not claim](#what-it-does-not-claim)
 - [Reference](#reference)
 
@@ -1290,6 +1291,31 @@ removed: an app allowed to read plaintext through a seal, keyed on a name
 anything can claim. `--mode` is the scoped flag — it says who may have a key —
 and `passbook run` is how a program uses one without printing it. `--reads` on
 its own is the whole store's posture.
+
+---
+
+## Updating
+
+**Settings → Updates** shows three versions, because they are three installs:
+the app, the command line it drives, and the background service.
+
+- **Update and restart** brings the command line and then the app to the
+  newest release and reopens the app. The command line goes first, since the
+  window drives it.
+- The **background service** keeps running the version it was started from. The
+  page says so and offers **Restart**, which closes the vault: sign in again
+  afterwards. It is never restarted for you.
+- An update is downloaded from this repository's releases and installed only if
+  its signature matches the key built into the app. Nothing is installed until
+  you press the button.
+- To know there is one, the app asks GitHub for the newest version when it opens
+  and twice a day while open. Nothing about you, the computer or your keys is
+  sent. A dot on Settings means something is behind.
+- A Linux `.deb` cannot replace itself; the page says where the new package is.
+  The AppImage, macOS and Windows builds can.
+
+From a terminal, `passbook update` updates the command line alone
+(`passbook update --check` only looks).
 
 ---
 

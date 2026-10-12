@@ -174,3 +174,27 @@ def test_uv_interpreter_pin_falls_back_to_resolving_the_tool_symlink(tmp_path, m
     assert method == "uv tool"
     assert "--python" in command
     assert command[command.index("--python") + 1] == str(target.resolve())
+
+
+def test_update_json_says_which_version_the_background_service_is_still_running(monkeypatch, capsys):
+    """An update replaces files, not the process started from them; the app's Updates page shows the gap."""
+    import argparse
+    import json
+
+    monkeypatch.setattr(cli, "installed_version", lambda: "1.10.5")
+    monkeypatch.setattr(cli, "latest_version", lambda: ("1.10.5", "v1.10.5"))
+    monkeypatch.setattr(cli, "install_method", lambda: ("uv tool", ["uv", "tool", "install"]))
+    monkeypatch.setattr(broker, "running", lambda: True)
+    monkeypatch.setattr(broker, "_ask", lambda message, timeout=1.0: {"version": "1.10.2"})
+    assert cli.cmd_update(argparse.Namespace(json=True, check=False)) == 0
+    said = json.loads(capsys.readouterr().out)
+    assert said["service"] == "1.10.2" and said["service_behind"] is True and said["behind"] is False
+
+    monkeypatch.setattr(broker, "_ask", lambda message, timeout=1.0: {"version": "1.10.5"})
+    assert cli.cmd_update(argparse.Namespace(json=True, check=False)) == 0
+    assert json.loads(capsys.readouterr().out)["service_behind"] is False
+
+    monkeypatch.setattr(broker, "running", lambda: False)
+    assert cli.cmd_update(argparse.Namespace(json=True, check=False)) == 0
+    said = json.loads(capsys.readouterr().out)
+    assert said["service"] == "" and said["service_behind"] is False, "no service is not a stale one"

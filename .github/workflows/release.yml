@@ -40,6 +40,17 @@ permissions:
 #     APPLE_ID                     the Apple account, for notarisation
 #     APPLE_PASSWORD               an app-specific password for it
 #     APPLE_TEAM_ID                the team
+#
+# The app updates itself from these releases (app/src-tauri/src/update.rs), and
+# installs an update only if it was signed with this key. Without it everything
+# still builds; the release then carries no update files and no `latest.json`,
+# and installed apps are simply not offered it.
+#
+#     PASSBOOK_UPDATER_PRIVATE_KEY   Tauri's update-signing key (no password)
+#
+# It is NOT the Apple or Windows certificate, and losing it is worse than
+# losing either: every installed app trusts exactly one public key, compiled
+# in, so a release signed with a new key is one no existing copy will take.
 
 env:
   TAG: ${{ github.event.inputs.tag || github.ref_name }}
@@ -116,6 +127,10 @@ jobs:
       # arrives as an empty string, so "is there one" has to be asked here.
       HAS_SIGNING: ${{ secrets.APPLE_CERTIFICATE != '' }}
       HAS_WINDOWS_SIGNING: ${{ secrets.AZURE_CLIENT_ID != '' }}
+      HAS_UPDATER_KEY: ${{ secrets.PASSBOOK_UPDATER_PRIVATE_KEY != '' }}
+      # The bundler makes and signs update files only when this overlay turns
+      # them on, so with no key there is nothing for it to ask a key for.
+      UPDATER_CONFIG: ${{ secrets.PASSBOOK_UPDATER_PRIVATE_KEY != '' && '--config src-tauri/tauri.updater.conf.json' || '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -226,10 +241,13 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         id: build
         if: runner.os != 'Windows'
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.PASSBOOK_UPDATER_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         with:
           projectPath: app
           tauriScript: cargo tauri
-          args: --target ${{ matrix.target }}
+          args: --target ${{ matrix.target }} ${{ env.UPDATER_CONFIG }}
 
       # Windows is built in two halves, because the thing that has to be signed
       # is not the thing the bundler hands back. v1.0.0 shipped an installer
@@ -356,8 +374,14 @@ jobs:
           PASSBOOK_SIGN_ENDPOINT: ${{ vars.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
           PASSBOOK_SIGN_ACCOUNT: ${{ vars.AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME }}
           PASSBOOK_SIGN_PROFILE: ${{ vars.AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME }}
+          # The update signature is made here, after the bundler has put the
+          # Authenticode signature on the installer: it is over the bytes that
+          # ship. Signing the installer in a later step would change them and
+          # leave an update signature for a file nobody downloads.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.PASSBOOK_UPDATER_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         run: |
-          cargo tauri bundle --target ${{ matrix.target }} ${{ steps.winsign.outputs.config }}
+          cargo tauri bundle --target ${{ matrix.target }} ${{ steps.winsign.outputs.config }} ${{ env.UPDATER_CONFIG }}
           $nsis = Join-Path $env:GITHUB_WORKSPACE "app\src-tauri\target\${{ matrix.target }}\release\bundle\nsis"
           $paths = @(Get-ChildItem -LiteralPath $nsis -Filter *.exe -File | ForEach-Object { $_.FullName })
           if (-not $paths) { throw "the bundler produced no installer in $nsis" }
@@ -413,10 +437,15 @@ jobs:
           }
           if ($bad -gt 0) { throw "$bad file(s) are not validly signed" }
 
-      # Named formats rather than everything the bundler produced, so an
-      # updater tarball for an app with no updater cannot slip into a release
-      # again. `artifactPaths` is a JSON array of absolute paths.
-      - name: Attach the installers
+      # Named formats rather than everything the bundler produced. The
+      # installers come from `artifactPaths`, a JSON array of absolute paths.
+      #
+      # The update files are found on disk instead: the archive or installer
+      # the app downloads to replace itself, and the signature beside each
+      # (`.sig`). They exist only when the updater overlay was on, and asking
+      # the build action to list them would depend on it having read an overlay
+      # it was only handed as an argument.
+      - name: Attach the installers and the update files
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -442,6 +471,64 @@ jobs:
           # A platform that quietly ships nothing is the failure this whole job
           # exists to avoid.
           [ "$sent" -gt 0 ] || { echo "nothing was attached" >&2; exit 1; }
+
+          [ "$HAS_UPDATER_KEY" = "true" ] || { echo "no update-signing key: no update files"; exit 0; }
+          bundle="app/src-tauri/target/${{ matrix.target }}/release/bundle"
+          version="${TAG#v}"
+          # Both Mac builds make a `PassBook.app.tar.gz`. In one release they
+          # need two names, and the manifest finds each by how its name ends
+          # (scripts/update-manifest.py).
+          case "${{ matrix.target }}" in
+            aarch64-apple-darwin) chip=aarch64 ;;
+            x86_64-apple-darwin) chip=x64 ;;
+            *) chip="" ;;
+          esac
+          updates=0
+          while IFS= read -r path; do
+            name="${path##*/}"
+            case "$name" in
+              *.app.tar.gz|*.app.tar.gz.sig)
+                renamed="PassBook_${version}_${chip}.app.tar.gz${name##*.app.tar.gz}"
+                cp "$path" "$RUNNER_TEMP/$renamed"
+                echo "attaching $renamed"
+                gh release upload "$TAG" "$RUNNER_TEMP/$renamed" --clobber ;;
+              *-setup.exe.sig|*.AppImage.sig)
+                echo "attaching $name"
+                gh release upload "$TAG" "$path" --clobber ;;
+              *) continue ;;
+            esac
+            updates=$((updates + 1))
+          done < <(find "$bundle" -type f \( -name '*.app.tar.gz' -o -name '*.sig' \))
+          # The key was there and the overlay was on, so a platform with no
+          # signed update file is a release its installed copies cannot take.
+          [ "$updates" -gt 0 ] || { echo "the update-signing key is set but no update file was built" >&2; exit 1; }
+
+  # What every installed app reads to learn there is a newer release. Written
+  # once, after every platform has attached its update file, and only after
+  # each signature has been checked against the file it is for.
+  manifest:
+    name: update manifest
+    needs: app
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Write latest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir assets
+          gh release download "$TAG" --dir assets --pattern '*.sig' || true
+          if ! ls assets/*.sig > /dev/null 2>&1; then
+            echo "no update files in this release (built without the update-signing key): no manifest"
+            exit 0
+          fi
+          gh release download "$TAG" --dir assets --clobber \
+            --pattern '*.app.tar.gz' --pattern '*-setup.exe' --pattern '*.AppImage'
+          python3 -m pip install --quiet cryptography
+          python3 scripts/update-manifest.py "$TAG" assets --verify > latest.json
+          cat latest.json
+          gh release upload "$TAG" latest.json --clobber
 
   # The app shells out to the CLI for everything, so the CLI is half the
   # release. Attached to the same tag rather than left to PyPI alone, which

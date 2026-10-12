@@ -81,7 +81,9 @@
     "allow-github-push",
     "allow-balances-state",
     "allow-balances-enable",
-    "allow-balances-open"
+    "allow-balances-open",
+    "allow-update-state",
+    "allow-update-install"
   ],
   "remote": {
     "urls": [

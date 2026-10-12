@@ -4,6 +4,37 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [1.10.6] — 2026-10-13
+
+### The app updates itself
+
+- **Asked for.** Liam, 2026-10-13: "update our existing passbook please. and if
+  passbook app doesnt have an in-app updater, add one". It had none: the app on
+  his Mac was 1.7.1 from September beside a 1.10.5 command line, and the
+  background service was still running 1.10.2 with nothing saying so.
+- **Settings → Updates.** Three rows, because they are three installs: the app,
+  the command line, the background service, each with its version and whether it
+  is current. One button, **Update to X and restart**, runs `passbook update`
+  for the command line and then replaces the app and reopens it. If the command
+  line cannot be updated (a locked install wants `sudo passbook update`) that is
+  said and the app is left alone, with **Update the app only** beside it. A
+  stale background service gets **Restart**, which says it closes the vault;
+  it is never restarted for you.
+- **Knowing there is one.** The app asks at launch and twice a day and lights a
+  dot on Settings. It never installs by itself.
+- **How.** Tauri's updater (`app/src-tauri/src/update.rs`). A release now also
+  carries each platform's update file, its signature, and `latest.json`
+  (`scripts/update-manifest.py`), which the app reads from
+  `releases/latest/download/`, an address only a published release has. The app
+  installs a file only if its signature verifies against the public key compiled
+  in. The private key signs in the release workflow
+  (`PASSBOOK_UPDATER_PRIVATE_KEY`) and the manifest job re-checks every
+  signature against its file before writing the manifest.
+- **`passbook update --json`** also says which version the background service is
+  running (`service`, `service_behind`).
+- 1.10.5 and earlier have no updater, so this release is the last one installed
+  by hand.
+
 ## [1.10.5] — 2026-10-12
 
 ### Balances: what each service account has left

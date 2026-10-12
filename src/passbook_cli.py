@@ -4160,10 +4160,15 @@ def cmd_update(args: argparse.Namespace) -> int:
     method, command = install_method()
 
     if getattr(args, "json", False):
+        # `service` is the version the background service is running, which an update does not change:
+        # it replaces the files, not the process started from them. The app's Updates page shows the gap.
+        service = _running_broker_version()
         print(json.dumps({"installed": current, "latest": newest, "tag": tag,
                           "method": method, "can_update": bool(command),
                           "behind": bool(current and newest
-                                         and _as_numbers(current) < _as_numbers(newest))},
+                                         and _as_numbers(current) < _as_numbers(newest)),
+                          "service": service,
+                          "service_behind": bool(service and current and service != current)},
                          indent=2))
         return 0
 
@@ -4213,6 +4218,18 @@ def cmd_update(args: argparse.Namespace) -> int:
     print(f"Updated to {newest}.")
     _warn_stale_broker(newest)
     return 0
+
+
+def _running_broker_version() -> str:
+    """The version the background service says it is, or "" when none is running or it will not say."""
+    try:
+        import passbook_broker as broker_module
+
+        if not broker_module.running():
+            return ""
+        return str((broker_module._ask({"op": "ping"}, timeout=1.0) or {}).get("version") or "")
+    except Exception:  # noqa: BLE001 — a question about the service never fails the command asking it
+        return ""
 
 
 def _warn_stale_broker(newest: str) -> None:

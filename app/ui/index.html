@@ -178,6 +178,7 @@
   .row + .row { border-top: 1px solid var(--line); }
   .row .grow { flex: 1; min-width: 0; }
   .mono { font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .prewrap { white-space: pre-wrap; }
   .sub { color: var(--ink3); font-size: 11.5px; margin-top: 1px; }
   .note { color: var(--ink3); font-size: 11.5px; line-height: 1.5; padding: 10px 14px 13px; }
   .note code, .lede code {
@@ -1111,6 +1112,7 @@ Use the copy button to put it on the clipboard."
    *  One 24-grid, one stroke weight, currentColor throughout.
    */
   const ICONS = {
+    download: '<path d="M12 4.5v10.2"/><path d="M7.8 10.6 12 14.8l4.2-4.2"/><path d="M5 19.5h14"/>',
     coins: '<ellipse cx="9.5" cy="7.5" rx="5" ry="2.5"/><path d="M4.5 7.5v4c0 1.4 2.2 2.5 5 2.5s5-1.1 5-2.5v-4"/><path d="M9.5 18.5c-2.8 0-5-1.1-5-2.5"/><ellipse cx="15" cy="15" rx="4.5" ry="2.3"/><path d="M10.5 15v2.6c0 1.3 2 2.3 4.5 2.3s4.5-1 4.5-2.3V15"/>',
     key: '<circle cx="7.4" cy="12" r="4.1"/><path d="M11.5 12H20.8"/><path d="M17.4 12v3.4"/><path d="M20.2 12v2.5"/>',
     lock: '<rect x="4.5" y="10.5" width="15" height="9.5" rx="2.4"/><path d="M8 10.5V7.6a4 4 0 0 1 8 0v2.9"/><circle cx="12" cy="15.2" r="1.3" fill="currentColor" stroke="none"/>',
@@ -1187,6 +1189,7 @@ Use the copy button to put it on the clipboard."
     ["access", "Permissions", "sliders", "What happens when something asks"],
     ["apps", "Apps", "chip", "Which apps can read what"],
     ["broker", "Advanced", "hub", "Background access and diagnostics"],
+    ["updates", "Updates", "download", "This version, and the newest"],
   ];
 
   let state = null, page = "keys", busy = false, notice = "";
@@ -1212,6 +1215,14 @@ Use the copy button to put it on the clipboard."
   let signins = null, connecting = {};
   /** Balances: null until first asked; `enabled` false shows the page's opt-in. */
   let balancesView = { data: null, busy: false, error: "" };
+  // The app, the command line it drives and the background service are three installs, so the Updates
+  // page shows three versions (update.rs). `working` is what the button is doing right now.
+  let updatesView = { data: null, busy: false, working: "", error: "", checked: 0 };
+  /** Whether anything here is behind the newest release: the dot on Settings. */
+  const updatesWaiting = () => {
+    const d = updatesView.data;
+    return !!(d && (d.app?.available || d.cli?.behind || d.cli?.service_behind));
+  };
   // Which keys are ticked, and whether a bulk delete is awaiting a yes.
   let picked = {}, bulkConfirm = false;
   // The key whose audience is open, and the edit in progress. The mode
@@ -1483,7 +1494,7 @@ Use the copy button to put it on the clipboard."
             <span class="statustile plain sm">${icon(glyph)}</span>
             <span class="grow"><span class="settingname">${esc(label)}</span>
               <span class="sub">${esc(blurb)}</span></span>
-            ${id === "access" && pending ? '<span class="dot"></span>' : ""}
+            ${(id === "access" && pending) || (id === "updates" && updatesWaiting()) ? '<span class="dot"></span>' : ""}
             ${icon("chevron", "tinyicon")}
           </button>`).join("")}
       </div>`;
@@ -1571,7 +1582,7 @@ Use the copy button to put it on the clipboard."
         <div class="navlist">
           <button data-page="settings" aria-current="${inSettings()}">
             ${icon("sliders", "navicon")}<span class="navlabel">Settings</span>
-            ${pending ? '<span class="dot"></span>' : ""}
+            ${pending || updatesWaiting() ? '<span class="dot"></span>' : ""}
           </button>
         </div>
         ${navFoot()}
@@ -2562,6 +2573,85 @@ passbook oauth connect google:work</pre>
     try { balancesView.data = await invoke("balances_state", { fresh }); }
     catch (e) { balancesView.error = balanceError(e); }
     finally { balancesView.busy = false; paint(); }
+  }
+
+  /** Ask what is installed and what is newest. `quiet` is the check at launch and twice a day: it only
+   *  repaints the sidebar's dot, never the page somebody may be typing on. */
+  async function loadUpdates(quiet = false) {
+    if (updatesView.busy || updatesView.working) return;
+    updatesView.busy = true;
+    if (!quiet) { updatesView.error = ""; paint(); }
+    try { updatesView.data = await invoke("update_state"); updatesView.checked = Date.now(); }
+    catch (e) { if (!quiet) updatesView.error = balanceError(e); }
+    finally {
+      updatesView.busy = false;
+      if (!quiet || page === "updates" || page === "settings") paint(); else paintNav();
+    }
+  }
+
+  async function installUpdate(appOnly) {
+    updatesView.working = "install"; updatesView.error = ""; paint();
+    try {
+      const next = await invoke("update_install", { appOnly });
+      if (next?.restarting) { updatesView.working = "restarting"; updatesView.restartingTo = next.version; paint(); return; }
+      updatesView.data = next; updatesView.checked = Date.now();
+    }
+    catch (e) { updatesView.error = balanceError(e); }
+    updatesView.working = ""; paint();
+  }
+
+  /** Settings → Updates: the app, the command line and the background service, each with the version
+   *  it is on, and one button that brings the first two to the newest release. */
+  function updatesPage() {
+    const v = updatesView, d = v.data;
+    if (!d) return `${settingsBack("Updates")}<p class="lede">${v.error ? esc(v.error) : "Checking…"}</p>`;
+    const a = d.app || {}, c = d.cli || {};
+    const needApp = !!(a.available && a.can_install), needCli = !!(c.behind && c.can_update);
+    const working = v.working;
+    const row = (glyph, tone, name, version, note, tag, extra = "") => `<div class="row">
+      <span class="statustile ${tone}">${icon(glyph)}</span>
+      <div class="grow"><strong>${esc(name)}</strong>${version ? ` <span class="figure">${esc(version)}</span>` : ""}
+        <div class="note">${note}</div></div>
+      ${tag ? `<span class="tag ${tag[0]}">${esc(tag[1])}</span>` : ""}${extra}</div>`;
+    const appNote = a.available
+      ? `Version ${esc(a.latest)} is out.${a.can_install ? "" : ` This copy was installed as a package, so it cannot replace itself: get the new package from <span class="mono">${esc((d.releases || "").replace("https://", ""))}</span>.`}`
+      : a.error ? "Could not ask for the newest version. Check the connection and try again."
+      : "This is the newest release.";
+    const cliNote = c.error ? "The command line here is too old to say its version. Run <span class=\"mono\">passbook update</span> in a terminal."
+      : c.behind ? `Version ${esc(c.latest)} is out.${c.can_update ? "" : ` This copy is ${esc(c.method || "not installed by PassBook")}, so it is updated there.`}`
+      : !c.latest ? "Could not ask for the newest version."
+      : `The newest release, installed by ${esc(c.method || "this computer")}.`;
+    const tagFor = (behind, unknown) => behind ? ["off", "Update"] : unknown ? ["", "Unknown"] : ["on", "Current"];
+    const stuckCli = v.error && v.error.startsWith("The command line could not be updated") && needApp;
+    return `${settingsBack("Updates")}
+      <div class="group">
+        ${row("monitor", a.available ? "warn" : "good", "PassBook app", a.current || "", appNote, tagFor(a.available, !!a.error))}
+        ${row("doc", c.behind ? "warn" : "good", "Command line", c.installed || "", cliNote, tagFor(c.behind, !!c.error || !c.latest))}
+        ${c.service ? row("hub", c.service_behind ? "warn" : "good", "Background service", c.service,
+            c.service_behind ? "Still running the version it was started from. Restarting it closes the vault: sign in again afterwards."
+                             : "Running the installed version.",
+            tagFor(c.service_behind, false),
+            c.service_behind ? `<button class="act" data-service-restart="1" ${working ? "disabled" : ""}>
+              ${working === "service" ? "Restarting…" : "Restart"}</button>` : "") : ""}
+        <div class="row">
+          <div class="grow note">${working === "restarting" ? `Installed ${esc(v.restartingTo || "")}. Restarting PassBook…`
+            : working === "install" ? "Downloading and checking the release…"
+            : v.busy ? "Checking…" : "Checked just now. PassBook also checks when it opens."}</div>
+          <button class="act" data-update-check="1" ${v.busy || working ? "disabled" : ""}>Check again</button>
+          ${needApp || needCli ? `<button class="act primary" data-update-install="all" ${v.busy || working ? "disabled" : ""}>
+            ${working === "install" ? "Updating…" : needApp ? `Update to ${esc(a.latest)} and restart` : "Update the command line"}</button>` : ""}
+        </div>
+      </div>
+      ${v.error ? `<p class="note">${esc(v.error)}</p>` : ""}
+      ${stuckCli ? `<div class="group quiet"><div class="row"><div class="grow note">Update only the app for now. Pages
+        that need the newer command line will say so until it is updated.</div>
+        <button class="act" data-update-install="app" ${working ? "disabled" : ""}>Update the app only</button></div></div>` : ""}
+      ${a.available && a.notes ? `<div class="group"><h3>In ${esc(a.latest)}</h3>
+        <div class="row"><div class="grow note prewrap">${esc(a.notes)}</div></div></div>` : ""}
+      ${aside(`<p>An update is downloaded from PassBook's releases on GitHub and installed only if its signature
+        matches the key built into this app. Nothing is installed until you press the button.</p>
+        <p>To check, PassBook asks GitHub for the newest version when it opens and twice a day while open.
+        Nothing about you, this computer or your keys is sent.</p>`, "How updates work")}`;
   }
 
   /** One provider's figure: a balance, an allowance, or usage, as it reported it, or nothing. */
@@ -4779,7 +4869,8 @@ passbook oauth connect google:work</pre>
     const body = { keys: keysPage, vault: vaultPage, signins: signinsPage,
                    access: accessPage, apps: appsPage, settings: settingsPage,
                    machines: machinesPage, switch: switchPage,
-                   broker: brokerPage, record: recordPage, balances: balancesPage }[page]();
+                   broker: brokerPage, record: recordPage, balances: balancesPage,
+                   updates: updatesPage }[page]();
     main.innerHTML = lockBanner() + body + noticeBar();
     paintGate();
     paintSheet();
@@ -4787,6 +4878,16 @@ passbook oauth connect google:work</pre>
 
     main.querySelectorAll("[data-goto]").forEach((b) => b.onclick = () => {
       page = b.dataset.goto; notice = ""; paint();
+      if (page === "updates" && Date.now() - updatesView.checked > 60000) loadUpdates();
+    });
+    main.querySelectorAll("[data-update-check]").forEach((b) => b.onclick = () => loadUpdates());
+    main.querySelectorAll("[data-update-install]").forEach((b) => b.onclick = () =>
+      installUpdate(b.dataset.updateInstall === "app"));
+    main.querySelectorAll("[data-service-restart]").forEach((b) => b.onclick = async () => {
+      updatesView.working = "service"; updatesView.error = ""; paint();
+      try { state = await invoke("broker", { action: "restart" }); await refreshVault(); }
+      catch (e) { updatesView.error = balanceError(e); }
+      finally { updatesView.working = ""; await loadUpdates(); }
     });
     // Lock = put this window away. Agent access is a separate decision, made
     // on the screen this drops you on.
@@ -5412,6 +5513,9 @@ passbook oauth connect google:work</pre>
       await authorization.load();
       await webLink.load();
       wireDrop();
+      // Is there a newer release? Asked once now and twice a day, quietly: it only lights a dot.
+      loadUpdates(true);
+      setInterval(() => loadUpdates(true), 12 * 60 * 60 * 1000);
       const events = window.__TAURI__?.event;
       if (events?.listen) {
         events.listen("passbook://ask", () => loadAsk());

@@ -309,6 +309,8 @@ fn broker(action: String) -> Result<Value, String> {
     match action.as_str() {
         "start" => run(&["broker", "start"])?,
         "stop" => run(&["broker", "stop"])?,
+        // After an update: the service keeps running the version it was started from.
+        "restart" => run(&["broker", "restart"])?,
         _ => return Err("Unknown broker action".into()),
     };
     state()
@@ -683,6 +685,48 @@ fn balances_open(id: String) -> Result<(), String> {
     }
     run(&["balances", "open", id])?;
     Ok(())
+}
+
+/// The Updates page: this app (update.rs), the command line it drives, and the background service.
+///
+/// Three things, because they are three installs. The app is replaced by Tauri's updater; the command
+/// line by `passbook update`, through whatever installed it (uv, pipx, pip), or with the app when it is
+/// the copy inside it; and the service keeps running the version it was started from until restarted.
+#[tauri::command(async)]
+fn update_state(app: tauri::AppHandle) -> Result<Value, String> {
+    // The CLI not answering (too old to know `--json`, or missing) is shown beside the app's own answer.
+    let cli = run_json(&["update", "--json"]).unwrap_or_else(|error| serde_json::json!({ "error": error }));
+    Ok(serde_json::json!({ "app": update::check(&app), "cli": cli, "releases": update::RELEASES }))
+}
+
+/// Bring the command line and then the app to the newest release, and restart into it.
+///
+/// The command line goes first: the window drives it, so a new window over an old CLI can call a command
+/// that is not there yet, while a new CLI under an old window is only a page it has not grown. If it
+/// cannot be updated (a locked install needs `sudo passbook update`), that is said and the app is left
+/// alone, unless `app_only` asks for the app regardless.
+#[tauri::command(async)]
+fn update_install(app: tauri::AppHandle, app_only: Option<bool>) -> Result<Value, String> {
+    if !app_only.unwrap_or(false) {
+        let cli = run_json(&["update", "--json"]).unwrap_or(Value::Null);
+        let flag = |name: &str| cli.get(name).and_then(Value::as_bool).unwrap_or(false);
+        if flag("behind") && flag("can_update") {
+            run(&["update"]).map_err(|error| format!("The command line could not be updated. {error}"))?;
+        }
+    }
+    let found = update::check(&app);
+    let flag = |name: &str| found.get(name).and_then(Value::as_bool).unwrap_or(false);
+    if flag("available") && flag("can_install") {
+        let version = update::install(&app)?;
+        // Answer first, so the page can say it is restarting, then restart into the new copy.
+        let handle = app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(900));
+            handle.restart();
+        });
+        return Ok(serde_json::json!({ "restarting": true, "version": version }));
+    }
+    update_state(app)
 }
 
 #[tauri::command(async)]
@@ -1528,6 +1572,7 @@ fn key_history(name: String) -> Result<Value, String> {
 /// the store is read over IPC by the process that needs it, never over this.
 mod ask;
 mod authorize;
+mod update;
 mod veil;
 mod weblink;
 
@@ -2158,6 +2203,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             // A link can arrive before the window exists (cold start) or long
             // after it (the app was already open), so both are wired: the
@@ -2272,7 +2318,8 @@ fn main() {
             pending_web_link, dismiss_web_link, decide_web_link,
             github_state, github_connect_token, github_connect_gh, github_connect_device,
             github_disconnect, github_targets, github_environments, github_check, github_push,
-            balances_state, balances_enable, balances_open
+            balances_state, balances_enable, balances_open,
+            update_state, update_install
         ])
         .run(tauri::generate_context!())
         .expect("PassBook failed to start");

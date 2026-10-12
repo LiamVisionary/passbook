@@ -1,0 +1,2 @@
+# Signed bytes: a line-ending conversion on checkout (Windows) makes the signature wrong.
+tests/fixtures/update-signature/* -text

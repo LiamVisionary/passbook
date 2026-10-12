@@ -88,7 +88,7 @@ def _fail(message: str, remedy: str = "") -> int:
     return 1
 
 
-def _use_broker_for_sealed_values(app: str, reason: str, only: Iterable[str] = ()) -> None:
+def _use_broker_for_sealed_values(app: str, reason: str, only: Iterable[str] = ()) -> set[str]:
     """Let this process read a sealed store by asking the broker to open it.
 
     The data key stays inside the broker; what comes back are values it decided
@@ -100,10 +100,13 @@ def _use_broker_for_sealed_values(app: str, reason: str, only: Iterable[str] = (
     which has to fill an environment for a program that has never heard of
     PassBook and cannot be rewritten to ask.
     """
+    # Which names the broker opened: it records those reads itself, so `run`
+    # records only the rest (see `_record_run_reads`).
+    brokered: set[str] = set()
     try:
         import passbook_broker
     except ImportError:
-        return
+        return brokered
 
     wanted = set(only)
 
@@ -115,6 +118,7 @@ def _use_broker_for_sealed_values(app: str, reason: str, only: Iterable[str] = (
                   if str(value).startswith("hive-sealed:") and (not wanted or name in wanted)]
         if not sealed:
             return values
+        brokered.update(sealed)
         granted = passbook_broker.request_through_broker(sealed, app=app, reason=reason) or {}
         opened = {name: value for name, value in values.items()
                   if not str(value).startswith("hive-sealed:")}
@@ -122,6 +126,7 @@ def _use_broker_for_sealed_values(app: str, reason: str, only: Iterable[str] = (
         return opened
 
     passbook.set_unsealer(unseal)
+    return brokered
 
 
 def _store_values() -> dict[str, str]:
@@ -2190,7 +2195,8 @@ def cmd_remove(args: argparse.Namespace) -> int:
     return 0
 
 
-def _sealed_run(command: list[str], who: str, args: argparse.Namespace) -> int | None:
+def _sealed_run(command: list[str], who: str, args: argparse.Namespace,
+                reason: str = "") -> int | None:
     """Run under a grant, with the child's output scrubbed as it streams.
 
     Returns None when this machine has no reason to — no grants installed, no
@@ -2271,7 +2277,7 @@ def _sealed_run(command: list[str], who: str, args: argparse.Namespace) -> int |
     # already scrubbed, which is why this is a socket round trip rather than the
     # `os.execvpe` below: an exec would need the values in THIS process first.
     answer = passbook_broker.spawn_streaming(
-        command, wanted, app=who, reason=f"run {Path(command[0]).name}",
+        command, wanted, app=who, reason=reason or f"run {Path(command[0]).name}",
         project=passbook.project())
     if answer is None:
         return _fail("The broker did not answer.", "Check it:  passbook broker start")
@@ -2368,6 +2374,71 @@ def _split_only(names: Iterable[str] | None) -> list[str]:
     return out
 
 
+def _asks_for_reasons() -> bool:
+    """A person at a terminal, who can be asked. Never a script, a service or CI."""
+    if os.environ.get("PASSBOOK_GRANT") or os.environ.get("CI"):
+        return False
+    try:
+        return sys.stdin.isatty() and sys.stderr.isatty()
+    except (AttributeError, ValueError):
+        return False
+
+
+def _run_reason(args: argparse.Namespace, command: list[str]) -> tuple[str, str]:
+    """Why this run uses credentials: what was said, and the line the record keeps.
+
+    The record always said WHO used a key and, through the broker, the command;
+    never what for. An owner reading it later ("why did something read
+    CLOUDFLARE_API_TOKEN at 3am?") had the command line and had to guess the
+    purpose, and an agent had nowhere to put it (Liam, 2026-10-12: "the key and
+    whats using it and for what is all properly recorded").
+
+    Said with `--reason` (or `--why`), or by `PASSBOOK_REASON`, which a harness or
+    an outer run sets once for everything under it. At a terminal, unsaid, it is
+    asked: saying why is the default. It is never required. A script, a service
+    or an agent that gives none still runs, as it did before (CONTRIBUTING: a
+    read that worked must not start needing something), quietly, and is recorded
+    with the command alone. Agents learn to say it from the brief and from the
+    MCP tools, where `reason` is a required field.
+    """
+    program = Path(command[0]).name
+    said = (str(getattr(args, "reason", "") or "").strip()
+            or os.environ.get("PASSBOOK_REASON", "").strip())
+    if not said and _asks_for_reasons():
+        keys = ", ".join(args.only) if args.only else "its keys"
+        print(f"Why does {program} need {keys}? (one line, recorded; Enter to skip) ",
+              end="", file=sys.stderr, flush=True)
+        try:
+            said = sys.stdin.readline().strip()
+        except (OSError, ValueError):
+            said = ""
+    said = " ".join(said.split())[:150]
+    return said, (f"{said} (run {program})" if said else f"run {program}")
+
+
+def _record_run_reads(app: str, reason: str, names: Iterable[str],
+                      resolved: dict[str, str], brokered: Iterable[str] | None) -> None:
+    """Record the keys this run hands over that the broker did not.
+
+    A sealed value is opened by the broker, which records that read itself; a
+    plaintext one was read straight from the file and left no row at all, so on
+    a store that is not encrypted the record could not say a key was ever used.
+    Only names, as everywhere in the record. A failed receipt never fails the
+    run: the child gets its environment either way.
+    """
+    skip = set(brokered or ())
+    handed = sorted({name for name in names
+                     if name not in skip and resolved.get(name) and not os.environ.get(name)})
+    if not handed:
+        return
+    try:
+        import passbook_stamp
+
+        passbook_stamp.stamp(op="read", keys=handed, app=app, reason=reason[:200])
+    except Exception:  # noqa: BLE001 — a receipt must not fail a read
+        pass
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     """Run a command with the store loaded as a base. The process env wins."""
     args.only = _split_only(args.only)
@@ -2377,6 +2448,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     if not command:
         return _fail("Nothing to run.", "Usage: passbook-run -- your-command --flags")
     who = caller("passbook-run", args)
+    said, reason = _run_reason(args, command)
     # Where this command is about to put a key, worked out before it runs and
     # written down only if it succeeds. `--used-in` says it for a command that
     # cannot be read (a script); a recognised one says it for itself.
@@ -2390,12 +2462,12 @@ def cmd_run(args: argparse.Namespace) -> int:
         plan = _run_recording_plan(command, args)
     except Exception as error:  # noqa: BLE001 — a bad label fails before anything runs
         return _fail(str(error))
-    sealed = _sealed_run(command, who, args)
+    sealed = _sealed_run(command, who, args, reason)
     if sealed is not None:
         if plan and sealed == 0:
             _record_sinks(*plan)
         return sealed
-    _use_broker_for_sealed_values(who, f"run {Path(command[0]).name}", args.only or ())
+    brokered = _use_broker_for_sealed_values(who, reason, args.only or ())
     resolved = dict(_store_values())
     child = dict(resolved)
     if args.only:
@@ -2456,6 +2528,11 @@ def cmd_run(args: argparse.Namespace) -> int:
                 print(f"In the store but encrypted, and not readable here: {', '.join(shut)}. "
                       "Sign in to read them:  passbook signin", file=sys.stderr)
     child.update({key: value for key, value in os.environ.items() if value})
+    _record_run_reads(who, reason, args.only or stored, resolved, brokered)
+    # The reason goes down with the name: a script this runs that asks PassBook
+    # for a key of its own is doing it for the same purpose, and says so.
+    if said:
+        child["PASSBOOK_REASON"] = said
     # Hand the name down. Whatever this runs may call PassBook itself — a test
     # script asking for one key, a tool that shells out — and those reads belong
     # to whoever asked for this environment, not to `passbook-run`. Set after
@@ -2712,6 +2789,8 @@ def cmd_access(args: argparse.Namespace) -> int:
         # Marking it DENIED would read as two refusals for one request.
         flag = "" if row.get("granted", True) or row.get("op") == "ask" else "  DENIED"
         print(f"{row.get('at', '?')}  {row.get('app', '?'):<28} {row.get('op', '?'):<10} {keys}{flag}")
+        if row.get("reason"):
+            print(f"{'':22}for: {row['reason']}")
     print(f"\n{verification['detail']}")
     return 0 if verification["ok"] else 1
 
@@ -7134,6 +7213,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     run = subs.add_parser("run", help="run a command with the store loaded as a base")
     run.add_argument("--app", default="", help="who is asking; recorded")
+    run.add_argument("--reason", "--why", dest="reason", default="",
+                     help="what the command does with the keys; recorded beside it "
+                          "(else PASSBOOK_REASON; asked at a terminal)")
     run.add_argument("--only", action="append", metavar="KEY", default=[],
                      help="hand the child only these keys; repeatable")
     run.add_argument("--keep", action="append", metavar="NAME", default=[],

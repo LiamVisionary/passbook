@@ -160,9 +160,12 @@ TOOLS = [
                 "keys": {"type": "array", "items": {"type": "string"},
                          "description": "Credential names to place in its environment."},
                 "cwd": {"type": "string", "description": "Directory to run in."},
-                "reason": {"type": "string", "description": "Why. Shown to the owner and recorded."},
+                "reason": {"type": "string",
+                           "description": "What the command does with these keys, in one line "
+                                          "(\"deploy the gateway Worker\"). Recorded beside the key and "
+                                          "the command, so the owner can see what each key is for."},
             },
-            "required": ["command", "keys"],
+            "required": ["command", "keys", "reason"],
         },
     },
     {
@@ -182,9 +185,11 @@ TOOLS = [
                 "method": {"type": "string", "description": "GET, POST, … Defaults to GET."},
                 "headers": {"type": "object", "description": "e.g. {\"Authorization\": \"Bearer {{OPENAI_API_KEY}}\"}"},
                 "body": {"description": "String, or an object which is sent as JSON."},
-                "reason": {"type": "string", "description": "Why. Recorded."},
+                "reason": {"type": "string",
+                           "description": "What this request is for, in one line. Recorded beside "
+                                          "the key and the host."},
             },
-            "required": ["url"],
+            "required": ["url", "reason"],
         },
     },
     {

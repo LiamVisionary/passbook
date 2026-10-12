@@ -4,6 +4,28 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+### Every use of a key says what it was for
+
+- **The gap.** The record said which app used which key, and through the broker
+  the command; never the purpose. An owner reading it later had a command line
+  and had to guess why, and an agent had nowhere to put it.
+- **Now.** `passbook run --reason "deploy the gateway Worker"` (also `--why`, or
+  `PASSBOOK_REASON` set once for a whole process tree) is recorded beside the
+  key and the command: `deploy the gateway Worker (run wrangler)`, and the
+  broker's own row adds the full command. The reason is handed down to the
+  child as `PASSBOOK_REASON`, so a script that asks for a key of its own says
+  the same. `passbook access` shows it under each row (`for: …`), and
+  `passbook history KEY` lists what a key has been used for.
+- **Saying why is the default, never a requirement.** At a terminal `run` asks
+  for one line (Enter skips). A script, a service, CI or an agent that gives
+  none runs exactly as before, quietly, and is recorded with its command. The
+  MCP tools `run_with_credentials` and `proxy_request` now list `reason` as a
+  required field, and the brief tells agents to always pass `--reason`.
+- **A plaintext key handed to `run` is recorded at all.** Only sealed values,
+  opened by the broker, left a row; on a store that is not encrypted the record
+  could not show a key was ever used. `run` now stamps a `read` for the keys it
+  hands over that the broker did not open (names only).
+
 ## [1.10.3] — 2026-10-03
 
 ### A company host is sent no keys and asked for none

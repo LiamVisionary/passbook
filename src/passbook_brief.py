@@ -144,7 +144,7 @@ output with the value removed.
 ```bash
 passbook check OPENAI_API_KEY          # is it here, and can I use it
 passbook list                          # every name, no values
-passbook run --only A,B -- <command>   # <-- the one to reach for
+passbook run --reason "what for" --only A,B -- <command>   # <-- the one; reason recorded
 passbook grants                        # what holds credentials right now
 ```
 

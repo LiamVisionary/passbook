@@ -121,3 +121,25 @@ the same name. It is in no checkout.
   `latest.json`, and installed apps are not offered it.
 - Make one for your own fork with `cargo tauri signer generate`, and put its
   public half in `tauri.conf.json`.
+
+### Checking an update for real
+
+Compiling, CI and a stubbed page all passed for an updater that could not
+update (1.10.6). The only check that counts runs a real app against the real
+release address. It needs no signing identity and takes a few minutes:
+
+1. Copy the checkout somewhere disposable. In `app/ui/index.html`, after the
+   `loadUpdates(true);` in `boot`, add a timer that presses the button:
+   `setTimeout(() => invoke("update_install", { appOnly: true }), 5000);`
+2. Build it calling itself an older version than the newest published release:
+   `cargo tauri build --debug --bundles app --config '{"version":"1.0.0"}'`
+3. Copy the built `PassBook.app` aside and run its binary from a terminal
+   (`PassBook.app/Contents/MacOS/passbook-app`), so anything it prints is seen.
+4. Within a minute the copy's `Info.plist` version is the newest release's, and
+   `spctl -a -vv` on it says "Notarized Developer ID": it downloaded the real
+   update, verified it and replaced itself. A panic in the terminal, or a
+   version that never changes, is a release that must not go out.
+
+It proves the code that is about to ship can install the release before it.
+After publishing, run it once more: the same copy should take the new release,
+and the new release should start without printing anything.

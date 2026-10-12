@@ -18,6 +18,17 @@
 //! publishes it.
 //!
 //! It never installs by itself. `check` asks; `install` is a button.
+//!
+//! Both are `async fn`, awaited by `async` commands in main.rs, and that is not a
+//! matter of taste. Every other command in this app is a blocking call to the CLI
+//! and is deliberately not `async fn` (see main.rs). 1.10.6 wrote these the same
+//! way and waited on the updater with `block_on`. A command runs on a thread of
+//! the async runtime, and blocking one of those on async work panics: "Cannot
+//! start a runtime from within a runtime". It compiled, its page passed every
+//! test against a stand-in backend, and in the real app the Updates page never
+//! answered. So 1.10.6 could not take the update this code exists to deliver; it
+//! was found by running a real build against the real release address, which is
+//! now how this is checked (docs/SIGNING.md, "Checking an update for real").
 
 use serde_json::{json, Value};
 use tauri::AppHandle;
@@ -47,12 +58,12 @@ fn replaces_itself() -> bool {
 ///
 /// A failure to ask is an answer, not an error: offline is the ordinary reason,
 /// and the page should say "could not check" beside the version it does know.
-pub fn check(app: &AppHandle) -> Value {
+pub async fn check(app: &AppHandle) -> Value {
     let current = app.package_info().version.to_string();
-    let found = tauri::async_runtime::block_on(async {
-        let updater = app.updater().map_err(|error| error.to_string())?;
-        updater.check().await.map_err(|error| error.to_string())
-    });
+    let found = match app.updater() {
+        Ok(updater) => updater.check().await.map_err(|error| error.to_string()),
+        Err(error) => Err(error.to_string()),
+    };
     match found {
         Ok(Some(update)) => json!({
             "current": current, "latest": update.version, "available": true,
@@ -70,20 +81,18 @@ pub fn check(app: &AppHandle) -> Value {
 
 /// Download the newest release, verify its signature, and put it where this
 /// copy is. Returns the version now on disk; the caller restarts into it.
-pub fn install(app: &AppHandle) -> Result<String, String> {
+pub async fn install(app: &AppHandle) -> Result<String, String> {
     if !replaces_itself() {
         return Err("This copy was installed as a package. Install the new package from the releases page.".into());
     }
-    tauri::async_runtime::block_on(async {
-        let updater = app.updater().map_err(|error| error.to_string())?;
-        let Some(update) = updater.check().await.map_err(|error| error.to_string())? else {
-            return Err("This is already the newest release.".to_string());
-        };
-        let version = update.version.clone();
-        update
-            .download_and_install(|_, _| {}, || {})
-            .await
-            .map_err(|error| format!("The update could not be installed: {error}"))?;
-        Ok(version)
-    })
+    let updater = app.updater().map_err(|error| error.to_string())?;
+    let Some(update) = updater.check().await.map_err(|error| error.to_string())? else {
+        return Err("This is already the newest release.".to_string());
+    };
+    let version = update.version.clone();
+    update
+        .download_and_install(|_, _| {}, || {})
+        .await
+        .map_err(|error| format!("The update could not be installed: {error}"))?;
+    Ok(version)
 }

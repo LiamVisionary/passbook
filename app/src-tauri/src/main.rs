@@ -747,11 +747,24 @@ fn balances_open(id: String) -> Result<(), String> {
 /// Three things, because they are three installs. The app is replaced by Tauri's updater; the command
 /// line by `passbook update`, through whatever installed it (uv, pipx, pip), or with the app when it is
 /// the copy inside it; and the service keeps running the version it was started from until restarted.
-#[tauri::command(async)]
-fn update_state(app: tauri::AppHandle) -> Result<Value, String> {
+///
+/// These two are `async fn`, unlike every other command here, because the updater is async and a command
+/// must not block on it (update.rs says what happened when one did). The CLI calls inside them are still
+/// blocking, so each goes to the blocking pool rather than stalling the runtime.
+#[tauri::command]
+async fn update_state(app: tauri::AppHandle) -> Result<Value, String> {
     // The CLI not answering (too old to know `--json`, or missing) is shown beside the app's own answer.
-    let cli = run_json(&["update", "--json"]).unwrap_or_else(|error| serde_json::json!({ "error": error }));
-    Ok(serde_json::json!({ "app": update::check(&app), "cli": cli, "releases": update::RELEASES }))
+    let cli = cli_update_state().await;
+    Ok(serde_json::json!({ "app": update::check(&app).await, "cli": cli, "releases": update::RELEASES }))
+}
+
+/// `passbook update --json`, off the async runtime.
+async fn cli_update_state() -> Value {
+    tauri::async_runtime::spawn_blocking(|| run_json(&["update", "--json"]))
+        .await
+        .map_err(|error| error.to_string())
+        .and_then(|answer| answer)
+        .unwrap_or_else(|error| serde_json::json!({ "error": error }))
 }
 
 /// Bring the command line and then the app to the newest release, and restart into it.
@@ -760,19 +773,23 @@ fn update_state(app: tauri::AppHandle) -> Result<Value, String> {
 /// that is not there yet, while a new CLI under an old window is only a page it has not grown. If it
 /// cannot be updated (a locked install needs `sudo passbook update`), that is said and the app is left
 /// alone, unless `app_only` asks for the app regardless.
-#[tauri::command(async)]
-fn update_install(app: tauri::AppHandle, app_only: Option<bool>) -> Result<Value, String> {
+#[tauri::command]
+async fn update_install(app: tauri::AppHandle, app_only: Option<bool>) -> Result<Value, String> {
     if !app_only.unwrap_or(false) {
-        let cli = run_json(&["update", "--json"]).unwrap_or(Value::Null);
+        let cli = cli_update_state().await;
         let flag = |name: &str| cli.get(name).and_then(Value::as_bool).unwrap_or(false);
         if flag("behind") && flag("can_update") {
-            run(&["update"]).map_err(|error| format!("The command line could not be updated. {error}"))?;
+            tauri::async_runtime::spawn_blocking(|| run(&["update"]))
+                .await
+                .map_err(|error| error.to_string())
+                .and_then(|answer| answer)
+                .map_err(|error| format!("The command line could not be updated. {error}"))?;
         }
     }
-    let found = update::check(&app);
+    let found = update::check(&app).await;
     let flag = |name: &str| found.get(name).and_then(Value::as_bool).unwrap_or(false);
     if flag("available") && flag("can_install") {
-        let version = update::install(&app)?;
+        let version = update::install(&app).await?;
         // Answer first, so the page can say it is restarting, then restart into the new copy.
         let handle = app.clone();
         std::thread::spawn(move || {
@@ -781,7 +798,7 @@ fn update_install(app: tauri::AppHandle, app_only: Option<bool>) -> Result<Value
         });
         return Ok(serde_json::json!({ "restarting": true, "version": version }));
     }
-    update_state(app)
+    update_state(app).await
 }
 
 #[tauri::command(async)]

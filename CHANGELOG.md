@@ -4,7 +4,33 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
-## [1.10.7] — 2026-10-13
+## [1.10.8] — 2026-10-13
+
+1.10.7 was tagged and never released: its build was stopped when the fault
+below was found. What it would have carried is here.
+
+### The updater that could not update
+
+- **What was wrong.** 1.10.6 shipped "The app updates itself", and it could
+  not. The two updater commands waited on the async updater with `block_on`
+  from a command, which runs on a thread of the async runtime; that panics
+  ("Cannot start a runtime from within a runtime"). So in 1.10.6 the Updates
+  page never answers and the check at launch dies quietly. Nothing else in the
+  app is affected.
+- **Why nothing caught it.** It compiled, CI was green on every platform, and
+  the page passed every check against a stand-in backend. None of those runs
+  the command inside a real app.
+- **How it was found, and is now checked.** A locally built copy calling itself
+  an older version, pointed at the real release address, with the button
+  pressed by a timer. In 1.10.6's code it printed the panic. With the fix
+  (version 1.10.5 against the live 1.10.6): it found 1.10.6, downloaded it,
+  verified the signature, replaced itself (an unsigned local build became the
+  notarized release) and reopened. `docs/SIGNING.md`, "Checking an update for
+  real", is the procedure.
+- **The fix.** `update_state` and `update_install` are `async fn` and await the
+  updater; their calls to the command line go to the blocking pool.
+- **1.10.6 cannot take this update by itself.** Install 1.10.8 by hand once;
+  from there the button works.
 
 ### Balances at a glance: meters, spend, what runs out, your own logos
 
@@ -100,7 +126,7 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 - **`passbook update --json`** also says which version the background service is
   running (`service`, `service_behind`).
 - 1.10.5 and earlier have no updater, so this release is the last one installed
-  by hand.
+  by hand. **Not so: the updater in 1.10.6 does not work. See 1.10.8.**
 
 ## [1.10.5] — 2026-10-12
 

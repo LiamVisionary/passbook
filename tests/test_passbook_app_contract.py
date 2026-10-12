@@ -651,12 +651,15 @@ def test_the_source_list_stays_short():
     three-way switch. Nothing was missing and nothing could be found. Anything
     that is not one of the few things a person opens this app to do belongs on
     the settings shelf, which is one press away and does not cost a slot.
+
+    Five since 2026-10-12: Balances, at Liam's ask for "an extra tab". It is one of those few things (what
+    is left to spend, and topping it up), not how PassBook works, and it stays off until turned on.
     """
     source = UI.read_text(encoding="utf-8")
     block = re.search(r"const PAGES = \[(.*?)\n  \];", source, re.S)
     assert block, "PAGES not found"
     entries = re.findall(r'\["(\w+)"', block.group(1))
-    assert len(entries) <= 4, f"the source list has grown back to {len(entries)}: {entries}"
+    assert len(entries) <= 5, f"the source list has grown back to {len(entries)}: {entries}"
 
 
 def test_every_settings_pane_is_reachable_and_leads_back():

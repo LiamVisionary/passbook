@@ -43,6 +43,7 @@ you see here, you can do from a terminal.
 - [Who can read what](#who-can-read-what)
 - [Where a key lives, and rotating it](#where-a-key-lives-and-rotating-it)
 - [Activity](#activity)
+- [Balances](#balances)
 - [Fleet replication](#fleet-replication)
 - [Devices](#devices)
 - [Sign-ins that stay alive](#sign-ins-that-stay-alive)
@@ -712,6 +713,38 @@ passbook history --verify        # re-hash the chain and say whether it holds
 
 Tamper evident, not tamper proof. It does not prevent an access. It makes one
 impossible to hide.
+
+---
+
+## Balances
+
+What each service account has left, read with the keys you already hold. Off
+until you turn it on: the **Balances** page explains what it does and has a
+**Turn on Balances** button.
+
+```bash
+passbook balances                # the services you hold a key for
+passbook balances --all          # every service it knows, with how each is paid for
+passbook balances open openrouter   # that service's billing page, to top up
+```
+
+- **Read-only.** Each reading is one GET to the provider's documented billing
+  endpoint, with the key you saved for it. Nothing is bought; **Top up** opens
+  the provider's own billing page and you pay there.
+- **Recorded.** Every read lands in Activity as `read service balances`, under
+  the app that asked.
+- **Numbers, never keys.** A denial's body is never read (some echo the key), a
+  key never follows a redirect, and the last readings kept on disk hold numbers
+  only. A reading names its key by an opaque fingerprint that changes when the
+  key does, so a rotated key is asked afresh and never shown the old account's
+  numbers.
+- **Unknown is not zero.** An answer it does not understand, a refusal or no
+  answer shows no balance. Plan allowances, invoices and postpaid amounts are
+  shown as what they are, never as money you have.
+- 13 services have live readers (OpenRouter, fal, Meshy, Vast.ai, Apify,
+  DeepSeek, Venice, Bankr, ElevenLabs, AgentMail, Resend, Vultr, QuiverAI);
+  the rest link to their billing page. HivemindOS's Service Accounts page reads
+  through this same command, so a fix here reaches both.
 
 ---
 

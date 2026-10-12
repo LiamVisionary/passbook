@@ -78,7 +78,10 @@
     "allow-github-targets",
     "allow-github-environments",
     "allow-github-check",
-    "allow-github-push"
+    "allow-github-push",
+    "allow-balances-state",
+    "allow-balances-enable",
+    "allow-balances-open"
   ],
   "remote": {
     "urls": [

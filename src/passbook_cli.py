@@ -2773,6 +2773,99 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+BALANCES_REASON = "read service balances"
+
+
+def _balance_values(app: str, wanted: list[str]) -> tuple[dict[str, str], set[str]] | int:
+    """The store's values for the balance readers, and which of them the broker opened (it records those).
+
+    Read as `push` reads (`_value_for_push`): the store's own values, never the caller's environment, which
+    can hold a stale copy. A grant's environment is trusted: the broker filled it a moment ago. On a machine
+    that seals reads the command runs itself again under a grant, as `sync` does; then the int is its exit.
+    """
+    if os.environ.get("PASSBOOK_GRANT"):
+        return {name: os.environ.get(name, "") for name in wanted}, set(wanted)
+    brokered = _use_broker_for_sealed_values(app, BALANCES_REASON, wanted) or set()
+    values: dict[str, str] = {}
+    for path in passbook._scoped_paths():
+        values.update({name: value for name, value in passbook._read(path).items() if name in wanted})
+    if any(str(values.get(name, "")).startswith("hive-sealed:") for name in wanted):
+        again = _rerun_under_grant(app, BALANCES_REASON, wanted)
+        if again is not None:
+            return again
+    return values, brokered
+
+
+def _balance_line(row: dict) -> str:
+    if row.get("status") != "ready":
+        return f"{row['name']}: {row['message']}"
+    parts = []
+    if row.get("balance") is not None:
+        parts.append(f"{row['balance']:,.2f} {row.get('unit') or ''}".strip())
+    if row.get("allowance"):
+        left = row["allowance"]
+        parts.append(f"{left['used']:,.0f} of {left['limit']:,.0f} {left['unit']} used")
+    if row.get("usageUsd") is not None:
+        parts.append(f"{row['usageUsd']:,.2f} USD used ({row.get('usagePeriod') or 'reported'})")
+    return f"{row['name']}: {'; '.join(parts) or row['message']}"
+
+
+def cmd_balances(args: argparse.Namespace) -> int:
+    """What each service account has left, read with the keys held here (passbook_balances.py)."""
+    import passbook_balances as balances
+
+    root = passbook.root()
+    action = args.action or "list"
+    ids = [str(name).strip() for name in (args.provider or []) if str(name).strip()]
+    if action in ("enable", "disable"):
+        record = balances.set_enabled(root, action == "enable")
+        print(json.dumps(record) if args.json else ("Balances are on." if record["enabled"] else "Balances are off."))
+        return 0
+    if action == "status":
+        record = balances.settings(root)
+        print(json.dumps(record) if args.json else ("Balances are on." if record["enabled"] else "Balances are off."))
+        return 0
+    if action == "open":
+        entry = balances.provider(ids[0]) if len(ids) == 1 else None
+        url = balances.top_up_url(entry) if entry else ""
+        if not url:
+            return _fail("Name one provider to open, as `passbook balances --all` lists them.")
+        import webbrowser
+
+        webbrowser.open(url)
+        print(json.dumps({"opened": url}) if args.json else url)
+        return 0
+
+    who = caller("passbook-balances", args)
+    present = set(passbook.key_names())
+    wanted = balances.wanted_keys(present, everything=args.all, only=ids)
+    got = _balance_values(who, wanted)
+    if isinstance(got, int):
+        return got
+    values, brokered = got
+    _record_run_reads(who, BALANCES_REASON, wanted, values, brokered)
+    # The keys are read every time, so a reading from the last two minutes is reused only for the same key:
+    # a rotated key is asked afresh, never shown the old account's numbers.
+    recent = {} if args.fresh else balances.cached(root)
+    rows = balances.readings(values, present, everything=args.all, only=ids, salt=balances.salt_for(root),
+                             fresh_from=recent)
+    asked = [row for row in rows if row.get("status") == "ready" and row is not recent.get(row["providerId"])]
+    if asked or args.fresh:
+        balances.remember(root, [*rows, *[row for pid, row in recent.items() if pid not in {r["providerId"] for r in rows}]])
+    from_cache = bool(recent) and not asked
+    if args.json:
+        print(json.dumps({"enabled": balances.settings(root)["enabled"], "cached": from_cache, "providers": rows}))
+        return 0
+    if not rows:
+        print("No key here belongs to a provider PassBook can read a balance for. See them all:  passbook balances --all")
+        return 0
+    for row in rows:
+        print(_balance_line(row))
+        if row.get("topUpUrl") and row.get("status") != "missing":
+            print(f"    top up: {row['topUpUrl']}")
+    return 0
+
+
 def cmd_access(args: argparse.Namespace) -> int:
     """Who read which key. Names, times and apps — never values."""
     try:
@@ -7250,6 +7343,16 @@ def build_parser() -> argparse.ArgumentParser:
     status.add_argument("--repair", action="store_true",
                         help="remove shadowed duplicate lines, keeping the last")
     status.set_defaults(func=cmd_status)
+
+    bal = subs.add_parser("balances", help="what each service account has left, and where to top up")
+    bal.add_argument("action", nargs="?", choices=["list", "enable", "disable", "status", "open"], default="list",
+                     help="list (default); enable or disable the app's Balances page; open PROVIDER's billing page")
+    bal.add_argument("provider", nargs="*", help="provider ids, as `--all` lists them")
+    bal.add_argument("--all", action="store_true", help="every provider PassBook knows, not only the ones you hold a key for")
+    bal.add_argument("--fresh", action="store_true", help="ask the providers now, not the last two minutes' answers")
+    bal.add_argument("--json", action="store_true")
+    bal.add_argument("--app", default="", help="who is asking; recorded")
+    bal.set_defaults(func=cmd_balances)
 
     access = subs.add_parser("access", help="the tamper-evident record of credential reads")
     access.add_argument("--limit", type=int, default=40)

@@ -647,6 +647,44 @@ fn oauth_state() -> Result<Value, String> {
     run_json(&["oauth", "--json"])
 }
 
+/// Balances (`passbook balances`, passbook_balances.py): off until turned on, then what each service account
+/// has left. The CLI reads the providers and keeps the numbers for two minutes; `fresh` asks them again now.
+#[tauri::command(async)]
+fn balances_state(fresh: Option<bool>) -> Result<Value, String> {
+    let status = run_json(&["balances", "status", "--json"])?;
+    if !status.get("enabled").and_then(Value::as_bool).unwrap_or(false) {
+        return Ok(serde_json::json!({ "enabled": false, "providers": [] }));
+    }
+    if fresh.unwrap_or(false) {
+        run_json(&["balances", "--fresh", "--json", "--app", "passbook-app"])
+    } else {
+        run_json(&["balances", "--json", "--app", "passbook-app"])
+    }
+}
+
+/// Turn the Balances page on (and read once) or off (and forget the last readings).
+#[tauri::command(async)]
+fn balances_enable(on: bool) -> Result<Value, String> {
+    run(&["balances", if on { "enable" } else { "disable" }, "--json"])?;
+    if on {
+        balances_state(Some(true))
+    } else {
+        Ok(serde_json::json!({ "enabled": false, "providers": [] }))
+    }
+}
+
+/// Open a provider's own billing page to top up. Only a provider id goes to the CLI, which looks the address
+/// up in its catalog: the window never hands it a URL to open.
+#[tauri::command(async)]
+fn balances_open(id: String) -> Result<(), String> {
+    let id = id.trim();
+    if id.is_empty() || !id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
+        return Err("Which provider?".into());
+    }
+    run(&["balances", "open", id])?;
+    Ok(())
+}
+
 #[tauri::command(async)]
 fn oauth_refresh(id: String) -> Result<Value, String> {
     if id.trim().is_empty() {
@@ -2233,7 +2271,8 @@ fn main() {
             pending_authorization, dismiss_authorization, decide_authorization,
             pending_web_link, dismiss_web_link, decide_web_link,
             github_state, github_connect_token, github_connect_gh, github_connect_device,
-            github_disconnect, github_targets, github_environments, github_check, github_push
+            github_disconnect, github_targets, github_environments, github_check, github_push,
+            balances_state, balances_enable, balances_open
         ])
         .run(tauri::generate_context!())
         .expect("PassBook failed to start");

@@ -4,6 +4,29 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+### Balances: what each service account has left
+
+- **Asked for.** Liam, 2026-10-12: a Balances tab with an intro and an
+  enable button, so it is opt-in, showing every service balance with top-up
+  buttons, starting from HivemindOS's Service Accounts readers and sharing
+  them so a fix reaches both.
+- **The page.** A new **Balances** page in the app. Off by default; the intro
+  says what it reads and how, and **Turn on Balances** opts in (**Turn off**
+  stops it). On, it lists each service you hold a key for with its balance,
+  plan allowance or usage, when it was read, and **Top up**, which opens the
+  provider's own billing page. Refresh asks again.
+- **The command.** `passbook balances` (`--all`, `--fresh`, `--json`), plus
+  `balances open ID`, `enable`, `disable` and `status`. 57 services, 13 with
+  live readers: the ones HivemindOS read, ported with their tests.
+- **Safety.** Read-only GETs to each provider's documented endpoint; a key
+  never follows a redirect and a 401/403 body is never read. Every read is
+  recorded as `read service balances`. Unknown is never zero. Readings kept on
+  disk for two minutes hold numbers only, and are reused only for the same
+  key: each carries an HMAC fingerprint of its key under a secret kept on this
+  machine (`balances-salt`), so a rotated key is read afresh.
+- **Shared with HivemindOS.** Its Service Accounts page now reads through
+  `passbook balances --all --json --app hivemindos` instead of its own copy.
+
 ## [1.10.4] — 2026-10-12
 
 ### Every use of a key says what it was for

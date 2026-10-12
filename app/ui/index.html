@@ -1111,6 +1111,7 @@ Use the copy button to put it on the clipboard."
    *  One 24-grid, one stroke weight, currentColor throughout.
    */
   const ICONS = {
+    coins: '<ellipse cx="9.5" cy="7.5" rx="5" ry="2.5"/><path d="M4.5 7.5v4c0 1.4 2.2 2.5 5 2.5s5-1.1 5-2.5v-4"/><path d="M9.5 18.5c-2.8 0-5-1.1-5-2.5"/><ellipse cx="15" cy="15" rx="4.5" ry="2.3"/><path d="M10.5 15v2.6c0 1.3 2 2.3 4.5 2.3s4.5-1 4.5-2.3V15"/>',
     key: '<circle cx="7.4" cy="12" r="4.1"/><path d="M11.5 12H20.8"/><path d="M17.4 12v3.4"/><path d="M20.2 12v2.5"/>',
     lock: '<rect x="4.5" y="10.5" width="15" height="9.5" rx="2.4"/><path d="M8 10.5V7.6a4 4 0 0 1 8 0v2.9"/><circle cx="12" cy="15.2" r="1.3" fill="currentColor" stroke="none"/>',
     unlock: '<rect x="4.5" y="10.5" width="15" height="9.5" rx="2.4"/><path d="M8 10.5V7.6a4 4 0 0 1 7.5-1.9"/><circle cx="12" cy="15.2" r="1.3" fill="currentColor" stroke="none"/>',
@@ -1177,6 +1178,7 @@ Use the copy button to put it on the clipboard."
     ["signins", "Sign-ins", "person"],
     ["machines", "Devices", "monitor"],
     ["record", "Activity", "doc"],
+    ["balances", "Balances", "coins"],
   ];
 
   /** Settings rows: label, page, glyph, and the one line that says why to go. */
@@ -1208,6 +1210,8 @@ Use the copy button to put it on the clipboard."
   // Sign-ins are fetched separately: they can be slow to answer when the
   // broker is mid-renewal, and the key list should not wait on that.
   let signins = null, connecting = {};
+  /** Balances: null until first asked; `enabled` false shows the page's opt-in. */
+  let balancesView = { data: null, busy: false, error: "" };
   // Which keys are ticked, and whether a bulk delete is awaiting a yes.
   let picked = {}, bulkConfirm = false;
   // The key whose audience is open, and the edit in progress. The mode
@@ -1578,6 +1582,7 @@ Use the copy button to put it on the clipboard."
         // Opening the Record is the moment somebody wants to know, so ask then
         // — rather than on every poll, whatever page they were on.
         if (page === "record" && !chain.answer && !chain.busy) checkChain();
+        if (page === "balances" && !balancesView.busy) loadBalances();
       });
     // Lock puts the WINDOW away — nothing else. It used to sign the broker out,
     // which meant closing the app at the end of the day also stopped every
@@ -2547,6 +2552,95 @@ passbook oauth connect google:work</pre>
           you and that vendor's terms \u2014 not something this app should decide for
           you.</p>`, "Why you need your own client id")}
       </div>`;
+  }
+
+  /** A rejected invoke as a sentence: without the "Error:" in front of one that already is. */
+  const balanceError = (error) => String(error?.message ?? error ?? "").replace(/^Error:\s*/, "");
+
+  async function loadBalances(fresh = false) {
+    balancesView.busy = true; balancesView.error = ""; paint();
+    try { balancesView.data = await invoke("balances_state", { fresh }); }
+    catch (e) { balancesView.error = balanceError(e); }
+    finally { balancesView.busy = false; paint(); }
+  }
+
+  /** One provider's figure: a balance, an allowance, or usage, as it reported it, or nothing. */
+  function balanceFigure(r) {
+    const money = (n, unit) => `${Number(n).toLocaleString(undefined, { maximumFractionDigits: 2 })} ${unit || ""}`.trim();
+    if (r.balance !== null && r.balance !== undefined) return money(r.balance, r.unit);
+    if (r.allowance) return `${Number(r.allowance.used).toLocaleString()} of ${Number(r.allowance.limit).toLocaleString()} ${r.allowance.unit} used`;
+    if (r.usageUsd !== null && r.usageUsd !== undefined) return `${money(r.usageUsd, "USD")} used`;
+    return "";
+  }
+
+  const BALANCE_TAG = { ready: ["on", "Live"], error: ["off", "Needs a look"], locked: ["", "Locked"],
+                        missing: ["", "Needs a billing key"], manual: ["", "On their site"] };
+
+  /** What each service account has left (passbook_balances.py). Off until turned on: it calls each
+   *  provider you hold a key for, so a person says yes to that first. */
+  function balancesPage() {
+    const v = balancesView, d = v.data;
+    if (!d) return `<h2>Balances</h2><p class="lede">Reading…</p>`;
+    if (!d.enabled) {
+      return `<h2>Balances</h2>
+        <p class="lede">See what is left on the services your keys pay for — credits, plan
+        allowances and usage — and top up in one click.</p>
+        <div class="group">
+          <div class="row">
+            <span class="statustile plain">${icon("coins")}</span>
+            <div class="grow">
+              <strong>Read balances with the keys already here</strong>
+              <div class="note">PassBook asks each provider you hold a key for, straight from this
+              computer: OpenRouter, fal, ElevenLabs and ten more report a balance; the rest get a link to
+              their billing page. Nothing goes anywhere else.</div>
+            </div>
+          </div>
+          <div class="row"><div class="grow note">Only the numbers are kept, for two minutes, and every
+            read shows in Activity as “read service balances”. Top up opens the provider's own billing
+            page: PassBook never handles a payment.</div></div>
+          <div class="row"><div class="grow"></div>
+            <button class="act primary" data-balances-on="1" ${v.busy ? "disabled" : ""}>
+              ${v.busy ? "Turning on…" : "Turn on Balances"}</button></div>
+        </div>
+        ${v.error ? `<p class="note">${esc(v.error)}</p>` : ""}`;
+    }
+    const rows = d.providers || [];
+    const order = { ready: 0, error: 1, locked: 2, missing: 3, manual: 4 };
+    const sorted = [...rows].sort((a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9) || a.name.localeCompare(b.name));
+    const line = (r) => {
+      const [tone, label] = BALANCE_TAG[r.status] || ["", r.status];
+      const figure = r.status === "ready" ? balanceFigure(r) : "";
+      const details = (r.details || []).map((x) => `${esc(x.label)}: ${esc(x.value)}`).join(" · ");
+      return `<div class="row">
+        ${avatar(r.name)}
+        <div class="grow">
+          <strong>${esc(r.name)}</strong>${figure ? ` <span class="figure">${esc(figure)}</span>` : ""}
+          <div class="note">${esc(r.status === "ready" && r.accountLabel ? `${r.accountLabel} · ` : "")}${esc(r.message)}</div>
+          ${details ? `<div class="note">${details}</div>` : ""}
+        </div>
+        <span class="tag ${tone}">${esc(label)}</span>
+        ${r.topUpUrl ? `<button class="act" data-topup="${esc(r.providerId)}" title="Open ${esc(r.name)}'s billing page">Top up</button>` : ""}
+      </div>`;
+    };
+    const live = sorted.filter((r) => r.status === "ready").length;
+    return `<h2>Balances</h2>
+      <p class="lede">What is left on each service you hold a key for${live ? `: ${live} reporting live` : ""}.
+      Read from each provider by this computer; top up on their own page.</p>
+      <div class="group">
+        <div class="row">
+          <div class="grow note">${d.cached ? "From the last two minutes." : "Just read."}</div>
+          <button class="act" data-balances-refresh="1" ${v.busy ? "disabled" : ""}>
+            ${v.busy ? "Reading…" : "Refresh"}</button>
+        </div>
+        ${sorted.length ? sorted.map(line).join("") : `<div class="empty">None of the keys here belongs to a
+          service PassBook can read a balance for.</div>`}
+      </div>
+      ${v.error ? `<p class="note">${esc(v.error)}</p>` : ""}
+      <div class="group quiet"><div class="row"><div class="grow note">Stop reading balances and forget the
+        last readings.</div><button class="act danger" data-balances-off="1" ${v.busy ? "disabled" : ""}>Turn off</button></div></div>
+      ${aside(`<p>A reading is only what the provider reports. A plan allowance or an invoice is not money
+        you have, and an account that bills after use is shown as reported. Some providers only let a
+        separate billing key read billing; the page says which.</p>`, "What these numbers are")}`;
   }
 
   function appsPage() {
@@ -4685,7 +4779,7 @@ passbook oauth connect google:work</pre>
     const body = { keys: keysPage, vault: vaultPage, signins: signinsPage,
                    access: accessPage, apps: appsPage, settings: settingsPage,
                    machines: machinesPage, switch: switchPage,
-                   broker: brokerPage, record: recordPage }[page]();
+                   broker: brokerPage, record: recordPage, balances: balancesPage }[page]();
     main.innerHTML = lockBanner() + body + noticeBar();
     paintGate();
     paintSheet();
@@ -4738,6 +4832,23 @@ passbook oauth connect google:work</pre>
       finally { busy = false; paint(); }
     });
     main.querySelectorAll("[data-verify]").forEach((b) => b.onclick = () => checkChain());
+    main.querySelectorAll("[data-balances-on]").forEach((b) => b.onclick = async () => {
+      balancesView.busy = true; paint();
+      try { balancesView.data = await invoke("balances_enable", { on: true }); balancesView.error = ""; }
+      catch (e) { balancesView.error = balanceError(e); }
+      finally { balancesView.busy = false; paint(); }
+    });
+    main.querySelectorAll("[data-balances-off]").forEach((b) => b.onclick = async () => {
+      balancesView.busy = true; paint();
+      try { balancesView.data = await invoke("balances_enable", { on: false }); balancesView.error = ""; }
+      catch (e) { balancesView.error = balanceError(e); }
+      finally { balancesView.busy = false; paint(); }
+    });
+    main.querySelectorAll("[data-balances-refresh]").forEach((b) => b.onclick = () => loadBalances(true));
+    main.querySelectorAll("[data-topup]").forEach((b) => b.onclick = async () => {
+      try { await invoke("balances_open", { id: b.dataset.topup }); }
+      catch (e) { balancesView.error = balanceError(e); paint(); }
+    });
     main.querySelectorAll("[data-noticeclear]").forEach((b) => b.onclick = () => {
       notice = ""; paint();
     });

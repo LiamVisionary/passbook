@@ -4,6 +4,8 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [1.10.5] — 2026-10-12
+
 ### Balances: what each service account has left
 
 - **Asked for.** Liam, 2026-10-12: a Balances tab with an intro and an

@@ -4,6 +4,8 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [1.10.4] — 2026-10-12
+
 ### Every use of a key says what it was for
 
 - **The gap.** The record said which app used which key, and through the broker

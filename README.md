@@ -719,33 +719,86 @@ impossible to hide.
 
 ## Balances
 
-What each service account has left, read with the keys you already hold. Off
-until you turn it on: the **Balances** page explains what it does and has a
-**Turn on Balances** button.
+What each service account has left, what it is costing, and what runs out next,
+read with the keys you already hold. Off until you turn it on: the **Balances**
+page explains what it does and has a **Turn on Balances** button.
+
+At the top, four things before any row: dollars on hand, dollars spent over the
+span you pick (today, 7 days, 30 days) with how that compares to the span
+before, how many services are running low, and which runs out first. Under
+that, dollars spent per day. Then each service, lowest first:
+
+- **Its own logo**, fetched from the provider's own site and kept for a month.
+  No logo service is asked, so nobody is told which providers you use.
+- **A meter**: what is left against what full is. For a plan, used of its
+  quota. For bought credits, the balance against what it was just after the last
+  top-up this computer saw; until it has seen one, open the row and set what
+  full is.
+- **What is left**, and about how many days that lasts at the recent rate.
+- **What it spent** over the span, with ▲ or ▼ and a percentage against the span
+  before. Open a row for its own days, every figure the provider reported, and
+  which key read it.
+- **Top up**, which opens the provider's own billing page. Nothing is bought
+  from PassBook.
+
+Filter by low, live, needs a look, or kind of service; order by lowest, biggest
+spend, or name.
 
 ```bash
-passbook balances                # the services you hold a key for
-passbook balances --all          # every service it knows, with how each is paid for
-passbook balances open openrouter   # that service's billing page, to top up
+passbook balances                    # the services you hold a key for
+passbook balances --all              # every service it knows
+passbook balances open openrouter    # that service's billing page
+passbook balances full openrouter 200   # what a full account is, for its meter
 ```
 
+How the numbers are made, so you know what to trust:
+
 - **Read-only.** Each reading is one GET to the provider's documented billing
-  endpoint, with the key you saved for it. Nothing is bought; **Top up** opens
-  the provider's own billing page and you pay there.
-- **Recorded.** Every read lands in Activity as `read service balances`, under
-  the app that asked.
-- **Numbers, never keys.** A denial's body is never read (some echo the key), a
-  key never follows a redirect, and the last readings kept on disk hold numbers
-  only. A reading names its key by an opaque fingerprint that changes when the
-  key does, so a rotated key is asked afresh and never shown the old account's
-  numbers.
-- **Unknown is not zero.** An answer it does not understand, a refusal or no
-  answer shows no balance. Plan allowances, invoices and postpaid amounts are
-  shown as what they are, never as money you have.
+  endpoint with the key you saved for it. A key never follows a redirect and a
+  denial's body is never read. Every read is in Activity as
+  `read service balances`.
+- **A history, numbers only.** Each reading is kept on this computer
+  (`balances-history.jsonl`: a time, the provider, the numbers, and an opaque
+  fingerprint of the key so a rotated key starts again). Spend per day is how
+  the readings moved; OpenRouter also reports its own daily figures, which are
+  used for finished days. The app takes a reading each hour while open.
+- **Honest about what it does not know.** History starts the day you turn this
+  on. A comparison is only shown against a span that was fully watched, an
+  unknown is never a zero, and a meter with nothing to measure against is left
+  bare. With only a balance to go on, spend that happened across a top-up is
+  undercounted, never invented.
+- **Only dollars are added together.** Credits, characters and emails stay on
+  their own rows.
+- **Low** means under a fifth left, or under a week at the recent rate.
 - 13 services have live readers (OpenRouter, fal, Meshy, Vast.ai, Apify,
-  DeepSeek, Venice, Bankr, ElevenLabs, AgentMail, Resend, Vultr, QuiverAI);
-  the rest link to their billing page. HivemindOS's Service Accounts page reads
-  through this same command, so a fix here reaches both.
+  DeepSeek, Venice, Bankr, ElevenLabs, AgentMail, Resend, Vultr, QuiverAI); the
+  rest link to their billing page. HivemindOS's Service Accounts page reads
+  through the same command.
+
+### Alerts
+
+A Telegram message when a service runs low, when a balance cannot be read twice
+running, and when either recovers; repeated every six hours while it stays
+wrong. Through **your own bot**: PassBook has none, and nothing passes through
+anyone's server but Telegram's.
+
+On the Balances page press **Alerts**: paste the token `@BotFather` gave you (it
+is saved as a key, `PASSBOOK_TELEGRAM_BOT_TOKEN`, or pick a bot token you
+already hold), press **Find my chat** after messaging your bot, and turn it on.
+Turning on sends a test message first and stays off if it does not arrive.
+
+```bash
+passbook add PASSBOOK_TELEGRAM_BOT_TOKEN
+passbook balances alerts chats               # who has written to the bot
+passbook balances alerts on --chat 123456789
+passbook balances alerts test
+passbook balances alerts off
+```
+
+With alerts on, the background service takes a reading each hour, so a message
+arrives with no window open. The token is read like any other key (recorded as
+`send balance alerts`) and travels only in the address of a request to
+`api.telegram.org`; it is never in a message, an error or a file.
 
 ---
 

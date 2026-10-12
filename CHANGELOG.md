@@ -4,6 +4,73 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [1.10.7] — 2026-10-13
+
+### Balances at a glance: meters, spend, what runs out, your own logos
+
+- **Asked for.** Liam, 2026-10-13, on the first Balances page: "this ui sucks.
+  we need as simple as possible at a glance visibility so users can see
+  immediately whats low. add meters… for quotas x / max quota, for others where
+  user buys credits, x / last purchase quantity… actual company logos like an
+  automatic icon resolver… up arrow or down arrow along with % change this
+  month. a way to easily see daily, weekly, monthly spend. perhaps some
+  filters… especially info to help users who may be running a business".
+- **The page.** Four figures first: dollars on hand, dollars spent over the
+  chosen span (today, 7 days, 30 days) with ▲▼ % against the span before, how
+  many services are low, and which runs out first. A bar per day of dollars
+  spent. Then each live service on one line, lowest first: its logo, a meter
+  (green, amber under half, red under a fifth), what is left and about how many
+  days that lasts, what it spent with its own ▲▼ %, and Top up. A row opens to
+  its own days, every figure the provider gave, and which key read it. Filters:
+  low, live, needs a look, no live figure, kind of service; order by lowest,
+  biggest spend or name. Services with nothing live are folded away.
+- **Meters.** A plan's quota is used / limit. Bought credits are measured
+  against the balance just after the last top-up this computer saw; until one
+  is seen the track is left bare rather than drawn full, and "Set what full is"
+  (`passbook balances full PROVIDER AMOUNT`) gives it a mark.
+- **Spend and trends** (`passbook_insights.py`). Each live reading is kept,
+  numbers only, in `balances-history.jsonl`; spend per day is how the readings
+  moved, with a usage counter preferred over a balance (it survives a top-up),
+  a counter that fell read as a reset, and a rise read as a top-up, never as
+  negative spend. OpenRouter's own daily figures (its activity endpoint, 31
+  days, to the same management key) fill finished days, so its trends are real
+  from the first minute and are kept past its window. A comparison is only made
+  against a fully watched span; only dollars are summed. Runway is what is left
+  over the recent daily rate; low is under a fifth or under a week.
+- **Logos** (`passbook_logos.py`). From each provider's own site: its declared
+  touch icon or largest icon, else `/favicon.ico`, the console's page and then
+  the main domain. Checked to be an image by its bytes, capped in size, kept a
+  month, handed to the window as a `data:` address. No third party is asked.
+  24 of the 25 on Liam's machine resolved; a miss draws the letter.
+- **The app** takes a reading at launch and each hour while open, so the
+  history has points on days nobody looked.
+- Turning Balances off forgets the readings, the history, the marks and the
+  logos, and stops alerts.
+
+### Telegram alerts for balances, through your own bot
+
+- **Asked for.** Liam, 2026-10-13: "I also get telegram messages for balances,
+  wire that into this too in a generic way so users can supply their own
+  telegram bot access token and get the same kinds of alerts I get." His come
+  from HivemindOS's hosted supplier monitor; these are the same kinds, worded
+  the same way (`passbook_alerts.py`).
+- **What is sent.** ⚠️ "X is running low" with a **Top up X** button; 🚨 "X's
+  balance could not be read" once a reading has failed twice running; ✅ when
+  either clears, once, and only if the alert went out. Repeated every six hours
+  while it stays wrong. A message that did not go is tried again, never
+  recorded as said.
+- **Setting up.** The **Alerts** button on the Balances page: paste the bot
+  token (saved as the key `PASSBOOK_TELEGRAM_BOT_TOKEN`) or pick a bot token
+  already held, **Find my chat** lists the chats that have written to the bot,
+  and turning on sends a test message first and stays off if it does not
+  arrive. Or `passbook balances alerts on|off|test|chats|set`.
+- **With no window open.** With Balances and alerts both on, the background
+  service takes a reading each hour (`_keep_balances_watched`).
+- **The token.** Read through the store like any key, recorded as
+  `send balance alerts`, sent only in the address of a request to
+  `api.telegram.org`. A refusal or a network error is reported in fixed words
+  that never include it.
+
 ## [1.10.6] — 2026-10-13
 
 ### The app updates itself

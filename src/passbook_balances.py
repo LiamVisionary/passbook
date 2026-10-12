@@ -314,18 +314,96 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def fetch_reading(adapter: str, key: str, *, timeout: float = 12.0) -> tuple[int, Any]:
-    """(HTTP status, parsed JSON or None). A denial's body is never read: it can echo the credential."""
-    url, scheme = REQUESTS[adapter]
+def _get(url: str, scheme: str, key: str, timeout: float, limit: int) -> tuple[int, Any]:
     header = {"xi-api-key": key} if scheme == "xi-api-key" else {"Authorization": f"{scheme} {key}"}
     request = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "passbook-balances", **header})
     opener = urllib.request.build_opener(_NoRedirect)
     try:
         with opener.open(request, timeout=timeout) as response:
-            return response.status, json.loads(response.read(2_000_000).decode("utf-8"))
+            return response.status, json.loads(response.read(limit).decode("utf-8"))
     except urllib.error.HTTPError as error:
         error.close()
         return error.code, None
+
+
+def fetch_reading(adapter: str, key: str, *, timeout: float = 12.0) -> tuple[int, Any]:
+    """(HTTP status, parsed JSON or None). A denial's body is never read: it can echo the credential."""
+    url, scheme = REQUESTS[adapter]
+    return _get(url, scheme, key, timeout, 2_000_000)
+
+
+# ── a provider's own daily spend ────────────────────────────────────────────
+#
+# Spend per day is otherwise pieced together from how the readings moved (passbook_insights.py), which
+# starts the day Balances was turned on. A provider that reports its own daily figures gives real history
+# at once, and exact days after. OpenRouter does: a row per day, model and provider for the last 31
+# finished days, to the management key that reads its credits. Read-only, like every other request here.
+
+DAILY_REQUESTS: dict[str, tuple[str, str]] = {
+    "openrouter": ("https://openrouter.ai/api/v1/activity", "Bearer"),
+}
+DAILY_SECONDS = 6 * 3600
+
+
+def parse_daily(adapter: str, payload: Any) -> dict[str, float]:
+    """{YYYY-MM-DD: dollars spent that day}. Raises Unreadable on an answer it does not understand."""
+    if adapter == "openrouter":
+        rows = _record(payload).get("data")
+        if not isinstance(rows, list):
+            raise Unreadable("Unexpected activity response")
+        days: dict[str, float] = {}
+        for row in map(_record, rows):
+            date, spent = str(row.get("date") or "")[:10], _number(row.get("usage"))
+            if _timestamp(date + "T00:00:00Z") and spent is not None and spent >= 0:
+                days[date] = days.get(date, 0.0) + spent
+        return days
+    raise Unreadable(f"no daily reader for {adapter}")
+
+
+def fetch_daily(adapter: str, key: str, *, timeout: float = 20.0) -> tuple[int, Any]:
+    url, scheme = DAILY_REQUESTS[adapter]
+    return _get(url, scheme, key, timeout, 16_000_000)
+
+
+def refresh_daily(root: Path, rows: Iterable[Mapping[str, Any]], values: Mapping[str, str], *,
+                  fetch: Callable[[str, str], tuple[int, Any]] = fetch_daily, now: Callable[[], float] = time.time,
+                  force: bool = False) -> None:
+    """Ask each live provider that reports daily spend for it, a few times a day at most.
+
+    Best effort: a refusal or an odd answer changes nothing, and the page falls back to what the readings
+    themselves show. The figures are kept by key fingerprint, like the readings.
+    """
+    import passbook_insights as insights
+
+    kept = insights.daily(root)
+    for row in rows:
+        entry = provider(str(row.get("providerId")))
+        adapter = (entry or {}).get("adapter")
+        key = values.get(str(row.get("keyName") or ""))
+        if row.get("status") != "ready" or adapter not in DAILY_REQUESTS or not key or not row.get("connection"):
+            continue
+        last = kept.get(row["providerId"]) or {}
+        if not force and last.get("c") == row["connection"] and now() - float(last.get("at") or 0) < DAILY_SECONDS:
+            continue
+        try:
+            status, payload = fetch(adapter, key)
+            if status == 200:
+                insights.remember_daily(root, row["providerId"], row["connection"], parse_daily(adapter, payload), now=now)
+        except Exception:  # noqa: BLE001 — offline, a timeout, an odd answer: the readings still stand
+            continue
+
+
+def enrich(root: Path, rows: list[dict], *, now: Callable[[], float] = time.time) -> dict:
+    """Put each live row's meter, spend and runway on it (`insights`), and return the page's summary."""
+    import passbook_insights as insights
+
+    history, provided, marks = insights.load(root), insights.daily(root), insights.marks(root)
+    moment = now()
+    for row in rows:
+        if row.get("status") == "ready":
+            row["insights"] = insights.for_row(row, history.get(row["providerId"], []), provided.get(row["providerId"]),
+                                               marks.get(row["providerId"]), now=moment)
+    return insights.summary(rows, now=moment)
 
 
 # ── a provider's line ───────────────────────────────────────────────────────
@@ -469,7 +547,18 @@ def set_enabled(root: Path, enabled: bool, *, now: Callable[[], float] = time.ti
     path = Path(root) / SETTINGS_FILE
     path.write_text(json.dumps(record) + "\n", encoding="utf-8")
     if not enabled:
+        # Off means gone: the last readings, the history made from them, and the logos fetched for them.
+        import passbook_insights
+        import passbook_logos
+
         (Path(root) / CACHE_FILE).unlink(missing_ok=True)
+        passbook_insights.forget(root)
+        passbook_logos.forget(root)
+        # Alerts stop with the readings they are made from; where they went is kept for next time.
+        import passbook_alerts
+
+        if passbook_alerts.settings(root)["on"]:
+            passbook_alerts.configure(root, on=False)
     return record
 
 
@@ -488,7 +577,9 @@ def cached(root: Path, *, now: Callable[[], float] = time.time) -> dict[str, dic
 
 
 def remember(root: Path, rows: list[dict], *, now: Callable[[], float] = time.time) -> None:
-    clean = [row for row in rows if row.get("status") == "ready" and row.get("connection")]
+    # Without `insights`: those are worked out again from the history each time, never replayed.
+    clean = [{name: value for name, value in row.items() if name != "insights"}
+             for row in rows if row.get("status") == "ready" and row.get("connection")]
     path = Path(root) / CACHE_FILE
     path.write_text(json.dumps({"at": now(), "providers": clean}) + "\n", encoding="utf-8")
     try:

@@ -16,7 +16,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "passbook"
-version = "1.10.6"
+version = "1.10.7"
 description = "One credential store per machine, shared by every app that opts in."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -127,8 +127,11 @@ package-dir = { "" = "src" }
 py-modules = [
     "passbook",
     "passbook_access",
+    "passbook_alerts",
     "passbook_backup",
     "passbook_balances",
+    "passbook_insights",
+    "passbook_logos",
     "passbook_brief",
     "passbook_broker",
     "passbook_catalog",

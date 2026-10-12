@@ -675,6 +675,61 @@ fn balances_enable(on: bool) -> Result<Value, String> {
     }
 }
 
+/// Each provider's own logo, from its own site, as `data:` addresses (passbook_logos.py). Asked apart from
+/// the numbers because the first time visits every site; kept for a month after that. Nothing while off.
+#[tauri::command(async)]
+fn balances_icons() -> Result<Value, String> {
+    let status = run_json(&["balances", "status", "--json"])?;
+    if !status.get("enabled").and_then(Value::as_bool).unwrap_or(false) {
+        return Ok(serde_json::json!({ "icons": {} }));
+    }
+    run_json(&["balances", "icons", "--json"])
+}
+
+/// What "full" is for a provider's meter, or `None` to go back to the last top-up seen. The window sends
+/// an id and a number; the CLI checks the id against its catalog.
+#[tauri::command(async)]
+fn balances_full(id: String, amount: Option<f64>) -> Result<Value, String> {
+    let id = id.trim();
+    if id.is_empty() || !id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
+        return Err("Which provider?".into());
+    }
+    let amount = match amount {
+        Some(amount) if amount.is_finite() && amount > 0.0 && amount < 1e12 => format!("{amount}"),
+        Some(_) => return Err("Type what a full account holds, as a number.".into()),
+        None => "clear".to_string(),
+    };
+    run(&["balances", "full", id, amount.as_str()])?;
+    balances_state(Some(false))
+}
+
+/// Telegram alerts for balances, through the owner's own bot (passbook_alerts.py): where they go, whether
+/// they are on, a test message, and the chats that have written to the bot. The bot's token is a key in the
+/// store; this only ever passes its NAME.
+#[tauri::command(async)]
+fn balances_alerts(action: String, key: Option<String>, chat: Option<String>) -> Result<Value, String> {
+    if !matches!(action.as_str(), "status" | "on" | "off" | "set" | "test" | "chats") {
+        return Err("Unknown alerts action".into());
+    }
+    let mut args = vec!["balances".to_string(), "alerts".to_string(), action, "--json".to_string(),
+                        "--app".to_string(), "passbook-app".to_string()];
+    if let Some(key) = key.map(|key| key.trim().to_string()).filter(|key| !key.is_empty()) {
+        if !key.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_') {
+            return Err("That is not a key's name.".into());
+        }
+        args.extend(["--key".to_string(), key]);
+    }
+    if let Some(chat) = chat.map(|chat| chat.trim().to_string()).filter(|chat| !chat.is_empty()) {
+        if !chat.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '@') {
+            return Err("A chat is a number, or a public channel's @name.".into());
+        }
+        // `--chat=-100…`: a group's id starts with a dash, which must not read as another option.
+        args.push(format!("--chat={chat}"));
+    }
+    let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
+    run_json(&borrowed)
+}
+
 /// Open a provider's own billing page to top up. Only a provider id goes to the CLI, which looks the address
 /// up in its catalog: the window never hands it a URL to open.
 #[tauri::command(async)]
@@ -2318,7 +2373,7 @@ fn main() {
             pending_web_link, dismiss_web_link, decide_web_link,
             github_state, github_connect_token, github_connect_gh, github_connect_device,
             github_disconnect, github_targets, github_environments, github_check, github_push,
-            balances_state, balances_enable, balances_open,
+            balances_state, balances_enable, balances_open, balances_icons, balances_full, balances_alerts,
             update_state, update_install
         ])
         .run(tauri::generate_context!())

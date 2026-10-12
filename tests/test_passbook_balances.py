@@ -275,6 +275,8 @@ def _balances(monkeypatch, capsys, **flags):
     monkeypatch.setattr(balances, "fetch_reading", fetch)
     # read_provider took the default when it was defined; a list call passes it through readings().
     monkeypatch.setattr(balances, "readings", lambda *a, **kw: _READINGS(*a, **{**kw, "fetch": fetch}))
+    # No test asks a real provider for anything: the daily figures are their own test, with a stand-in.
+    monkeypatch.setattr(balances, "refresh_daily", lambda *a, **k: None)
     args = argparse.Namespace(**{"action": "list", "provider": [], "all": False, "fresh": False, "json": True,
                                  "app": "test-app", **flags})
     assert passbook_cli.cmd_balances(args) == 0
@@ -319,3 +321,89 @@ def test_open_goes_only_to_a_catalog_billing_page(store, monkeypatch, capsys):
     assert opened == ["https://openrouter.ai/settings/credits"]
     args.provider = ["https://evil.example"]
     assert passbook_cli.cmd_balances(args) != 0 and opened == ["https://openrouter.ai/settings/credits"]
+
+
+# ── what the readings mean, kept and worked out by the command ──────────────
+
+
+def test_a_listing_keeps_the_reading_and_says_what_it_means(store, monkeypatch, capsys):
+    import passbook_insights as insights
+
+    _, home = store
+    monkeypatch.setattr(balances, "refresh_daily", lambda *a, **k: None)
+    shown, _ = _balances(monkeypatch, capsys)
+    row = {r["providerId"]: r for r in shown["providers"]}["openrouter"]
+    assert row["insights"]["meter"]["left"] == 15 and row["insights"]["meter"]["kind"] == "balance"
+    assert shown["summary"]["usd"]["balance"] == 15 and shown["summary"]["live"] == 1
+    assert shown["alerts"]["on"] is False and shown["alerts"]["sent"] == 0
+    kept = insights.load(home)["openrouter"]
+    assert len(kept) == 1 and kept[0]["b"] == 15 and KEY not in (home / insights.HISTORY_FILE).read_text()
+    _balances(monkeypatch, capsys)
+    assert len(insights.load(home)["openrouter"]) == 1, "a reading answered from memory is not a second reading"
+    assert "insights" not in (home / balances.CACHE_FILE).read_text(), "insights are worked out each time, never replayed"
+
+
+def test_openrouters_daily_figures_are_summed_per_day_and_asked_a_few_times_a_day(tmp_path):
+    import passbook_insights as insights
+
+    payload = {"data": [{"date": "2026-10-10", "usage": 1.5, "model": "a"}, {"date": "2026-10-10 00:00:00", "usage": 2.0, "model": "b"},
+                        {"date": "2026-10-11", "usage": 0.25}, {"date": "nonsense", "usage": 9}, {"date": "2026-10-11", "usage": -1}]}
+    assert balances.parse_daily("openrouter", payload) == {"2026-10-10": 3.5, "2026-10-11": 0.25}
+    with pytest.raises(balances.Unreadable):
+        balances.parse_daily("openrouter", {"surprise": True})
+    asked = []
+    row = {"providerId": "openrouter", "status": "ready", "connection": "c1", "keyName": "OPENROUTER_MANAGEMENT_KEY"}
+    fetch = lambda adapter, key: (asked.append((adapter, key)) or (200, payload))  # noqa: E731
+    clock = [1_800_000_000.0]
+    go = lambda **k: balances.refresh_daily(tmp_path, [row, {"providerId": "fal", "status": "ready", "connection": "c", "keyName": "FAL_KEY"}],  # noqa: E731
+                                            {"OPENROUTER_MANAGEMENT_KEY": KEY, "FAL_KEY": KEY}, fetch=fetch, now=lambda: clock[0], **k)
+    go()
+    assert asked == [("openrouter", KEY)], "only a provider with daily figures is asked, with its own key"
+    assert insights.daily(tmp_path)["openrouter"]["days"] == {"2026-10-10": 3.5, "2026-10-11": 0.25}
+    assert KEY not in (tmp_path / insights.DAILY_FILE).read_text()
+    go()
+    assert len(asked) == 1, "not again within six hours"
+    go(force=True)
+    clock[0] += balances.DAILY_SECONDS + 1
+    go()
+    assert len(asked) == 3
+    balances.refresh_daily(tmp_path, [row], {"OPENROUTER_MANAGEMENT_KEY": KEY}, fetch=lambda a, k: (403, None), now=lambda: clock[0], force=True)
+    assert insights.daily(tmp_path)["openrouter"]["days"], "a refusal leaves what was kept"
+
+
+def test_a_full_mark_is_set_and_cleared_from_the_command_line(store):
+    cli, home = store
+    assert json.loads(cli("balances", "full", "openrouter", "200", "--json").stdout) == {"full": {"openrouter": 200.0}}
+    assert json.loads(cli("balances", "full", "openrouter", "clear", "--json").stdout) == {"full": {}}
+    for bad in (("openrouter", "lots"), ("nobody", "5"), ("openrouter", "-3"), ("openrouter",)):
+        assert cli("balances", "full", *bad).returncode != 0
+
+
+def test_alerts_stay_off_until_a_test_message_has_arrived(store):
+    cli, home = store
+    assert json.loads(cli("balances", "alerts", "status", "--json").stdout) == {
+        "on": False, "key": "PASSBOOK_TELEGRAM_BOT_TOKEN", "chat": "", "keyHeld": False}
+    said = cli("balances", "alerts", "on", "--chat=-100123")
+    assert said.returncode != 0 and "no key named PASSBOOK_TELEGRAM_BOT_TOKEN" in said.stderr
+    assert json.loads(cli("balances", "alerts", "status", "--json").stdout)["on"] is False
+    assert cli("balances", "alerts", "set", "--chat", "not a chat").returncode != 0
+    assert json.loads(cli("balances", "alerts", "set", "--key", "OPENAI_API_KEY", "--json").stdout)["keyHeld"] is True
+
+
+def test_turning_balances_off_forgets_the_history_the_logos_and_stops_alerts(store, monkeypatch, capsys):
+    import passbook_alerts as alerts
+    import passbook_insights as insights
+    import passbook_logos as logos
+
+    cli, home = store
+    monkeypatch.setattr(balances, "refresh_daily", lambda *a, **k: None)
+    _balances(monkeypatch, capsys)
+    insights.set_mark(home, "openrouter", 50)
+    (home / logos.ICONS_FILE).write_text("{}")
+    alerts.configure(home, chat="42")
+    alerts.configure(home, on=True)
+    assert (home / insights.HISTORY_FILE).exists()
+    assert cli("balances", "disable").returncode == 0
+    for name in (insights.HISTORY_FILE, insights.MARKS_FILE, logos.ICONS_FILE, balances.CACHE_FILE):
+        assert not (home / name).exists(), name
+    assert alerts.settings(home) == {"on": False, "key": alerts.DEFAULT_KEY, "chat": "42"}, "where they went is kept for next time"

@@ -2776,7 +2776,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 BALANCES_REASON = "read service balances"
 
 
-def _balance_values(app: str, wanted: list[str]) -> tuple[dict[str, str], set[str]] | int:
+def _balance_values(app: str, wanted: list[str], reason: str = BALANCES_REASON) -> tuple[dict[str, str], set[str]] | int:
     """The store's values for the balance readers, and which of them the broker opened (it records those).
 
     Read as `push` reads (`_value_for_push`): the store's own values, never the caller's environment, which
@@ -2785,12 +2785,12 @@ def _balance_values(app: str, wanted: list[str]) -> tuple[dict[str, str], set[st
     """
     if os.environ.get("PASSBOOK_GRANT"):
         return {name: os.environ.get(name, "") for name in wanted}, set(wanted)
-    brokered = _use_broker_for_sealed_values(app, BALANCES_REASON, wanted) or set()
+    brokered = _use_broker_for_sealed_values(app, reason, wanted) or set()
     values: dict[str, str] = {}
     for path in passbook._scoped_paths():
         values.update({name: value for name, value in passbook._read(path).items() if name in wanted})
     if any(str(values.get(name, "")).startswith("hive-sealed:") for name in wanted):
-        again = _rerun_under_grant(app, BALANCES_REASON, wanted)
+        again = _rerun_under_grant(app, reason, wanted)
         if again is not None:
             return again
     return values, brokered
@@ -2800,14 +2800,82 @@ def _balance_line(row: dict) -> str:
     if row.get("status") != "ready":
         return f"{row['name']}: {row['message']}"
     parts = []
+    insight = row.get("insights") or {}
     if row.get("balance") is not None:
-        parts.append(f"{row['balance']:,.2f} {row.get('unit') or ''}".strip())
+        meter = insight.get("meter") or {}
+        left = f", {round(meter['fraction'] * 100)}% of {meter['full']:,.2f}" if meter.get("kind") == "balance" and meter.get("basis") != "highest" else ""
+        parts.append(f"{row['balance']:,.2f} {row.get('unit') or ''}".strip() + left)
     if row.get("allowance"):
         left = row["allowance"]
         parts.append(f"{left['used']:,.0f} of {left['limit']:,.0f} {left['unit']} used")
     if row.get("usageUsd") is not None:
         parts.append(f"{row['usageUsd']:,.2f} USD used ({row.get('usagePeriod') or 'reported'})")
-    return f"{row['name']}: {'; '.join(parts) or row['message']}"
+    spend = insight.get("spend") or {}
+    if spend.get("weekWatched"):
+        parts.append(f"{spend['week']:,.2f} {spend['unit']} in the last 7 days")
+    if insight.get("runwayDays") is not None:
+        parts.append(f"about {insight['runwayDays']:,.0f} days left at this rate")
+    return f"{'LOW  ' if insight.get('low') else ''}{row['name']}: {'; '.join(parts) or row['message']}"
+
+
+def _balance_alerts(args: argparse.Namespace, root: Path, words: list[str]) -> int:
+    """`passbook balances alerts [status|on|off|test|chats] [--key NAME] [--chat ID]` (passbook_alerts.py)."""
+    import passbook_alerts as alerts
+
+    step = (words[0] if words else "status").lower()
+    if step not in ("status", "on", "off", "test", "chats", "set"):
+        return _fail("Alerts take: status, on, off, set, test or chats.",
+                     "For example:  passbook balances alerts on --chat 123456789 --key PASSBOOK_TELEGRAM_BOT_TOKEN")
+    key = (getattr(args, "key", "") or "").strip() or None
+    chat = (getattr(args, "chat", "") or "").strip() or None
+    say = lambda record, extra=None: print(json.dumps({**record, **(extra or {})}) if args.json else (  # noqa: E731
+        f"Alerts are {'on' if record['on'] else 'off'}" + (f": chat {record['chat']}, bot token in {record['key']}." if record["chat"] else ".")))
+    try:
+        # `on` is only recorded once a test message has arrived, below.
+        if step == "off":
+            record = alerts.configure(root, on=False, key=key, chat=chat)
+        elif key or chat:
+            record = alerts.configure(root, key=key, chat=chat)
+        else:
+            record = alerts.settings(root)
+    except ValueError as error:
+        return _fail(str(error))
+    held = record["key"] in set(passbook.key_names())
+    if step in ("status", "off", "set"):
+        say(record, {"keyHeld": held})
+        return 0
+    if not held:
+        return _fail(f"There is no key named {record['key']} here.",
+                     f"Make a bot with @BotFather in Telegram, then save its token:  passbook add {record['key']}")
+    who = caller("passbook-balances", args)
+    got = _balance_values(who, [record["key"]], alerts.REASON)
+    if isinstance(got, int):
+        return got
+    values, brokered = got
+    _record_run_reads(who, alerts.REASON, [record["key"]], values, brokered)
+    token = values.get(record["key"], "")
+    if not token or token.startswith("hive-sealed:"):
+        return _fail(f"{record['key']} could not be read here. Open the vault and try again.")
+    if step == "chats":
+        found, why = alerts.chats(token)
+        if why:
+            return _fail(why)
+        if args.json:
+            print(json.dumps({"chats": found}))
+        else:
+            print("\n".join(f"{chat['id']}  {chat['name']} ({chat['kind']})" for chat in found)
+                  or "No chat has written to the bot lately. Send it a message in Telegram, then ask again.")
+        return 0
+    # `test`, and `on`: turning alerts on proves they arrive, or says why not and stays off.
+    if not record["chat"]:
+        return _fail("Say which chat first:  passbook balances alerts chats", "Then:  passbook balances alerts on --chat ID")
+    sent, why = alerts.send(token, record["chat"], alerts.TEST)
+    if not sent:
+        return _fail(f"The test message did not arrive, so alerts were left as they were. {why}")
+    if step == "on":
+        alerts.configure(root, on=True)
+    say(alerts.settings(root), {"keyHeld": True, "tested": True})
+    return 0
 
 
 def cmd_balances(args: argparse.Namespace) -> int:
@@ -2825,6 +2893,35 @@ def cmd_balances(args: argparse.Namespace) -> int:
         record = balances.settings(root)
         print(json.dumps(record) if args.json else ("Balances are on." if record["enabled"] else "Balances are off."))
         return 0
+    if action == "alerts":
+        return _balance_alerts(args, root, ids)
+    if action == "icons":
+        # Each provider's own logo, from its own site (passbook_logos.py). No key is involved.
+        import passbook_logos
+
+        held = set(passbook.key_names())
+        found = passbook_logos.icons(root, balances._chosen(held, everything=args.all, only=ids))
+        print(json.dumps({"icons": found}) if args.json else "\n".join(sorted(found)) or "No logos found.")
+        return 0
+    if action == "full":
+        # What "full" is for a meter: `passbook balances full openrouter 200`, or `... clear`.
+        import passbook_insights as insights
+
+        entry = balances.provider(ids[0]) if len(ids) == 2 else None
+        clear = len(ids) == 2 and ids[1].lower() in ("clear", "none", "0")
+        amount = None
+        if entry and not clear:
+            try:
+                amount = float(ids[1])
+            except ValueError:
+                entry = None
+        if not entry or (not clear and not (amount and 0 < amount < 1e12)):
+            return _fail("Say which provider and how much is full:  passbook balances full openrouter 200",
+                         "Take a mark off with:  passbook balances full openrouter clear")
+        kept = insights.set_mark(root, entry["id"], amount)
+        print(json.dumps({"full": kept}) if args.json
+              else (f"{entry['name']} is full at {amount:,.2f}." if amount else f"{entry['name']} has no set mark."))
+        return 0
     if action == "open":
         entry = balances.provider(ids[0]) if len(ids) == 1 else None
         url = balances.top_up_url(entry) if entry else ""
@@ -2839,6 +2936,14 @@ def cmd_balances(args: argparse.Namespace) -> int:
     who = caller("passbook-balances", args)
     present = set(passbook.key_names())
     wanted = balances.wanted_keys(present, everything=args.all, only=ids)
+    # Alerts (passbook_alerts.py) go out with a whole reading, through your own bot: its token is one more
+    # key to open, and its read is recorded with the rest.
+    import passbook_alerts as alerts
+
+    alerting = alerts.settings(root)
+    bot_key = alerting["key"] if alerting["on"] and not ids and alerting["key"] in present else ""
+    if bot_key and bot_key not in wanted:
+        wanted = [*wanted, bot_key]
     got = _balance_values(who, wanted)
     if isinstance(got, int):
         return got
@@ -2853,8 +2958,18 @@ def cmd_balances(args: argparse.Namespace) -> int:
     if asked or args.fresh:
         balances.remember(root, [*rows, *[row for pid, row in recent.items() if pid not in {r["providerId"] for r in rows}]])
     from_cache = bool(recent) and not asked
+    # What the numbers mean over time (passbook_insights.py): each reading just taken is kept, numbers
+    # only, and every live row gets its meter, spend and runway worked out from that record.
+    import passbook_insights as insights
+
+    insights.append(root, asked)
+    balances.refresh_daily(root, rows, values, force=args.fresh)
+    summary = balances.enrich(root, rows)
+    told = alerts.run(root, rows, values.get(bot_key, "")) if bot_key else {"on": alerting["on"], "sent": 0, "failed": 0,
+        "error": f"The bot token ({alerting['key']}) is not in this store." if alerting["on"] and not ids else ""}
     if args.json:
-        print(json.dumps({"enabled": balances.settings(root)["enabled"], "cached": from_cache, "providers": rows}))
+        print(json.dumps({"enabled": balances.settings(root)["enabled"], "cached": from_cache, "providers": rows,
+                          "summary": summary, "alerts": {**alerting, **told}}))
         return 0
     if not rows:
         print("No key here belongs to a provider PassBook can read a balance for. See them all:  passbook balances --all")
@@ -7362,13 +7477,18 @@ def build_parser() -> argparse.ArgumentParser:
     status.set_defaults(func=cmd_status)
 
     bal = subs.add_parser("balances", help="what each service account has left, and where to top up")
-    bal.add_argument("action", nargs="?", choices=["list", "enable", "disable", "status", "open"], default="list",
-                     help="list (default); enable or disable the app's Balances page; open PROVIDER's billing page")
-    bal.add_argument("provider", nargs="*", help="provider ids, as `--all` lists them")
+    bal.add_argument("action", nargs="?", choices=["list", "enable", "disable", "status", "open", "icons", "full", "alerts"],
+                     default="list",
+                     help="list (default); enable or disable the app's Balances page; open PROVIDER's billing page; "
+                          "icons: each provider's logo from its own site; full PROVIDER AMOUNT: what a full account is; "
+                          "alerts [on|off|test|chats]: Telegram messages through your own bot when something runs low")
+    bal.add_argument("provider", nargs="*", help="provider ids, as `--all` lists them (for `full`, then the amount)")
     bal.add_argument("--all", action="store_true", help="every provider PassBook knows, not only the ones you hold a key for")
     bal.add_argument("--fresh", action="store_true", help="ask the providers now, not the last two minutes' answers")
     bal.add_argument("--json", action="store_true")
     bal.add_argument("--app", default="", help="who is asking; recorded")
+    bal.add_argument("--key", default="", help="alerts: the key that holds your Telegram bot's token")
+    bal.add_argument("--chat", default="", help="alerts: the chat to message (a number, or a channel's @name)")
     bal.set_defaults(func=cmd_balances)
 
     access = subs.add_parser("access", help="the tamper-evident record of credential reads")

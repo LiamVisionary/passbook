@@ -1646,6 +1646,37 @@ def _keep_web_links_current(root: Path | None) -> None:
             return
 
 
+BALANCE_WATCH_SECONDS = 60 * 60
+
+
+def _keep_balances_watched(root: Path | None) -> None:
+    """Take a balance reading each hour while alerts are on (passbook_alerts.py), and stop with the broker.
+
+    An alert is only worth having if it arrives when nobody has the window open, and this is the one
+    PassBook process that is always running. It does nothing unless Balances is on AND alerts are on: a
+    person turned both on. The reading is the ordinary command, run as its own process, so it goes
+    through the same door as any other reader: recorded, and decided by the same policy.
+    """
+    if _STOPPING.wait(90):
+        return
+    while True:
+        try:
+            import passbook_alerts
+            import passbook_balances
+            target = store_root(root)
+            if passbook_balances.settings(target)["enabled"] and passbook_alerts.settings(target)["on"]:
+                env = dict(os.environ) if root is None else {**os.environ, "HIVE_HOME": str(target)}
+                for inherited in ("PASSBOOK_GRANT", "PASSBOOK_REASON"):
+                    env.pop(inherited, None)
+                subprocess.run([sys.executable, str(Path(__file__).with_name("passbook_cli.py")), "balances", "--json",
+                                "--app", "passbook-alerts"], env=env, stdin=subprocess.DEVNULL,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=600, check=False)
+        except Exception as exc:  # noqa: BLE001 - a failed reading must never take the broker down
+            print(f"balance watch failed: {type(exc).__name__}", file=sys.stderr)
+        if _STOPPING.wait(BALANCE_WATCH_SECONDS):
+            return
+
+
 def _package_version() -> str:
     try:
         from importlib.metadata import version
@@ -2022,6 +2053,7 @@ def serve(*, root: Path | None = None, ready: threading.Event | None = None,
         ready.set()
 
     threading.Thread(target=_keep_web_links_current, args=(root,), daemon=True).start()
+    threading.Thread(target=_keep_balances_watched, args=(root,), daemon=True).start()
 
     # A throwaway store — a test tree, a `mktemp -d` HIVE_HOME, a container
     # layer — is deleted far more often than it is shut down. Without this the

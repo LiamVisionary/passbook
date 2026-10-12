@@ -179,6 +179,94 @@
   .row .grow { flex: 1; min-width: 0; }
   .mono { font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
   .prewrap { white-space: pre-wrap; }
+
+  /* ── balances ────────────────────────────────────────────────────────── */
+  /* Amber is the one colour this page adds: between "fine" and "low" there is
+     "getting there", and a meter with only two colours cannot say it. */
+  :root { --mid: #a86400; --mid-soft: rgba(168,100,0,0.14); }
+  @media (prefers-color-scheme: dark) { :root { --mid: #f0b24a; --mid-soft: rgba(240,178,74,0.16); } }
+  .balhead { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; }
+  .balctl { display: flex; align-items: center; gap: 8px; flex: none; }
+  .stats4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 18px; }
+  .stat { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow);
+    padding: 12px 14px 13px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .statk { font-size: 11px; font-weight: 600; letter-spacing: .02em; color: var(--ink3); text-transform: uppercase; }
+  .statv { font-size: 22px; font-weight: 700; letter-spacing: -0.025em; font-variant-numeric: tabular-nums;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .stats { font-size: 11.5px; color: var(--ink3); }
+  .stat.warn .statv { color: var(--warn); }
+  .stat.good .statv { color: var(--good); }
+  .trend { font-size: 11.5px; font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .trend.up { color: var(--mid); } .trend.down { color: var(--good); } .trend.flat { color: var(--ink3); }
+  .group.chart { padding-bottom: 8px; margin-top: 10px; }
+  .daybars { padding: 6px 14px 4px; }
+  .daybars svg { display: block; overflow: visible; }
+  .daybars rect { fill: var(--chip2); }
+  .daybars rect.on { fill: var(--accent); }
+  .daybars rect.now { opacity: .55; }
+  .daybars .base { stroke: var(--line2); stroke-width: 1; }
+  .dayaxis { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--ink3); padding-top: 4px; }
+  .balfilters { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 18px 0 -6px; flex-wrap: wrap; }
+  .fchips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .fchip { font: inherit; font-size: 12px; color: var(--ink2); background: var(--chip); border: 1px solid transparent;
+    border-radius: 99px; padding: 4px 6px 4px 11px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+  .fchip span { font-size: 10.5px; font-weight: 600; background: var(--chip2); border-radius: 99px; padding: 0 6px; min-width: 18px; text-align: center; }
+  .fchip:hover { color: var(--ink1); }
+  .fchip[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .fsel { display: flex; gap: 6px; }
+  .ballist { padding: 0; }
+  .brow { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 0 12px 0 0; position: relative; }
+  .brow + .brow { border-top: 1px solid var(--line); }
+  .brow.low::before { content: ""; position: absolute; left: 0; top: 8px; bottom: 8px; width: 3px; border-radius: 0 3px 3px 0; background: var(--warn); }
+  .bmain { flex: 1; min-width: 0; display: grid; grid-template-columns: 34px minmax(120px, 1.05fr) minmax(130px, 1.5fr) minmax(96px, .8fr) minmax(104px, .8fr);
+    align-items: center; gap: 14px; padding: 12px 4px 12px 14px; font: inherit; color: inherit; text-align: left;
+    background: none; border: 0; cursor: pointer; border-radius: var(--radius); }
+  .bmain.still { cursor: default; grid-template-columns: 34px minmax(0, 1fr) auto; }
+  button.bmain:hover { background: var(--sel); }
+  .logo { width: 34px; height: 34px; border-radius: 9px; object-fit: contain; background: #fff;
+    box-shadow: 0 0 0 1px var(--line2); display: block; }
+  .logo.letter { background: none; box-shadow: none; display: flex; }
+  .logo.letter .avatar { width: 34px; height: 34px; flex-basis: 34px; border-radius: 9px; font-size: 14px; }
+  .bname, .bfig { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
+  .bname { display: block; } .bname .sub { display: block; }
+  .bname strong, .bfig strong { font-size: 13.5px; font-weight: 600; }
+  .bfig { align-items: flex-end; text-align: right; }
+  .bfig strong { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .bfig.spend { display: block; text-align: right; } .bfig.spend .sub { display: block; }
+  .bfig .dim { color: var(--ink3); font-weight: 500; }
+  .brow .sub { color: var(--ink3); font-size: 11.5px; overflow-wrap: anywhere; }
+  .bname .tag { margin-left: 4px; vertical-align: 1px; }
+  .meter { height: 8px; border-radius: 99px; background: var(--chip2); overflow: hidden; }
+  .meter span { display: block; height: 100%; border-radius: 99px; background: var(--good); transition: width .3s ease; }
+  .meter span.mid { background: var(--mid); } .meter span.low { background: var(--warn); }
+  .meter.unknown { background: repeating-linear-gradient(135deg, var(--chip2) 0 6px, transparent 6px 12px); }
+  .metercap { font-size: 11px; color: var(--ink3); margin-top: 5px; }
+  .metercap b { color: var(--ink2); font-weight: 600; }
+  .bdetail { flex: 0 0 100%; padding: 2px 0 12px 62px; }
+  .bdetail .daybars { padding: 4px 0 10px; }
+  .bfacts { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px 18px; }
+  .bfacts div { display: flex; flex-direction: column; min-width: 0; }
+  .bfacts .dlabel { font-size: 10.5px; color: var(--ink3); text-transform: uppercase; letter-spacing: .02em;
+    min-height: 0; display: block; }
+  .bfacts span + span { font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  .bdetail .note { padding: 10px 0 0; }
+  .bmark { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  .bmark .note.flat { padding: 0; flex: 1; min-width: 200px; }
+  .bellbtn { display: inline-flex; align-items: center; gap: 5px; }
+  .bellbtn .tag { margin-left: 2px; }
+  .row.top { align-items: flex-start; }
+  .stepno { flex: 0 0 22px; width: 22px; height: 22px; border-radius: 99px; background: var(--chip2); color: var(--ink2);
+    font-size: 11.5px; font-weight: 700; display: flex; align-items: center; justify-content: center; margin-top: 1px; }
+  .alform { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 9px; }
+  .note.flat { padding: 0; }
+  .morelink { font: inherit; font-size: 12px; color: var(--ink2); background: none; border: 0; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 4px; margin: 14px 2px 0; padding: 4px 6px; border-radius: 6px; }
+  .morelink:hover { background: var(--sel); color: var(--ink1); }
+  @media (max-width: 980px) {
+    .stats4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .bmain { grid-template-columns: 34px minmax(110px, 1fr) minmax(120px, 1.3fr) minmax(90px, .8fr); }
+    .bmain .bfig.spend { display: none; }
+  }
   .sub { color: var(--ink3); font-size: 11.5px; margin-top: 1px; }
   .note { color: var(--ink3); font-size: 11.5px; line-height: 1.5; padding: 10px 14px 13px; }
   .note code, .lede code {
@@ -1112,6 +1200,7 @@ Use the copy button to put it on the clipboard."
    *  One 24-grid, one stroke weight, currentColor throughout.
    */
   const ICONS = {
+    bell: '<path d="M6.5 16.5V11a5.5 5.5 0 0 1 11 0v5.5l1.5 2.2H5z"/><path d="M10 20.7a2.1 2.1 0 0 0 4 0"/>',
     download: '<path d="M12 4.5v10.2"/><path d="M7.8 10.6 12 14.8l4.2-4.2"/><path d="M5 19.5h14"/>',
     coins: '<ellipse cx="9.5" cy="7.5" rx="5" ry="2.5"/><path d="M4.5 7.5v4c0 1.4 2.2 2.5 5 2.5s5-1.1 5-2.5v-4"/><path d="M9.5 18.5c-2.8 0-5-1.1-5-2.5"/><ellipse cx="15" cy="15" rx="4.5" ry="2.3"/><path d="M10.5 15v2.6c0 1.3 2 2.3 4.5 2.3s4.5-1 4.5-2.3V15"/>',
     key: '<circle cx="7.4" cy="12" r="4.1"/><path d="M11.5 12H20.8"/><path d="M17.4 12v3.4"/><path d="M20.2 12v2.5"/>',
@@ -1214,7 +1303,13 @@ Use the copy button to put it on the clipboard."
   // broker is mid-renewal, and the key list should not wait on that.
   let signins = null, connecting = {};
   /** Balances: null until first asked; `enabled` false shows the page's opt-in. */
-  let balancesView = { data: null, busy: false, error: "" };
+  // `span` is the stretch the spend figures cover; `open` the row showing its detail; `marking` the row
+  // whose "full" mark is being typed; `icons` each provider's logo as a data: address (passbook_logos.py).
+  let balancesView = { data: null, busy: false, error: "", span: "week", filter: "all", category: "", sort: "low",
+                       open: "", rest: false, marking: "", icons: {}, iconsAsked: false,
+                       // Telegram alerts (passbook_alerts.py): `alerting` is the setup panel being open,
+                       // `alertCfg` the settings as last answered, `alertChats` what Find my chat found.
+                       alertsShown: false, alerting: false, alertCfg: null, alertChats: null, alertBusy: "", alertNote: "", pasting: false };
   // The app, the command line it drives and the background service are three installs, so the Updates
   // page shows three versions (update.rs). `working` is what the button is doing right now.
   let updatesView = { data: null, busy: false, working: "", error: "", checked: 0 };
@@ -1593,7 +1688,7 @@ Use the copy button to put it on the clipboard."
         // Opening the Record is the moment somebody wants to know, so ask then
         // — rather than on every poll, whatever page they were on.
         if (page === "record" && !chain.answer && !chain.busy) checkChain();
-        if (page === "balances" && !balancesView.busy) loadBalances();
+        if (page === "balances") loadBalances();
       });
     // Lock puts the WINDOW away — nothing else. It used to sign the broker out,
     // which meant closing the app at the end of the day also stopped every
@@ -2568,11 +2663,26 @@ passbook oauth connect google:work</pre>
   /** A rejected invoke as a sentence: without the "Error:" in front of one that already is. */
   const balanceError = (error) => String(error?.message ?? error ?? "").replace(/^Error:\s*/, "");
 
-  async function loadBalances(fresh = false) {
-    balancesView.busy = true; balancesView.error = ""; paint();
+  /** Read the balances. `quiet` is the reading taken at launch and each hour while the app is open, so
+   *  the history has points on days nobody opened this page: it repaints only if the page is showing. */
+  async function loadBalances(fresh = false, quiet = false) {
+    if (balancesView.busy) return;
+    balancesView.busy = true;
+    if (!quiet) { balancesView.error = ""; paint(); }
     try { balancesView.data = await invoke("balances_state", { fresh }); }
-    catch (e) { balancesView.error = balanceError(e); }
-    finally { balancesView.busy = false; paint(); }
+    catch (e) { if (!quiet) balancesView.error = balanceError(e); }
+    finally { balancesView.busy = false; if (!quiet || page === "balances") paint(); }
+    loadBalanceIcons();
+  }
+
+  /** Each provider's logo, once per launch. Slow the first time (it visits each site), so never awaited. */
+  async function loadBalanceIcons() {
+    if (balancesView.iconsAsked || !balancesView.data?.enabled) return;
+    balancesView.iconsAsked = true;
+    try {
+      balancesView.icons = (await invoke("balances_icons"))?.icons || {};
+      if (page === "balances") paint();
+    } catch { balancesView.iconsAsked = false; }
   }
 
   /** Ask what is installed and what is newest. `quiet` is the check at launch and twice a day: it only
@@ -2654,27 +2764,259 @@ passbook oauth connect google:work</pre>
         Nothing about you, this computer or your keys is sent.</p>`, "How updates work")}`;
   }
 
-  /** One provider's figure: a balance, an allowance, or usage, as it reported it, or nothing. */
-  function balanceFigure(r) {
-    const money = (n, unit) => `${Number(n).toLocaleString(undefined, { maximumFractionDigits: 2 })} ${unit || ""}`.trim();
-    if (r.balance !== null && r.balance !== undefined) return money(r.balance, r.unit);
-    if (r.allowance) return `${Number(r.allowance.used).toLocaleString()} of ${Number(r.allowance.limit).toLocaleString()} ${r.allowance.unit} used`;
-    if (r.usageUsd !== null && r.usageUsd !== undefined) return `${money(r.usageUsd, "USD")} used`;
-    return "";
-  }
+  // ── balances: what the page says ───────────────────────────────────────
+  //
+  // Rebuilt for 1.10.7 (Liam, 2026-10-13: "at a glance visibility so users can see immediately what's
+  // low"). The first page was a list of numbers, and a number alone does not say whether it is a lot.
+  // Each live service now reads left to right as: whose it is (its own logo), how full (a meter against
+  // the plan's quota, or the balance after the last top-up), what is left, what it is costing over the
+  // chosen span and whether that is rising, and one button to top up. Everything it shows is worked out
+  // by the command line (passbook_insights.py), so the terminal and HivemindOS can say the same.
 
   const BALANCE_TAG = { ready: ["on", "Live"], error: ["off", "Needs a look"], locked: ["", "Locked"],
                         missing: ["", "Needs a billing key"], manual: ["", "On their site"] };
+  const BALANCE_SPANS = [["today", "Today"], ["week", "7 days"], ["month", "30 days"]];
+  const SPAN_WORDS = { today: "today", week: "last 7 days", month: "last 30 days" };
+
+  /** An amount in its unit: dollars as money, anything else as a count with its name. */
+  function amount(n, unit) {
+    const v = Number(n);
+    if (unit === "USD") return `$${v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    return `${v.toLocaleString(undefined, { maximumFractionDigits: Math.abs(v) < 100 ? 2 : 0 })}${unit ? ` ${unit}` : ""}`;
+  }
+  const shortDay = (iso) => new Date(`${iso}T00:00:00Z`).toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
+
+  /** How long what is left will last, in words a person would say. */
+  function runwayWords(days) {
+    if (days === null || days === undefined) return "";
+    if (days < 1) return "under a day left";
+    if (days >= 365) return "over a year left";
+    if (days >= 60) return `about ${Math.round(days / 30)} months left`;
+    return `about ${Math.round(days)} day${Math.round(days) === 1 ? "" : "s"} left`;
+  }
+
+  /** Up or down against the span before, or nothing when there is no fair span to compare with. */
+  function trend(change) {
+    if (change === null || change === undefined) return "";
+    if (Math.abs(change) < 0.5) return "";  // the same as before is not news
+    const up = change > 0;
+    return `<span class="trend ${up ? "up" : "down"}" title="${up ? "More" : "Less"} than the span before">${up ? "▲" : "▼"} ${Math.abs(Math.round(change))}%</span>`;
+  }
+
+  /** What a service spent over the chosen span: {text, change, sub} or null when nothing is known. */
+  function spanSpend(spend, span) {
+    if (!spend) return null;
+    if (span === "today") {
+      return { value: spend.today, sub: spend.yesterday === null || spend.yesterday === undefined ? "so far today" : `${amount(spend.yesterday, spend.unit)} yesterday`, change: null };
+    }
+    const watched = span === "week" ? spend.weekWatched : spend.monthWatched;
+    const value = span === "week" ? spend.week : spend.month;
+    return { value, change: span === "week" ? spend.weekChange : spend.monthChange, sub: watched ? SPAN_WORDS[span] : "since tracking began" };
+  }
+
+  /** A provider's own logo when its site gave one, else the letter this app has always drawn. */
+  function logo(r) {
+    const src = balancesView.icons[r.providerId];
+    return src ? `<img class="logo" src="${esc(src)}" alt="" />` : `<span class="logo letter">${avatar(r.name)}</span>`;
+  }
+
+  /** The meter: what is left against what full is. Green over half, amber to a fifth, red under. */
+  function meterBar(m) {
+    if (!m) return `<div class="bmeter none"></div>`;
+    if (m.empty) return `<div class="bmeter"><div class="meter"><span style="width:0"></span></div><div class="metercap">Nothing in this account</div></div>`;
+    // Nothing to measure against yet: the most this account has held is what it holds now. A full green
+    // bar would be a claim, so the track is left bare until a top-up is seen or a full mark is set.
+    if (m.kind === "balance" && m.basis === "highest" && m.fraction >= 0.999) {
+      return `<div class="bmeter"><div class="meter unknown"></div>
+        <div class="metercap">No top-up seen yet \u00b7 open to set what full is</div></div>`;
+    }
+    const pct = Math.max(0, Math.min(100, Math.round(m.fraction * 100)));
+    const tone = m.fraction < 0.2 ? "low" : m.fraction < 0.5 ? "mid" : "ok";
+    const against = m.kind === "quota"
+      ? `${Number(m.used).toLocaleString()} of ${Number(m.full).toLocaleString()} ${esc(m.unit || "")} used${m.resetsAt ? ` · resets ${esc(shortDay(m.resetsAt.slice(0, 10)))}` : ""}`
+      : m.basis === "highest" && m.fraction >= 0.999 ? "no top-up seen yet"
+      : `of ${esc(amount(m.full, m.unit))}${m.basis === "top-up" ? " at last top-up" : m.basis === "set" ? " when full" : " at its highest"}`;
+    return `<div class="bmeter"><div class="meter" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}">
+      <span class="${tone}" style="width:${Math.max(pct, 2)}%"></span></div>
+      <div class="metercap"><b>${pct}% left</b> · ${against}</div></div>`;
+  }
+
+  /** Spend per day as bars. The chosen span is drawn in the accent; a day nobody watched has no bar. */
+  function dayBars(days, unit, span, tall = 64) {
+    if (!days?.length) return "";
+    const top = Math.max(...days.map((p) => p.v), 0.0001);
+    const lit = span === "today" ? 1 : span === "week" ? 8 : days.length;
+    const w = 100 / days.length;
+    const bars = days.map((p, i) => {
+      const h = Math.max(p.v / top * (tall - 6), p.v > 0 ? 2 : 0);
+      const on = i >= days.length - lit;
+      return `<rect x="${(i * w + w * 0.14).toFixed(2)}%" y="${(tall - h).toFixed(1)}" width="${(w * 0.72).toFixed(2)}%" height="${h.toFixed(1)}" rx="1.5"
+        class="${on ? "on" : ""}${i === days.length - 1 ? " now" : ""}"><title>${esc(shortDay(p.d))} · ${esc(amount(p.v, unit))}</title></rect>`;
+    }).join("");
+    return `<div class="daybars"><svg class="bars" width="100%" height="${tall}" role="img" aria-label="Spend per day">
+      <line x1="0" x2="100%" y1="${tall - 0.5}" y2="${tall - 0.5}" class="base"/>${bars}</svg>
+      <div class="dayaxis"><span>${esc(shortDay(days[0].d))}</span><span>peak ${esc(amount(top, unit))} a day</span><span>today</span></div></div>`;
+  }
+
+  /** The four things to know before reading a single row. */
+  function balanceStats(d, span) {
+    const u = d.summary?.usd || {}, low = d.summary?.low || [], out = d.summary?.nextOut;
+    const spent = span === "today" ? u.today : span === "week" ? u.week : u.month;
+    const change = span === "week" ? u.weekChange : span === "month" ? u.monthChange : null;
+    const spentSub = !u.tracked ? "no dollar spend to track yet"
+      : span === "today" ? `${amount(u.yesterday || 0, "USD")} yesterday`
+      : change === null || change === undefined ? `${amount(u.perDay || 0, "USD")} a day lately`
+      : `${trend(change)} against the ${span === "week" ? "7" : "30"} days before`;
+    const card = (label, value, sub, tone = "") => `<div class="stat ${tone}"><span class="statk">${label}</span>
+      <span class="statv">${value}</span><span class="stats">${sub}</span></div>`;
+    return `<div class="stats4">
+      ${card("On hand", u.accounts ? esc(amount(u.balance, "USD")) : "—", u.accounts ? `in ${u.accounts} dollar account${u.accounts === 1 ? "" : "s"}` : "no dollar balance reported")}
+      ${card(`Spent · ${SPAN_WORDS[span]}`, u.tracked ? esc(amount(spent || 0, "USD")) : "—", spentSub)}
+      ${card("Running low", low.length ? String(low.length) : "None", low.length ? esc(low.slice(0, 2).map((x) => x.name).join(", ") + (low.length > 2 ? ` +${low.length - 2}` : "")) : "nothing under a fifth or a week", low.length ? "warn" : "good")}
+      ${card("Runs out first", out ? esc(out.name) : "—", out ? esc(runwayWords(out.days)) + " at this rate" : "not enough history to say")}
+    </div>`;
+  }
+
+  /** One live service: logo, name, meter, what is left, what it costs, top up. Opens for the detail. */
+  function balanceRow(r, span) {
+    const i = r.insights || {}, m = i.meter, open = balancesView.open === r.providerId;
+    const spend = spanSpend(i.spend, span);
+    const left = r.balance !== null && r.balance !== undefined ? amount(r.balance, r.unit)
+      : m?.kind === "quota" ? `${Number(m.left).toLocaleString()} ${m.unit || ""}`.trim()
+      : r.usageUsd !== null && r.usageUsd !== undefined ? `${amount(r.usageUsd, "USD")} used` : r.details?.length ? r.details[0].value : "—";
+    // A quota that refills before it would run out is not counting down to anything.
+    const refills = m?.kind === "quota" && m.resetsAt ? (Date.parse(m.resetsAt) - Date.now()) / 86400000 : null;
+    const hasRunway = i.runwayDays !== null && i.runwayDays !== undefined;
+    const leftSub = hasRunway && refills !== null && i.runwayDays >= refills ? "enough until it resets"
+      : hasRunway ? runwayWords(i.runwayDays)
+      : m?.kind === "quota" ? "left on the plan" : r.usagePeriod ? r.usagePeriod.toLowerCase()
+      : r.balance === null || r.balance === undefined ? (r.details?.[0]?.label || "").toLowerCase() : "";
+    // Whether there is anything here whose movement could be spend at all.
+    const trackable = m || (r.usageUsd !== null && r.usageUsd !== undefined);
+    return `<div class="brow${i.low ? " low" : ""}${open ? " open" : ""}">
+      <button class="bmain" data-bal-open="${esc(r.providerId)}" aria-expanded="${open}">
+        ${logo(r)}
+        <span class="bname"><strong>${esc(r.name)}</strong>${i.low ? ` <span class="tag off">Low</span>` : ""}
+          <span class="sub">${esc(i.low ? i.lowWhy : r.category)}</span></span>
+        ${meterBar(m)}
+        <span class="bfig"><strong>${esc(left)}</strong><span class="sub">${esc(leftSub)}</span></span>
+        <span class="bfig spend">${spend ? `<strong>${esc(amount(spend.value, i.spend.unit))}</strong> ${trend(spend.change)}<span class="sub">${esc(spend.sub)}</span>`
+          : `${trackable ? `<strong class="dim">—</strong><span class="sub">${m?.kind === "quota" ? "no use seen yet" : "no spend seen yet"}</span>` : ""}`}</span>
+      </button>
+      ${r.topUpUrl ? `<button class="act" data-topup="${esc(r.providerId)}" title="Open ${esc(r.name)}'s billing page">Top up</button>` : ""}
+      ${open ? balanceDetail(r) : ""}
+    </div>`;
+  }
+
+  /** Under an opened row: its own spend per day, every figure the provider reported, and what full is. */
+  function balanceDetail(r) {
+    const i = r.insights || {}, m = i.meter, s = i.spend;
+    const facts = [
+      ...(s ? [["Today", amount(s.today, s.unit)], ["Last 7 days", amount(s.week, s.unit) + (s.weekWatched ? "" : " so far")],
+               ["Last 30 days", amount(s.month, s.unit) + (s.monthWatched ? "" : " so far")],
+               ...(s.perDay !== null && s.perDay !== undefined ? [["A day, lately", amount(s.perDay, s.unit)]] : [])] : []),
+      ...(i.lastTopUp ? [["Last top-up", `${amount(i.lastTopUp.amount, r.unit)} on ${shortDay(i.lastTopUp.at)}`]] : []),
+      ...(r.accountLabel ? [["Account", r.accountLabel]] : []),
+      ["Paid as", r.billing],
+      ...(r.details || []).map((x) => [x.label, x.value]),
+      ...(i.since ? [["Tracked since", shortDay(i.since)]] : []),
+      ...(r.keyName ? [["Read with", r.keyName]] : []),
+    ];
+    const marking = balancesView.marking === r.providerId;
+    return `<div class="bdetail">
+      ${s && i.days?.length ? dayBars(i.days, s.unit, balancesView.span, 48) : ""}
+      <div class="bfacts">${facts.map(([k, v]) => `<div><span class="dlabel">${esc(k)}</span><span>${esc(v)}</span></div>`).join("")}</div>
+      <div class="note">${esc(r.message)}</div>
+      ${m?.kind === "balance" ? `<div class="bmark">${marking
+        ? `<label>Full is <input id="balmark" inputmode="decimal" size="8" value="${m.basis === "set" ? esc(String(m.full)) : ""}" placeholder="${esc(String(Math.round(m.full)))}" /> ${esc(r.unit || "")}</label>
+           <button class="act primary" data-bal-mark-save="${esc(r.providerId)}">Save</button>
+           ${m.basis === "set" ? `<button class="act" data-bal-mark-clear="${esc(r.providerId)}">Use the last top-up</button>` : ""}
+           <button class="act" data-bal-mark="">Cancel</button>`
+        : `<span class="note flat">The meter measures against ${m.basis === "set" ? "the amount you set" : m.basis === "top-up" ? "the balance after your last top-up" : "the most this account has held while PassBook watched"}.</span>
+           <button class="act" data-bal-mark="${esc(r.providerId)}">Set what full is</button>`}</div>` : ""}
+    </div>`;
+  }
+
+  /** A service with no live figure: what it needs, in one line. */
+  function balanceQuietRow(r) {
+    const [tone, label] = BALANCE_TAG[r.status] || ["", r.status];
+    return `<div class="brow quiet"><div class="bmain still">
+        ${logo(r)}
+        <span class="bname wide"><strong>${esc(r.name)}</strong><span class="sub">${esc(r.message)}</span></span>
+        <span class="tag ${tone}">${esc(label)}</span></div>
+      ${r.topUpUrl ? `<button class="act" data-topup="${esc(r.providerId)}" title="Open ${esc(r.name)}'s billing page">${r.status === "manual" ? "Open" : "Billing"}</button>` : ""}
+    </div>`;
+  }
+
+  /** Telegram alerts: a message through the owner's own bot when something runs low, cannot be read, or
+   *  recovers. Three steps the first time (the bot, the chat, on), one row after that. */
+  function balanceAlerts(d) {
+    const v = balancesView, cfg = v.alertCfg || d.alerts || {};
+    const names = (state?.store?.keys || []).map((k) => (typeof k === "string" ? k : k.name)).filter(Boolean);
+    const held = names.includes(cfg.key);
+    const candidates = [...new Set([...(held ? [cfg.key] : []), ...names.filter((n) => /BOT_TOKEN$/i.test(n))])];
+    const busy = !!v.alertBusy;
+    const note = v.alertNote ? `<div class="row"><div class="grow note">${esc(v.alertNote)}</div></div>` : "";
+    if (cfg.on && !v.alerting) {
+      return `<div class="group"><h3>Alerts</h3>
+        <div class="row"><span class="statustile good">${icon("bell")}</span>
+          <div class="grow"><strong>Telegram alerts are on</strong>
+            <div class="note flat">A message to chat ${esc(cfg.chat)} when a service runs low, when a balance cannot be read,
+            and when either recovers. Checked every hour, with this window closed too.</div></div>
+          <button class="act" data-al-test="1" ${busy ? "disabled" : ""}>${v.alertBusy === "test" ? "Sending…" : "Send a test"}</button>
+          <button class="act" data-al-open="1" ${busy ? "disabled" : ""}>Change</button>
+          <button class="act danger" data-al-off="1" ${busy ? "disabled" : ""}>Turn off</button></div>
+        ${d.alerts?.error ? `<div class="row"><div class="grow note">${esc(d.alerts.error)}</div></div>` : ""}${note}</div>`;
+    }
+    if (!v.alerting) {
+      return `<div class="group"><h3>Alerts</h3>
+        <div class="row"><span class="statustile plain">${icon("bell")}</span>
+          <div class="grow"><strong>Get a Telegram message when something runs low</strong>
+            <div class="note flat">Through your own bot: when a service runs low, when a balance cannot be read, and when
+            either recovers.</div></div>
+          <button class="act" data-al-open="1">Set up</button></div>${note}</div>`;
+    }
+    const pasting = v.pasting || !candidates.length;
+    return `<div class="group"><h3>Alerts</h3>
+      <div class="row top"><span class="stepno">1</span>
+        <div class="grow"><strong>Your bot</strong>
+          <div class="note flat">In Telegram, message <span class="mono">@BotFather</span>, send <span class="mono">/newbot</span>, and copy the token it gives you.
+          PassBook keeps it as a key and sends it nowhere but Telegram.</div>
+          <div class="alform">${pasting
+            ? `<input id="albot" type="password" autocomplete="off" spellcheck="false" placeholder="Paste the bot token" size="34" />
+               <button class="act primary" data-al-token="1" ${busy ? "disabled" : ""}>${v.alertBusy === "token" ? "Saving…" : "Save token"}</button>
+               ${candidates.length ? `<button class="act" data-al-paste="">Use a saved key</button>` : ""}`
+            : `<select data-al-key aria-label="The key that holds the bot token">${held ? "" : `<option value="">Choose a saved key\u2026</option>`}${candidates.map((n) =>
+                 `<option value="${esc(n)}" ${n === cfg.key ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>
+               ${held ? `<span class="tag on">Saved</span>` : ""}
+               <button class="act" data-al-paste="1">Paste a new token</button>`}</div></div></div>
+      <div class="row top"><span class="stepno">2</span>
+        <div class="grow"><strong>Your chat</strong>
+          <div class="note flat">Send your bot any message in Telegram (or add it to a group and say something), then find it here.</div>
+          <div class="alform">
+            <button class="act" data-al-find="1" ${busy || !held ? "disabled" : ""}>${v.alertBusy === "find" ? "Looking…" : "Find my chat"}</button>
+            ${(v.alertChats || []).map((c) => `<button class="fchip" data-al-chat="${esc(c.id)}" aria-pressed="${cfg.chat === c.id}">${esc(c.name)}<span>${esc(c.kind || "chat")}</span></button>`).join("")}
+            ${v.alertChats && !v.alertChats.length ? `<span class="note flat">No chat has written to the bot lately.</span>` : ""}
+            <input id="alchat" inputmode="numeric" size="16" placeholder="or a chat id" value="${esc(cfg.chat || "")}" />
+            <button class="act" data-al-chatsave="1" ${busy ? "disabled" : ""}>Use</button>
+          </div></div></div>
+      <div class="row"><span class="stepno">3</span>
+        <div class="grow note flat">Turning on sends a test message first, so you know it arrives.</div>
+        <button class="act" data-al-close="1">${cfg.on ? "Done" : "Cancel"}</button>
+        ${cfg.on ? "" : `<button class="act primary" data-al-on="1" ${busy || !held || !cfg.chat ? "disabled" : ""}>
+          ${v.alertBusy === "on" ? "Sending a test…" : "Turn on alerts"}</button>`}</div>
+      ${note}</div>`;
+  }
 
   /** What each service account has left (passbook_balances.py). Off until turned on: it calls each
    *  provider you hold a key for, so a person says yes to that first. */
   function balancesPage() {
     const v = balancesView, d = v.data;
-    if (!d) return `<h2>Balances</h2><p class="lede">Reading…</p>`;
+    if (!d) return `<h2>Balances</h2><p class="lede">${v.error ? esc(v.error) : "Reading…"}</p>`;
     if (!d.enabled) {
       return `<h2>Balances</h2>
-        <p class="lede">See what is left on the services your keys pay for — credits, plan
-        allowances and usage — and top up in one click.</p>
+        <p class="lede">See at a glance what is left on the services your keys pay for, what they are
+        costing you, and what is about to run out.</p>
         <div class="group">
           <div class="row">
             <span class="statustile plain">${icon("coins")}</span>
@@ -2685,52 +3027,74 @@ passbook oauth connect google:work</pre>
               their billing page. Nothing goes anywhere else.</div>
             </div>
           </div>
-          <div class="row"><div class="grow note">Only the numbers are kept, for two minutes, and every
-            read shows in Activity as “read service balances”. Top up opens the provider's own billing
-            page: PassBook never handles a payment.</div></div>
+          <div class="row"><div class="grow note">Only numbers are kept: each reading goes into a history on
+            this computer, which is what spend per day, trends and “days left” are worked out from. Every
+            read shows in Activity as “read service balances”. Logos come from each provider's own site.
+            Top up opens the provider's own billing page: PassBook never handles a payment.</div></div>
           <div class="row"><div class="grow"></div>
             <button class="act primary" data-balances-on="1" ${v.busy ? "disabled" : ""}>
               ${v.busy ? "Turning on…" : "Turn on Balances"}</button></div>
         </div>
         ${v.error ? `<p class="note">${esc(v.error)}</p>` : ""}`;
     }
-    const rows = d.providers || [];
-    const order = { ready: 0, error: 1, locked: 2, missing: 3, manual: 4 };
-    const sorted = [...rows].sort((a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9) || a.name.localeCompare(b.name));
-    const line = (r) => {
-      const [tone, label] = BALANCE_TAG[r.status] || ["", r.status];
-      const figure = r.status === "ready" ? balanceFigure(r) : "";
-      const details = (r.details || []).map((x) => `${esc(x.label)}: ${esc(x.value)}`).join(" · ");
-      return `<div class="row">
-        ${avatar(r.name)}
-        <div class="grow">
-          <strong>${esc(r.name)}</strong>${figure ? ` <span class="figure">${esc(figure)}</span>` : ""}
-          <div class="note">${esc(r.status === "ready" && r.accountLabel ? `${r.accountLabel} · ` : "")}${esc(r.message)}</div>
-          ${details ? `<div class="note">${details}</div>` : ""}
+    const rows = d.providers || [], span = v.span;
+    const live = rows.filter((r) => r.status === "ready");
+    const look = rows.filter((r) => r.status === "error" || r.status === "locked");
+    const rest = rows.filter((r) => r.status === "missing" || r.status === "manual");
+    const low = live.filter((r) => r.insights?.low);
+    const categories = [...new Set(rows.map((r) => r.category))].sort();
+    const inCategory = (r) => !v.category || r.category === v.category;
+    // Lowest first: what needs attention is at the top without anyone sorting for it.
+    const fullness = (r) => r.insights?.meter && !r.insights.meter.empty ? r.insights.meter.fraction : 2;
+    const spentOf = (r) => spanSpend(r.insights?.spend, span)?.value || 0;
+    const order = { low: (a, b) => (b.insights?.low ? 1 : 0) - (a.insights?.low ? 1 : 0) || fullness(a) - fullness(b) || a.name.localeCompare(b.name),
+                    spend: (a, b) => spentOf(b) - spentOf(a) || a.name.localeCompare(b.name),
+                    name: (a, b) => a.name.localeCompare(b.name) }[v.sort];
+    const shownLive = (v.filter === "low" ? low : live).filter(inCategory).sort(order);
+    const showLive = v.filter === "all" || v.filter === "low" || v.filter === "live";
+    const showLook = v.filter === "all" || v.filter === "look";
+    const showRest = v.filter === "rest" || (v.filter === "all" && v.rest);
+    const chip = (id, label, n) => `<button class="fchip" data-bal-filter="${id}" aria-pressed="${v.filter === id}">${label}<span>${n}</span></button>`;
+    const usdDays = d.summary?.usd?.days || [];
+    return `<div class="balhead">
+        <div><h2>Balances</h2>
+          <p class="lede">What is left, what it is costing, and what runs out next.</p></div>
+        <div class="balctl">
+          <div class="seg" role="group" aria-label="Span">${BALANCE_SPANS.map(([id, label]) =>
+            `<button data-bal-span="${id}" aria-pressed="${span === id}">${label}</button>`).join("")}</div>
+          <button class="act bellbtn" data-al-toggle="1" aria-expanded="${v.alertsShown}"
+            title="Telegram alerts when something runs low">${icon("bell", "tinyicon")} Alerts${(v.alertCfg || d.alerts || {}).on ? ` <span class="tag on">On</span>` : ""}</button>
+          <button class="act" data-balances-refresh="1" ${v.busy ? "disabled" : ""}
+            title="${d.cached ? "Read in the last two minutes" : "Just read"}">${v.busy ? "Reading…" : "Refresh"}</button>
         </div>
-        <span class="tag ${tone}">${esc(label)}</span>
-        ${r.topUpUrl ? `<button class="act" data-topup="${esc(r.providerId)}" title="Open ${esc(r.name)}'s billing page">Top up</button>` : ""}
-      </div>`;
-    };
-    const live = sorted.filter((r) => r.status === "ready").length;
-    return `<h2>Balances</h2>
-      <p class="lede">What is left on each service you hold a key for${live ? `: ${live} reporting live` : ""}.
-      Read from each provider by this computer; top up on their own page.</p>
-      <div class="group">
-        <div class="row">
-          <div class="grow note">${d.cached ? "From the last two minutes." : "Just read."}</div>
-          <button class="act" data-balances-refresh="1" ${v.busy ? "disabled" : ""}>
-            ${v.busy ? "Reading…" : "Refresh"}</button>
-        </div>
-        ${sorted.length ? sorted.map(line).join("") : `<div class="empty">None of the keys here belongs to a
-          service PassBook can read a balance for.</div>`}
       </div>
+      ${v.alertsShown ? balanceAlerts(d) : ""}
+      ${balanceStats(d, span)}
+      ${usdDays.some((p) => p.v > 0) ? `<div class="group chart"><h3>Dollars spent per day</h3>${dayBars(usdDays, "USD", span)}</div>` : ""}
+      <div class="balfilters">
+        <div class="fchips">${chip("all", "All", rows.length)}${chip("low", "Low", low.length)}${chip("live", "Live", live.length)}${chip("look", "Needs a look", look.length)}${chip("rest", "No live figure", rest.length)}</div>
+        <div class="fsel">
+          ${categories.length > 1 ? `<select data-bal-category aria-label="Kind of service"><option value="">Every kind</option>${categories.map((c) =>
+            `<option value="${esc(c)}" ${v.category === c ? "selected" : ""}>${esc(c)}</option>`).join("")}</select>` : ""}
+          <select data-bal-sort aria-label="Order"><option value="low" ${v.sort === "low" ? "selected" : ""}>Lowest first</option>
+            <option value="spend" ${v.sort === "spend" ? "selected" : ""}>Biggest spend</option>
+            <option value="name" ${v.sort === "name" ? "selected" : ""}>By name</option></select>
+        </div>
+      </div>
+      ${showLive ? `<div class="group ballist">${shownLive.length ? shownLive.map((r) => balanceRow(r, span)).join("")
+        : `<div class="empty">${v.filter === "low" ? "Nothing is running low." : "No service here is reporting a live figure."}</div>`}</div>` : ""}
+      ${showLook && look.filter(inCategory).length ? `<div class="group ballist"><h3>Needs a look</h3>${look.filter(inCategory).map(balanceQuietRow).join("")}</div>` : ""}
+      ${showRest && rest.filter(inCategory).length ? `<div class="group ballist"><h3>No live figure</h3>${rest.filter(inCategory).map(balanceQuietRow).join("")}</div>` : ""}
+      ${v.filter === "all" && !v.rest && rest.filter(inCategory).length ? `<button class="morelink" data-bal-rest="1">${rest.filter(inCategory).length} more service${rest.filter(inCategory).length === 1 ? "" : "s"} without a live figure ${icon("chevron", "tinyicon")}</button>` : ""}
       ${v.error ? `<p class="note">${esc(v.error)}</p>` : ""}
-      <div class="group quiet"><div class="row"><div class="grow note">Stop reading balances and forget the
-        last readings.</div><button class="act danger" data-balances-off="1" ${v.busy ? "disabled" : ""}>Turn off</button></div></div>
-      ${aside(`<p>A reading is only what the provider reports. A plan allowance or an invoice is not money
-        you have, and an account that bills after use is shown as reported. Some providers only let a
-        separate billing key read billing; the page says which.</p>`, "What these numbers are")}`;
+      ${aside(`<p><b>The meter</b> is what is left against what full is: a plan's quota, or for bought credits the balance
+        just after the last top-up this computer saw. Until it has seen one, open a row and set what full is.</p>
+        <p><b>Spend</b> is worked out from how the readings move, per day, so it starts the day Balances was turned on;
+        OpenRouter also reports its own daily figures. A change is only shown against a span that was fully watched.
+        Only dollars are added together: credits, characters and emails stay on their own rows.</p>
+        <p><b>Low</b> means under a fifth left, or under a week at the recent rate.</p>`, "How to read this")}
+      <div class="group quiet"><div class="row"><div class="grow note">Stop reading balances and forget the readings,
+        their history and the logos.</div><button class="act danger" data-balances-off="1" ${v.busy ? "disabled" : ""}>Turn off</button></div></div>`;
   }
 
   function appsPage() {
@@ -4946,6 +5310,73 @@ passbook oauth connect google:work</pre>
       finally { balancesView.busy = false; paint(); }
     });
     main.querySelectorAll("[data-balances-refresh]").forEach((b) => b.onclick = () => loadBalances(true));
+    // Alerts. Every step answers with the settings as they now stand, so the panel shows what was kept.
+    const alertStep = async (busyAs, action, args = {}, after = null) => {
+      balancesView.alertBusy = busyAs; balancesView.alertNote = ""; paint();
+      try {
+        const answer = await invoke("balances_alerts", { action, ...args });
+        if (after) after(answer); else balancesView.alertCfg = answer;
+      } catch (e) { balancesView.alertNote = balanceError(e); }
+      finally { balancesView.alertBusy = ""; paint(); }
+    };
+    main.querySelectorAll("[data-al-toggle]").forEach((b) => b.onclick = () => {
+      balancesView.alertsShown = !balancesView.alertsShown; balancesView.alertNote = ""; paint();
+    });
+    main.querySelectorAll("[data-al-open]").forEach((b) => b.onclick = () => { balancesView.alerting = true; alertStep("open", "status"); });
+    main.querySelectorAll("[data-al-close]").forEach((b) => b.onclick = () => { balancesView.alerting = false; balancesView.alertNote = ""; paint(); });
+    main.querySelectorAll("[data-al-paste]").forEach((b) => b.onclick = () => { balancesView.pasting = !!b.dataset.alPaste; paint(); });
+    main.querySelectorAll("[data-al-key]").forEach((b) => b.onchange = () => { if (b.value) alertStep("key", "set", { key: b.value }); });
+    main.querySelectorAll("[data-al-token]").forEach((b) => b.onclick = async () => {
+      const field = document.getElementById("albot"), value = String(field?.value || "").trim();
+      if (!/^\d{5,}:[\w-]{20,}$/.test(value)) { balancesView.alertNote = "That does not look like a bot token. It is numbers, a colon, then letters, from @BotFather."; paint(); return; }
+      balancesView.alertBusy = "token"; balancesView.alertNote = ""; paint();
+      try {
+        state = await invoke("add_key", { name: "PASSBOOK_TELEGRAM_BOT_TOKEN", value, replace: true });
+        balancesView.alertCfg = await invoke("balances_alerts", { action: "set", key: "PASSBOOK_TELEGRAM_BOT_TOKEN" });
+        balancesView.pasting = false;
+      } catch (e) { balancesView.alertNote = balanceError(e); }
+      finally { balancesView.alertBusy = ""; paint(); }
+    });
+    main.querySelectorAll("[data-al-find]").forEach((b) => b.onclick = () =>
+      alertStep("find", "chats", {}, (answer) => { balancesView.alertChats = answer?.chats || []; }));
+    main.querySelectorAll("[data-al-chat]").forEach((b) => b.onclick = () => alertStep("chat", "set", { chat: b.dataset.alChat }));
+    main.querySelectorAll("[data-al-chatsave]").forEach((b) => b.onclick = () => {
+      const typed = String(document.getElementById("alchat")?.value || "").trim();
+      if (!/^(-?\d+|@\w{5,32})$/.test(typed)) { balancesView.alertNote = "A chat is a number, or a public channel's @name."; paint(); return; }
+      alertStep("chat", "set", { chat: typed });
+    });
+    main.querySelectorAll("[data-al-on]").forEach((b) => b.onclick = () => alertStep("on", "on", {}, (answer) => {
+      balancesView.alertCfg = answer; balancesView.alerting = false;
+      balancesView.alertNote = "Alerts are on. The test message is in your chat.";
+    }));
+    main.querySelectorAll("[data-al-off]").forEach((b) => b.onclick = () => alertStep("off", "off"));
+    main.querySelectorAll("[data-al-test]").forEach((b) => b.onclick = () => alertStep("test", "test", {}, () => {
+      balancesView.alertNote = "Sent. Check your chat.";
+    }));
+    main.querySelectorAll("[data-bal-span]").forEach((b) => b.onclick = () => { balancesView.span = b.dataset.balSpan; paint(); });
+    main.querySelectorAll("[data-bal-filter]").forEach((b) => b.onclick = () => { balancesView.filter = b.dataset.balFilter; paint(); });
+    main.querySelectorAll("[data-bal-rest]").forEach((b) => b.onclick = () => { balancesView.rest = true; paint(); });
+    main.querySelectorAll("[data-bal-category]").forEach((b) => b.onchange = () => { balancesView.category = b.value; paint(); });
+    main.querySelectorAll("[data-bal-sort]").forEach((b) => b.onchange = () => { balancesView.sort = b.value; paint(); });
+    main.querySelectorAll("[data-bal-open]").forEach((b) => b.onclick = () => {
+      balancesView.open = balancesView.open === b.dataset.balOpen ? "" : b.dataset.balOpen; balancesView.marking = ""; paint();
+    });
+    main.querySelectorAll("[data-bal-mark]").forEach((b) => b.onclick = () => {
+      balancesView.marking = b.dataset.balMark; paint();
+      document.getElementById("balmark")?.focus();
+    });
+    const saveMark = async (id, amount) => {
+      balancesView.busy = true; paint();
+      try { balancesView.data = await invoke("balances_full", { id, amount }); balancesView.marking = ""; balancesView.error = ""; }
+      catch (e) { balancesView.error = balanceError(e); }
+      finally { balancesView.busy = false; paint(); }
+    };
+    main.querySelectorAll("[data-bal-mark-save]").forEach((b) => b.onclick = () => {
+      const typed = Number(String(document.getElementById("balmark")?.value || "").replace(/[$,\s]/g, ""));
+      if (!(typed > 0)) { balancesView.error = "Type what a full account holds, as a number."; paint(); return; }
+      saveMark(b.dataset.balMarkSave, typed);
+    });
+    main.querySelectorAll("[data-bal-mark-clear]").forEach((b) => b.onclick = () => saveMark(b.dataset.balMarkClear, null));
     main.querySelectorAll("[data-topup]").forEach((b) => b.onclick = async () => {
       try { await invoke("balances_open", { id: b.dataset.topup }); }
       catch (e) { balancesView.error = balanceError(e); paint(); }
@@ -5513,6 +5944,10 @@ passbook oauth connect google:work</pre>
       await authorization.load();
       await webLink.load();
       wireDrop();
+      // Balances keeps a history, so a reading is taken now and each hour while the app is open (when
+      // the page is on; off, this asks nothing of anyone).
+      loadBalances(false, true);
+      setInterval(() => { if (balancesView.data?.enabled) loadBalances(false, true); }, 60 * 60 * 1000);
       // Is there a newer release? Asked once now and twice a day, quietly: it only lights a dot.
       loadUpdates(true);
       setInterval(() => loadUpdates(true), 12 * 60 * 60 * 1000);

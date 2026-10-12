@@ -709,6 +709,7 @@
   .settingrow:hover + .settingrow { box-shadow: none; }
   .settingrow .grow { flex: 1; min-width: 0; display: grid; gap: 1px; }
   .settingname { font-weight: 550; font-size: 13.5px; }
+  .row .settingname + .sub { display: block; color: var(--ink3); font-size: 11.5px; }
   .settingrow > svg:last-child { color: var(--ink3); flex: 0 0 13px; }
   .backlink {
     display: inline-flex; align-items: center; gap: 3px; margin: 0 0 2px -6px;
@@ -1203,6 +1204,7 @@ Use the copy button to put it on the clipboard."
    *  One 24-grid, one stroke weight, currentColor throughout.
    */
   const ICONS = {
+    moon: '<path d="M19.4 14.3A7.9 7.9 0 0 1 9.7 4.6a7.9 7.9 0 1 0 9.7 9.7z"/>',
     bell: '<path d="M6.5 16.5V11a5.5 5.5 0 0 1 11 0v5.5l1.5 2.2H5z"/><path d="M10 20.7a2.1 2.1 0 0 0 4 0"/>',
     download: '<path d="M12 4.5v10.2"/><path d="M7.8 10.6 12 14.8l4.2-4.2"/><path d="M5 19.5h14"/>',
     coins: '<ellipse cx="9.5" cy="7.5" rx="5" ry="2.5"/><path d="M4.5 7.5v4c0 1.4 2.2 2.5 5 2.5s5-1.1 5-2.5v-4"/><path d="M9.5 18.5c-2.8 0-5-1.1-5-2.5"/><ellipse cx="15" cy="15" rx="4.5" ry="2.3"/><path d="M10.5 15v2.6c0 1.3 2 2.3 4.5 2.3s4.5-1 4.5-2.3V15"/>',
@@ -1285,6 +1287,38 @@ Use the copy button to put it on the clipboard."
   ];
 
   let state = null, page = "keys", busy = false, notice = "";
+
+  // ── appearance ─────────────────────────────────────────────────────────
+  // System, Light or Dark (Settings). Every dark colour in this page lives in a
+  // `@media (prefers-color-scheme: dark)` block, so the palette already exists and only the operating
+  // system could choose it. Rather than writing each of those rules a second time under a class, the
+  // choice rewrites the condition on the blocks themselves: "all" to force dark, "not all" to force
+  // light, and their own text again to follow the system. A dark rule added later is covered without
+  // anyone remembering this exists. The app also gives the native window the theme (`set_appearance`).
+  const APPEARANCES = [["system", "System"], ["light", "Light"], ["dark", "Dark"]];
+  const themeRules = [];
+  let appearance = "system";
+  function applyAppearance(choice) {
+    appearance = APPEARANCES.some(([id]) => id === choice) ? choice : "system";
+    if (!themeRules.length) {
+      for (const sheet of document.styleSheets) {
+        let rules = [];
+        try { rules = sheet.cssRules; } catch { continue; }
+        for (const rule of rules) {
+          if (rule.media && /prefers-color-scheme\s*:\s*dark/.test(rule.media.mediaText)) themeRules.push([rule, rule.media.mediaText]);
+        }
+      }
+    }
+    for (const [rule, written] of themeRules) {
+      rule.media.mediaText = appearance === "system" ? written : appearance === "dark" ? "all" : "not all";
+    }
+    // The browser's own parts (scrollbars, form controls, the caret) follow this, not the rules above.
+    document.documentElement.style.colorScheme = appearance === "system" ? "" : appearance;
+    try { localStorage.setItem("passbook.appearance", appearance); } catch { /* a remembered hint, nothing more */ }
+  }
+  // At once, from the last choice this window remembers, so it does not open light and then turn dark;
+  // `boot` then asks the app, whose answer is the one that counts.
+  try { applyAppearance(localStorage.getItem("passbook.appearance") || "system"); } catch { applyAppearance("system"); }
   // The vault answers a different question from `state` — not "what is in the
   // store" but "may anything read it right now" — so it is fetched separately
   // and is allowed to be missing on an older CLI without blanking the window.
@@ -1595,6 +1629,15 @@ Use the copy button to put it on the clipboard."
             ${(id === "access" && pending) || (id === "updates" && updatesWaiting()) ? '<span class="dot"></span>' : ""}
             ${icon("chevron", "tinyicon")}
           </button>`).join("")}
+      </div>
+      <div class="group">
+        <div class="row">
+          <span class="statustile plain sm">${icon("moon")}</span>
+          <div class="grow"><span class="settingname">Appearance</span>
+            <span class="sub">${appearance === "system" ? "Follows this computer's light or dark setting" : `Always ${appearance}`}</span></div>
+          <div class="seg" role="group" aria-label="Appearance">${APPEARANCES.map(([id, label]) =>
+            `<button data-appearance="${id}" aria-pressed="${appearance === id}">${label}</button>`).join("")}</div>
+        </div>
       </div>`;
   }
 
@@ -5247,6 +5290,11 @@ passbook oauth connect google:work</pre>
       page = b.dataset.goto; notice = ""; paint();
       if (page === "updates" && Date.now() - updatesView.checked > 60000) loadUpdates();
     });
+    main.querySelectorAll("[data-appearance]").forEach((b) => b.onclick = async () => {
+      applyAppearance(b.dataset.appearance); paint();
+      try { await invoke("set_appearance", { choice: appearance }); }
+      catch (e) { notice = String(e); paint(); }
+    });
     main.querySelectorAll("[data-update-check]").forEach((b) => b.onclick = () => loadUpdates());
     main.querySelectorAll("[data-update-install]").forEach((b) => b.onclick = () =>
       installUpdate(b.dataset.updateInstall === "app"));
@@ -5924,6 +5972,8 @@ passbook oauth connect google:work</pre>
         <code>withGlobalTauri</code> must be enabled in tauri.conf.json.</p>`;
       return;
     }
+    // The appearance the app has on record (the hint above is only what this window last saw).
+    try { applyAppearance(await invoke("appearance")); } catch { /* an older app: follow the system */ }
     try {
       state = await invoke("state");
       await refreshVault();

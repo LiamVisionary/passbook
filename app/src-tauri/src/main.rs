@@ -584,6 +584,64 @@ struct Protection {
     drawing: bool,
 }
 
+// ── appearance ─────────────────────────────────────────────────────────────
+//
+// The window has always had a dark palette, but only the operating system could pick it. Somebody who
+// keeps macOS light and wants this window dark had no way to say so (Liam, 2026-10-13: "also add a dark
+// mode please"). The choice is System, Light or Dark, kept in a one-word file in the app's own config
+// folder: it is about this window and nothing in the credential store.
+//
+// It is applied twice on purpose. Here the native window is given the theme, so the title bar, the
+// scrollbars and the system's own controls match, and so the window opens in the right colours instead of
+// flashing the other ones first. The page also switches its own dark rules (`applyAppearance` in
+// index.html), which is what is checked in tests and does not depend on how a platform's webview follows
+// its window.
+
+fn appearance_path(app: &tauri::AppHandle) -> Option<PathBuf> {
+    app.path().app_config_dir().ok().map(|folder| folder.join("appearance"))
+}
+
+/// "system", "light" or "dark". Anything else on disk, or nothing, is "system".
+fn saved_appearance(app: &tauri::AppHandle) -> String {
+    let kept = appearance_path(app).and_then(|path| std::fs::read_to_string(path).ok()).unwrap_or_default();
+    match kept.trim() {
+        "light" => "light".into(),
+        "dark" => "dark".into(),
+        _ => "system".into(),
+    }
+}
+
+fn theme_for(choice: &str) -> Option<tauri::Theme> {
+    match choice {
+        "light" => Some(tauri::Theme::Light),
+        "dark" => Some(tauri::Theme::Dark),
+        _ => None,
+    }
+}
+
+#[tauri::command(async)]
+fn appearance(app: tauri::AppHandle) -> String {
+    saved_appearance(&app)
+}
+
+#[tauri::command(async)]
+fn set_appearance(app: tauri::AppHandle, choice: String) -> Result<String, String> {
+    if !matches!(choice.as_str(), "system" | "light" | "dark") {
+        return Err("Appearance is system, light or dark.".into());
+    }
+    if let Some(path) = appearance_path(&app) {
+        if let Some(folder) = path.parent() {
+            let _ = std::fs::create_dir_all(folder);
+        }
+        std::fs::write(&path, &choice).map_err(|error| format!("Could not keep that choice: {error}"))?;
+    }
+    if let Some(window) = app.get_webview_window("main") {
+        // Not being able to restyle the native frame is not a reason to refuse: the page restyles itself.
+        let _ = window.set_theme(theme_for(&choice));
+    }
+    Ok(choice)
+}
+
 #[tauri::command(async)]
 fn capture_protection() -> Protection {
     Protection {
@@ -2333,11 +2391,14 @@ fn main() {
             // and an address is refused as "an invalid domain".
             let steady = (ui::PREFERRED_PORT..ui::PREFERRED_PORT + ui::NEIGHBOURS).contains(&port);
             let url = format!("http://localhost:{port}/?steady={}", u8::from(steady));
+            let opening_theme = theme_for(&saved_appearance(app.handle()));
             let window = tauri::WebviewWindowBuilder::new(
                 app,
                 "main",
                 tauri::WebviewUrl::External(url.parse()?),
             )
+            // The appearance chosen in Settings, so the window opens in it (see `set_appearance`).
+            .theme(opening_theme)
             .title("PassBook")
             .inner_size(1040.0, 760.0)
             .min_inner_size(860.0, 600.0)
@@ -2390,7 +2451,7 @@ fn main() {
             pending_web_link, dismiss_web_link, decide_web_link,
             github_state, github_connect_token, github_connect_gh, github_connect_device,
             github_disconnect, github_targets, github_environments, github_check, github_push,
-            balances_state, balances_enable, balances_open, balances_icons, balances_full, balances_alerts,
+            balances_state, balances_enable, balances_open, balances_icons, balances_full, balances_alerts, appearance, set_appearance,
             update_state, update_install
         ])
         .run(tauri::generate_context!())

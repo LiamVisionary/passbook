@@ -4,6 +4,30 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [1.10.10] — 2026-10-13
+
+### Dark mode you can choose
+
+- **Asked for.** Liam, 2026-10-13: "also add a dark mode please." The window
+  has had a dark palette all along, but only the operating system could pick
+  it: with the computer set to light there was no way to have this window dark.
+- **Settings → Appearance:** System, Light or Dark. It takes effect at once, is
+  remembered, and the window opens in it.
+- **How.** Every dark colour in the page sits in a `prefers-color-scheme: dark`
+  block. The choice rewrites the condition on those blocks (`applyAppearance`)
+  instead of writing each rule twice, so a dark rule added later is covered.
+  The app also gives the native window the theme (`set_appearance`), so the
+  title bar, scrollbars and system controls match and the window does not open
+  in the other colours first. The choice is one word in the app's own config
+  folder, nothing in the credential store.
+- **Checked.** In WebKit: forced dark on a light computer, forced light on a
+  dark one, back to System, and reopened with a choice on record: ten cases,
+  by the page's computed colours. In a real build on macOS (the check
+  `docs/SIGNING.md` describes, with a timer walking the choices): opens light,
+  the native theme alone turns the page dark, each choice lands, a saved Dark
+  is there when the window opens, nothing panics. Windows and Linux were not
+  run; there the page's own switch is what is relied on.
+
 ## [1.10.9] — 2026-10-13
 
 ### The Balances filters no longer sit on top of the list

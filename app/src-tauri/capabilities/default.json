@@ -85,6 +85,8 @@
     "allow-balances-icons",
     "allow-balances-full",
     "allow-balances-alerts",
+    "allow-appearance",
+    "allow-set-appearance",
     "allow-update-state",
     "allow-update-install"
   ],

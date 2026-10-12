@@ -825,6 +825,10 @@ def test_no_command_hands_a_credential_to_the_window():
     allowed = {
         # A yes/no about this platform, not about the store.
         "capture_protection": "Protection",
+        # One of three words, "system", "light" or "dark": how the window looks. Read from the app's own
+        # config folder and matched against those three before it is returned; never from the store.
+        "appearance": "String",
+        "set_appearance": "String",
     }
     for name, returns in _commands().items():
         ok = succeeds_with(returns)

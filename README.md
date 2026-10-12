@@ -1370,6 +1370,9 @@ the app, the command line it drives, and the background service.
 From a terminal, `passbook update` updates the command line alone
 (`passbook update --check` only looks).
 
+**Settings → Appearance** is System, Light or Dark. System follows the
+computer; the other two hold whatever the computer is set to.
+
 ---
 
 ## What it does not claim

@@ -1166,3 +1166,17 @@ def test_the_key_list_keeps_refreshing_while_the_search_box_has_the_caret():
     assert 'classList?.contains("search")' in poll
     assert "if (typing(focused)) return;" not in poll, "a focused search box must not stop the refresh"
     assert "paintKeepingSearch(focused)" in poll
+
+
+def test_no_block_on_the_balances_page_is_pulled_over_another():
+    """1.10.8 gave the filters row a negative bottom margin and the list slid up under it.
+
+    Every block on that page pushes the next one away with margin-bottom, as `.group` does. A negative
+    margin there is how two of them end up drawn on top of each other, and nothing else would notice.
+    """
+    page = UI.read_text(encoding="utf-8")
+    start = page.index("/* ── balances ──")
+    styles = page[start:page.index("/* ── end of balances ── */", start)]
+    assert ".balfilters" in styles and ".stats4" in styles and ".brow" in styles, "the balances styles moved; point this test at them"
+    pulled = re.findall(r"^\s*([^{}\n]+)\{[^}]*margin[a-z-]*:[^;}]*-\d", styles, re.M)
+    assert not pulled, f"negative margins on the Balances page: {pulled}"

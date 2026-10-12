@@ -4,6 +4,25 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [1.10.9] — 2026-10-13
+
+### The Balances filters no longer sit on top of the list
+
+- **Reported.** Liam, 2026-10-13, on 1.10.8: "the filters row is overlapping
+  with the balance rows".
+- **Cause.** The filters row had a bottom margin of -6px, written as if the
+  list under it had a top margin. Blocks on that page are spaced by
+  margin-bottom only, so the list was drawn six pixels up under the chips.
+- **Fix.** Every block on the page now pushes the next one away with its own
+  margin-bottom; nothing there has a negative margin. Measured in WebKit at the
+  window's default size and three other widths, with and without the alerts
+  panel open, on a sample and on real readings: at least 10px between every
+  block. The same measurement run on 1.10.8's page reports the -6px.
+- **Why it shipped.** The page was judged by eye, in a window wider than the
+  app opens at. A contract test now refuses a negative margin in the Balances
+  styles.
+- A count-only account (AgentMail) no longer repeats its unit under the figure.
+
 ## [1.10.8] — 2026-10-13
 
 1.10.7 was tagged and never released: its build was stopped when the fault

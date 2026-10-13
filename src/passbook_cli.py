@@ -556,6 +556,7 @@ def _replicate_write(keys, values) -> None:
         return
     policy = _access().read_policy() if _access() is not None else None
     outcome = passbook_sync.replicate(chosen, peers, policy=policy)
+    passbook_sync.note_exchange("sent", outcome.get("sent") or [])
     for host in outcome.get("companyHosts") or []:
         print(f"not sent to {host}: it keeps only the keys you share to it")
     if outcome["sent"]:
@@ -1247,7 +1248,58 @@ def _rotation_table(results) -> None:
         print(f"  {str(entry['service']):<{width}}  {verdict}")
 
 
+def rotation_status(key: str) -> dict:
+    """Everything the window's Rotate steps show for one key, and never a value.
+
+    Where the key lives beyond this store (the services PassBook can push to, and the places somebody
+    noted by hand), whether a rotation is open and what it reached, and whether PassBook can ask the
+    key's provider if a new value works (the Balances readers: a rejected key answers 401 there).
+    """
+    import passbook_balances as balances
+    import passbook_services as services
+
+    pending = services.read_rotations().get(key)
+    provider = next((entry for entry in balances.PROVIDERS
+                     if key in (*entry.get("keys", ()), *entry.get("reading_keys", ()))), None)
+    reads_with = tuple((provider or {}).get("reading_keys") or (provider or {}).get("keys") or ())
+    return {
+        "key": key, "exists": key in set(passbook.key_names()),
+        "services": [{"service": str(item.get("service")), "lastStatus": item.get("lastStatus"),
+                      "lastRunAt": item.get("lastRunAt")} for item in services.bindings(key)],
+        "places": [{"where": str(item.get("where", "")), "note": str(item.get("note") or "")}
+                   for item in services.places(key)],
+        "pending": None if not pending else {
+            "startedAt": pending.get("startedAt"), "restored": bool(pending.get("restored")),
+            "pushed": {str(name): bool(ok) for name, ok in (pending.get("pushed") or {}).items()}},
+        "provider": None if not provider else {
+            "id": provider["id"], "name": provider["name"], "site": provider.get("console_url") or "",
+            # Only when this very key is the one the reader authenticates with.
+            "canVerify": bool(provider.get("adapter")) and key in reads_with},
+    }
+
+
 def cmd_rotate(args: argparse.Namespace) -> int:
+    """`passbook rotate`, with `--status` and `--json` for the window (see `_rotate` for the verb itself)."""
+    if getattr(args, "status", False):
+        print(json.dumps(rotation_status(args.key)))
+        return 0
+    if not getattr(args, "json", False):
+        return _rotate(args)
+    # The verb talks to a person, line by line. For the window, run it as it is, keep what it said, and
+    # answer once with that and where things now stand.
+    import contextlib
+    import io
+
+    said, complained = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(said), contextlib.redirect_stderr(complained):
+        code = _rotate(args)
+    lines = lambda text: [line.rstrip() for line in text.getvalue().splitlines() if line.strip()]  # noqa: E731
+    print(json.dumps({"ok": code == 0, "said": lines(said), "problems": lines(complained),
+                      **rotation_status(args.key)}))
+    return code
+
+
+def _rotate(args: argparse.Namespace) -> int:
     """Replace a key, push it everywhere it lives, and keep the old one until
     you say the new one works.
 
@@ -5154,6 +5206,71 @@ def _apply_pull(plan: dict, raw: dict, store: Path) -> tuple[list[str], str]:
     return written, ""
 
 
+def _other_machines(peers: list[dict]) -> list[dict]:
+    """`peers` without this machine.
+
+    A machine's own Hivemind Link node is on the tailnet as a peer of the machine it runs on, so every
+    plan listed the machine as one of its own peers: "unreachable", owed keys, and offered its own keys
+    back (seen 2026-10-13). A collector says which machine it is in `/health`; the one that names this
+    machine is left out.
+    """
+    try:
+        import passbook_fleet
+
+        mine = (Path(passbook.root()) / "machine-id").read_text(encoding="utf-8").strip()
+    except (OSError, ImportError):
+        return peers
+    if not mine:
+        return peers
+    kept = []
+    for peer in peers:
+        health = passbook_fleet.collector_health(peer.get("address", ""), peer.get("port", "")) or {}
+        if str(health.get("machineId") or "") != mine:
+            kept.append(peer)
+    return kept
+
+
+def _sync_status(args: argparse.Namespace) -> int:
+    """`passbook sync --status`: which machines have which keys, and when keys last moved."""
+    import passbook_fleet
+    import passbook_sync
+
+    peers = _other_machines(passbook_fleet.reachable())
+    payloads, unreachable = [], []
+    for peer in peers:
+        got = passbook_sync.fetch(peer["host"], peer["port"], address=peer["address"])
+        if got is None:
+            unreachable.append(peer["host"])
+        else:
+            # Names and lists of names only: the values a peer sent are dropped here, unread.
+            payloads.append((peer["host"], {**got, "values": dict.fromkeys(got.get("values") or {}, "")}))
+    policy = _access().read_policy() if _access() is not None else None
+    said = passbook_sync.summarize(passbook.key_names(), payloads, unreachable=unreachable, policy=policy,
+                                   exchanges=passbook_sync.read_exchanges())
+    said["checkedAt"] = time.time()
+    said["owed"] = {key: sorted((entry or {}).get("hosts") or []) if isinstance(entry, dict) else []
+                    for key, entry in passbook_sync.read_pending().items()}
+    if args.json:
+        print(json.dumps(said))
+        return 0
+    if not said["devices"]:
+        print("No other machine on this network is running a collector.")
+        return 0
+    for row in said["devices"]:
+        if not row["reachable"]:
+            print(f"{row['host']}: not answering")
+            continue
+        parts = [f"serves {row['serves']} keys"]
+        if row["heldBack"]:
+            parts.append(f"holds {len(row['heldBack'])} it cannot hand over yet")
+        if row["missingThere"]:
+            parts.append(f"lacks {len(row['missingThere'])} of this machine's")
+        if row["missingHere"]:
+            parts.append(f"has {len(row['missingHere'])} this machine lacks")
+        print(f"{row['host']}: " + ", ".join(parts))
+    return 0
+
+
 def cmd_sync(args: argparse.Namespace) -> int:
     """What replication would do, or does, between this machine and its peers.
 
@@ -5181,6 +5298,11 @@ def cmd_sync(args: argparse.Namespace) -> int:
             print(f"Nothing to sync: {COMPANY_HOST_SELF_NOTE}.")
         return 0
 
+    # Where every key is, in names and counts. Before the grant below because it opens nothing: it reads
+    # which names this machine holds and which names each other machine says it has.
+    if getattr(args, "status", False):
+        return _sync_status(args)
+
     # Sealed reads answer only a caller the broker started, and replication has
     # to hold plaintext to do its job. So start over as one, rather than asking
     # for an exemption that anything could claim.
@@ -5198,7 +5320,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
 
     # Company hosts are not peers here: never asked for the store, never sent a
     # value, and not "unreachable" either. They keep only keys shared to them.
-    peers = passbook_fleet.reachable()
+    peers = _other_machines(passbook_fleet.reachable())
     company_hosts = passbook_fleet.company_hosts_seen()
     if args.from_peer:
         wanted = args.from_peer.split("@")[-1].strip().lower()
@@ -5221,6 +5343,13 @@ def cmd_sync(args: argparse.Namespace) -> int:
         ok, detail = passbook_fleet.available()
         if not ok and not company_hosts:
             return _fail(f"No tailnet here: {detail}")
+        if args.json:
+            # The same shape as a pass that found peers, so whoever asked for JSON gets JSON: the window's
+            # Sync now read the sentence below as an unreadable answer on a machine with no other devices.
+            print(json.dumps({"peers": [], "companyHosts": company_hosts, "unreachable": [], "wouldPull": [],
+                              "pulled": [], "wouldSeed": {}, "wouldRetry": {}, "sent": {},
+                              "note": "No other machine on this network is running a collector."}, indent=2))
+            return 0
         for host in company_hosts:
             print(f"skipped {host}: it keeps only the keys you share to it")
         print("No peers on this tailnet are running a collector.")
@@ -5316,6 +5445,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
             if ok:
                 sent[host] = len(payload)
                 passbook_sync.note_delivered(sorted(payload), host)
+                passbook_sync.note_exchange("sent", [host])
             elif why == passbook_sync.COMPANY_HOST_REFUSAL:
                 # Became a company host since discovery: never a target, owed nothing.
                 passbook_sync.forget_host(host)
@@ -5358,6 +5488,11 @@ def cmd_sync(args: argparse.Namespace) -> int:
     pull_error = ""
     if args.apply and plan["apply"]:
         pulled, pull_error = _apply_pull(plan, raw, store)
+        if pulled:
+            # Each planned pull is (value, age, the machine it comes from).
+            came_from = {str(plan["apply"][key][2]) for key in pulled
+                         if isinstance(plan["apply"].get(key), tuple) and len(plan["apply"][key]) > 2} - {""}
+            passbook_sync.note_exchange("pulled", came_from or [host for host, _ in payloads])
 
     if args.json:
         print(json.dumps({
@@ -6158,6 +6293,25 @@ def machine_state(*, verify: bool = False) -> dict:
     Record page asks for it when somebody is actually looking at the chain.
     """
     state: dict = {"store": passbook.status(), "spec_version": passbook.SPEC_VERSION}
+    # When each key was last written here (the stamp sync already keeps), so the window can show what is
+    # new and order by it. Times, by name; never a value.
+    try:
+        import passbook_sync
+
+        state["store"]["updated"] = {name: when for name, when in passbook_sync.read_meta(passbook.env_path()).items()
+                                     if when}
+    except Exception:  # noqa: BLE001 — a missing stamp file is no stamps
+        state["store"]["updated"] = {}
+    # Rotations waiting to be confirmed or rolled back: a key whose previous value is still being kept.
+    try:
+        import passbook_services
+
+        state["rotations"] = [{"key": str(name), "startedAt": (entry or {}).get("startedAt"),
+                               "restored": bool((entry or {}).get("restored"))}
+                              for name, entry in sorted(passbook_services.read_rotations().items())
+                              if isinstance(entry, dict)]
+    except Exception:  # noqa: BLE001
+        state["rotations"] = []
     # The window offers to write an export somewhere, and has no other way to
     # propose a path a person would recognise.
     state["home"] = str(Path.home())
@@ -7923,6 +8077,9 @@ def build_parser() -> argparse.ArgumentParser:
     rotate_cmd.add_argument("--stdin", action="store_true", help="read the new value from stdin")
     rotate_cmd.add_argument("--confirm", action="store_true",
                             help="the new value works: stop keeping the previous one")
+    rotate_cmd.add_argument("--status", action="store_true",
+                            help="where this key lives and whether a rotation is open, as JSON; changes nothing")
+    rotate_cmd.add_argument("--json", action="store_true", help="answer once, as JSON, with what was said and where things stand")
     rotate_cmd.add_argument("--rollback", action="store_true",
                             help="put the previous value back, and push it to the services "
                                  "that got the new one")
@@ -8228,6 +8385,9 @@ def build_parser() -> argparse.ArgumentParser:
     sync_cmd.add_argument("--backfill-meta", dest="backfill_meta", action="store_true",
                           help="stamp keys carrying no timestamp, which are frozen out "
                                "of sync in both directions until they have one")
+    sync_cmd.add_argument("--status", action="store_true",
+                          help="which machines have which keys, and when keys last moved; "
+                               "names and counts only, nothing is opened or changed")
     sync_cmd.add_argument("--push-missing", dest="push_missing", action="store_true",
                           help="seed peers with keys they are entirely missing; never "
                                "overwrites a value a peer already holds")

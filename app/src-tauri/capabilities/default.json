@@ -87,6 +87,13 @@
     "allow-balances-alerts",
     "allow-appearance",
     "allow-set-appearance",
+    "allow-add-pasted",
+    "allow-sync-status",
+    "allow-sync-now",
+    "allow-rotate-status",
+    "allow-rotate-start",
+    "allow-rotate-finish",
+    "allow-rotate-verify",
     "allow-update-state",
     "allow-update-install"
   ],

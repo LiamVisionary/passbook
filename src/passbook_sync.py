@@ -79,7 +79,10 @@ LOCAL_ONLY = frozenset({
     "HIVE_ENV_COLLECTOR_PORTS",
     "HIVE_ENV_FILE",
 })
-LOCAL_ONLY_PREFIXES = ("HIVE_ENV_TAILNET_", "HIVE_LINK_")
+# `USEPOD_HOST_`: each machine that hosts for UsePod has its own token and payout wallet. HivemindOS
+# never replicates them (hive-env-add's LOCAL_ONLY_PREFIXES), so a collector drops them on arrival;
+# until this list said the same, every plan offered to send them and reported them "sent" for ever.
+LOCAL_ONLY_PREFIXES = ("HIVE_ENV_TAILNET_", "HIVE_LINK_", "USEPOD_HOST_")
 
 
 def _looks_sealed(value: str) -> bool:
@@ -434,6 +437,80 @@ def _open_via_broker(keys: list[str]) -> dict[str, str]:
                                 reason="serve the shared store to a tailnet peer")
     except Exception:  # noqa: BLE001 — a shut vault is "nothing opens", not a crash
         return {}
+
+
+# ── when this machine last exchanged keys with each other one ──────────────
+#
+# Asked for after two paired Macs sat for days each not showing the other's key with nothing on screen
+# saying so (2026-10-13). Times only, by host name: when keys last arrived from it, and last went to it.
+
+def exchanges_path(root: Path | None = None) -> Path:
+    import passbook
+
+    return Path(root or passbook.root()) / "sync-exchanges.json"
+
+
+def read_exchanges(root: Path | None = None) -> dict[str, dict[str, float]]:
+    try:
+        data = json.loads(exchanges_path(root).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {str(host): {kind: float(when) for kind, when in row.items() if isinstance(when, (int, float))}
+            for host, row in data.items() if isinstance(row, dict)} if isinstance(data, dict) else {}
+
+
+def note_exchange(kind: str, hosts: Iterable[str], *, root: Path | None = None, when: float | None = None) -> None:
+    """Record that keys were `pulled` from, or `sent` to, these machines just now. Never fails its caller."""
+    hosts = [str(host) for host in hosts if host]
+    if not hosts or kind not in ("pulled", "sent"):
+        return
+    try:
+        kept = read_exchanges(root)
+        for host in hosts:
+            kept.setdefault(host, {})[kind] = float(when if when is not None else time.time())
+        exchanges_path(root).write_text(json.dumps(kept, sort_keys=True) + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def summarize(local_names: Iterable[str], payloads: Iterable[tuple[str, Mapping[str, Any]]], *,
+              unreachable: Iterable[str] = (), policy: Mapping[str, Any] | None = None,
+              exchanges: Mapping[str, Mapping[str, float]] | None = None) -> dict[str, Any]:
+    """Where every key is, in names and counts only: what the Devices page shows.
+
+    For each machine that answered: how many keys it serves, how many it holds but cannot hand over yet
+    (and how many of those a restart of its collector would release), which of this machine's keys it
+    does not have at all, and which of its keys this machine lacks. `notEverywhere` turns that round:
+    for each key that may leave this machine, the machines without it. A key that is not in it is on
+    every machine that answered. Nothing here is a value, and no value is read to make it.
+    """
+    here = set(local_names)
+    travels = {key for key in here if not is_local_only(key) and may_leave_machine(key, policy)["allowed"]}
+    devices: list[dict[str, Any]] = []
+    missing: dict[str, list[str]] = {}
+    for host, payload in payloads:
+        serves = set((payload.get("values") or {}).keys())
+        kept = set(payload.get("withheldByPolicy") or [])
+        held = (set(payload.get("withheldSealed") or []) | set(payload.get("withheldStale") or [])) - kept
+        there = serves | held | kept
+        lacks = sorted(travels - there)
+        for key in lacks:
+            missing.setdefault(key, []).append(host)
+        times = (exchanges or {}).get(host) or {}
+        devices.append({
+            "host": host, "reachable": True, "serves": len(serves), "heldBack": sorted(held),
+            "restartWouldServe": sorted(set(payload.get("withheldUntilRestart") or [])),
+            "keptByPolicy": len(kept), "missingThere": lacks,
+            "missingHere": sorted(key for key in serves - here if not is_local_only(key)),
+            "pulledAt": times.get("pulled"), "sentAt": times.get("sent"),
+        })
+    for host in unreachable:
+        times = (exchanges or {}).get(host) or {}
+        devices.append({"host": host, "reachable": False, "serves": 0, "heldBack": [], "restartWouldServe": [],
+                        "keptByPolicy": 0, "missingThere": [], "missingHere": [],
+                        "pulledAt": times.get("pulled"), "sentAt": times.get("sent")})
+    return {"devices": sorted(devices, key=lambda row: row["host"]), "notEverywhere": missing,
+            "travelling": len(travels), "local": len(here)}
 
 
 # ── fetching a peer's store ────────────────────────────────────────────────

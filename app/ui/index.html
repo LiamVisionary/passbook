@@ -180,6 +180,33 @@
   .mono { font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
   .prewrap { white-space: pre-wrap; }
 
+  .navlist.attn { margin-bottom: 6px; }
+  .navcount.hot { background: var(--warn-soft); color: var(--warn); font-weight: 600; border-radius: 99px; padding: 0 7px; }
+  .navlist button[aria-current="true"] .navcount.hot { background: rgba(255,255,255,.22); color: inherit; }
+  .palhint { width: 100%; display: flex; align-items: center; gap: 8px; margin: 0 0 8px; padding: 6px 10px; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--chip); color: var(--ink3); font: inherit; font-size: 12px; cursor: pointer; }
+  .palhint span { flex: 1; text-align: left; }
+  .palhint kbd { font: inherit; font-size: 10.5px; padding: 0 5px; border-radius: 5px; background: var(--chip2); color: var(--ink2); }
+  .palhint:hover { color: var(--ink1); }
+
+  /* ── palette ─────────────────────────────────────────────────────────── */
+  #palette { position: fixed; inset: 0; z-index: 900; background: rgba(0,0,0,.28); display: flex; justify-content: center; align-items: flex-start; padding-top: 14vh; }
+  #palette[hidden] { display: none; }
+  .palbox { width: min(560px, calc(100vw - 48px)); background: var(--card); border: 1px solid var(--line2); border-radius: 14px;
+    box-shadow: 0 18px 50px rgba(0,0,0,.32); overflow: hidden; }
+  #palq { width: 100%; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; padding: 14px 16px; font-size: 15px; background: transparent; box-shadow: none; }
+  #palq:focus { box-shadow: none; border-color: var(--line); }
+  #pallist { max-height: 46vh; overflow-y: auto; padding: 6px; }
+  .palrow { width: 100%; display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 0; border-radius: 8px; background: none;
+    font: inherit; color: var(--ink1); text-align: left; cursor: pointer; }
+  .palrow[aria-selected="true"] { background: var(--accent-soft); }
+  .palrow .mono { font-size: 12.5px; overflow-wrap: anywhere; }
+  .palrow span:nth-of-type(1) { flex: 1; min-width: 0; }
+  .palkind { font-size: 11px; color: var(--ink3); flex: none; }
+  .palnone { padding: 18px 12px; color: var(--ink3); font-size: 12.5px; }
+  .palfoot { display: flex; gap: 14px; padding: 8px 14px; border-top: 1px solid var(--line); font-size: 11px; color: var(--ink3); }
+  .palfoot b { font-weight: 600; color: var(--ink2); }
+
   /* ── tooltip ─────────────────────────────────────────────────────────── */
   /* The app's own, in place of the operating system's: that one arrives after a second, in the
      system's font and colours, and is the only thing in the window that does not look like the window.
@@ -282,6 +309,26 @@
     .bmain .bfig.spend { display: none; }
   }
   /* ── end of balances ── */
+
+  /* ── keys: filters, where a key is, rotating one ─────────────────────── */
+  .addhint { display: flex; align-items: center; gap: 10px; padding: 0 14px 10px; min-height: 30px; }
+  .pastedpanel { display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; border-top: 1px solid var(--line); flex-wrap: wrap; }
+  .pastedpanel .grow { flex: 1; min-width: 260px; display: flex; flex-direction: column; gap: 7px; }
+  .chip.dim { opacity: .5; }
+  .keyfilters select { margin-left: auto; }
+  .keyfilters { display: flex; align-items: center; justify-content: space-between; gap: 10px 12px; flex-wrap: wrap;
+    padding: 9px 14px 10px; border-top: 1px solid var(--line); }
+  .bare.refused { color: var(--warn); }
+  .synclist { margin-top: 8px; }
+  .synclist .dlabel { font-size: 10.5px; color: var(--ink3); text-transform: uppercase; letter-spacing: .02em; min-height: 0; display: block; margin-bottom: 4px; }
+  .rotate { border: 1px solid var(--line); border-radius: 10px; padding: 4px 12px; background: var(--bg2); }
+  .rotstep { display: flex; align-items: flex-start; gap: 10px; padding: 10px 0; flex-wrap: wrap; }
+  .rotstep + .rotstep { border-top: 1px solid var(--line); }
+  .rotstep .grow { flex: 1; min-width: 220px; }
+  .stepno.done { background: var(--good-soft); color: var(--good); }
+  .rotwhere { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+  .rotwhere .dlabel { font-size: 10.5px; color: var(--ink3); text-transform: uppercase; letter-spacing: .02em; min-height: 0; display: block; margin-bottom: 3px; }
+  .note.err { color: var(--warn); }
   .sub { color: var(--ink3); font-size: 11.5px; margin-top: 1px; }
   .note { color: var(--ink3); font-size: 11.5px; line-height: 1.5; padding: 10px 14px 13px; }
   .note code, .lede code {
@@ -578,7 +625,8 @@
     position: sticky; bottom: 0; z-index: 5;
     display: flex; gap: 8px; align-items: flex-start; margin-top: 14px;
     padding: 10px 12px; border-radius: 10px; font-size: 12.5px;
-    background: var(--warn-soft); color: var(--warn);
+    /* Tinted, and solid: it floats over the page, and a see-through bar over text reads as neither. */
+    background: linear-gradient(var(--warn-soft), var(--warn-soft)), var(--card); color: var(--warn);
     box-shadow: 0 6px 22px rgba(0, 0, 0, .18);
     border: 1px solid currentColor;
   }
@@ -587,7 +635,7 @@
     all: unset; cursor: pointer; opacity: .65; display: flex; padding: 0 2px;
   }
   .noticebar button:hover { opacity: 1; }
-  .noticebar.good { background: var(--good-soft); color: var(--good); }
+  .noticebar.good { background: linear-gradient(var(--good-soft), var(--good-soft)), var(--card); color: var(--good); }
   .noticebar svg { margin-top: 1px; }
 
   /* Groups on the Keys page. A monogram carries a colour the eye can aim at,
@@ -1564,10 +1612,114 @@ Use the copy button to put it on the clipboard."
 
   /** Keys the current search matches. Case-insensitive substring, because a
    *  person hunting OPENAI_API_KEY types "openai", not a prefix. */
+  // ── adding: a pasted block, and a value that says whose it is ──────────
+  //
+  // Keys arrive as `.env` lines more often than as a name and a value typed apart, and a value's first
+  // characters usually say which service made it. Pasting `NAME=value` lines into either field offers
+  // to add them all (the names are shown, the values never are); typing or pasting a value into an
+  // empty form offers the name that service's key normally goes by.
+  let pasted = null;   // { text, names: [...], existing: [...], problem }
+  const KEY_LINE = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/;
+
+  function readPasted(text) {
+    const names = [], lines = [];
+    let problem = "";
+    for (const raw of String(text).split(/\r?\n/)) {
+      const line = raw.trim();
+      if (!line || line.startsWith("#")) continue;
+      const hit = line.match(KEY_LINE);
+      if (!hit) { problem = "One line is not NAME=value, so nothing was taken from the paste."; break; }
+      let value = hit[2].trim();
+      if (value.length > 1 && ((value[0] === '"' && value.at(-1) === '"') || (value[0] === "'" && value.at(-1) === "'"))) value = value.slice(1, -1);
+      if (!value) continue;   // NAME= with nothing after it: a placeholder, not a key
+      names.push(hit[1]); lines.push(`${hit[1]}=${value}`);
+    }
+    if (problem || !names.length) return null;
+    const held = new Set(state?.store?.keys || []);
+    return { text: lines.join("\n"), names, existing: names.filter((n) => held.has(n)) };
+  }
+
+  /** Whose key a value looks like, by how it starts: [name to suggest, who makes it]. */
+  const VALUE_SHAPES = [
+    [/^sk-ant-/, "ANTHROPIC_API_KEY", "Anthropic"], [/^sk-or-v1-/, "OPENROUTER_API_KEY", "OpenRouter"],
+    [/^sk-proj-|^sk-[A-Za-z0-9]{20,}/, "OPENAI_API_KEY", "OpenAI"], [/^xai-/, "XAI_API_KEY", "xAI"],
+    [/^gsk_/, "GROQ_API_KEY", "Groq"], [/^AIza[0-9A-Za-z_-]{20,}/, "GOOGLE_API_KEY", "Google"],
+    [/^ghp_|^github_pat_|^gho_/, "GITHUB_TOKEN", "GitHub"], [/^hf_/, "HF_TOKEN", "Hugging Face"],
+    [/^r8_/, "REPLICATE_API_TOKEN", "Replicate"], [/^pplx-/, "PERPLEXITY_API_KEY", "Perplexity"],
+    [/^sk_live_|^sk_test_|^rk_live_/, "STRIPE_SECRET_KEY", "Stripe"], [/^re_[A-Za-z0-9]{8,}/, "RESEND_API_KEY", "Resend"],
+    [/^SG\./, "SENDGRID_API_KEY", "SendGrid"], [/^xox[bp]-/, "SLACK_BOT_TOKEN", "Slack"],
+    [/^AKIA[0-9A-Z]{12,}/, "AWS_ACCESS_KEY_ID", "AWS"], [/^tvly-/, "TAVILY_API_KEY", "Tavily"],
+    [/^\d{6,}:[\w-]{30,}$/, "TELEGRAM_BOT_TOKEN", "Telegram"], [/^sk_[a-f0-9]{40,}$/, "ELEVENLABS_API_KEY", "ElevenLabs"],
+    [/^apify_api_/, "APIFY_TOKEN", "Apify"], [/^fc-[a-f0-9]{20,}/, "FIRECRAWL_API_KEY", "Firecrawl"],
+    [/^vcp_|^vercel_/, "VERCEL_TOKEN", "Vercel"], [/^dop_v1_/, "DIGITALOCEAN_TOKEN", "DigitalOcean"],
+    [/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:[0-9a-f]{20,}$/, "FAL_KEY", "fal"],
+  ];
+  const valueShape = (value) => VALUE_SHAPES.find(([shape]) => shape.test(String(value).trim())) || null;
+
+  function pastedPanel() {
+    const p = pasted, fresh = p.names.filter((n) => !p.existing.includes(n));
+    return `<div class="pastedpanel">
+      <div class="grow"><strong>${p.names.length} key${p.names.length === 1 ? "" : "s"} in what you pasted</strong>
+        <div class="chips inline">${p.names.slice(0, 24).map((n) => `<span class="chip mono${p.existing.includes(n) ? " dim" : ""}">${esc(n)}</span>`).join("")}
+          ${p.names.length > 24 ? `<span class="sub">and ${p.names.length - 24} more</span>` : ""}</div>
+        <div class="note flat">${p.existing.length ? `${p.existing.length} ${p.existing.length === 1 ? "is" : "are"} already here (shown faded). ${fresh.length ? "Add only the new ones, or replace those too." : "Replacing changes values other apps may be using."}` : "Only the names are shown. They go to your other devices too."}</div>
+        ${p.problem ? `<div class="note flat err">${esc(p.problem)}</div>` : ""}</div>
+      <button class="act" data-pasted-cancel="1" ${busy ? "disabled" : ""}>Cancel</button>
+      ${p.existing.length ? `<button class="act" data-pasted-add="replace" ${busy ? "disabled" : ""}>Add and replace</button>` : ""}
+      ${fresh.length ? `<button class="act primary" data-pasted-add="new" ${busy ? "disabled" : ""}>Add ${fresh.length === p.names.length ? p.names.length : `${fresh.length} new`}</button>` : ""}
+    </div>`;
+  }
+
+  // Which keys the list shows, and in what order. At a few hundred keys a search box is not enough to
+  // answer "what did I add this week", "what is not on my other machine" or "what is lying unencrypted".
+  // A filter is only offered when something matches it, so a tidy store sees no chips at all.
+  let keyFilter = "all", keySort = "group";
+  const WEEK = 7 * 86400;
+  const KEY_FILTERS = [
+    ["recent", "New this week", (k) => ((state?.store?.updated || {})[k] || 0) > Date.now() / 1000 - WEEK],
+    ["apart", "Not on every device", (k) => lackingDevices(k).length > 0],
+    ["open", "Not encrypted", (k, readable) => readable.has(k)],
+    ["guarded", "Guarded", (k) => isGuarded(k)],
+    ["rejected", "Refused by its service", (k, readable, refused) => refused.has(k)],
+    ["unused", "Never used", (k) => !((state?.usage || {})[k]?.last)],
+  ];
+  const KEY_SORTS = [["group", "By group"], ["new", "Newest first"], ["used", "Recently used"], ["name", "A to Z"]];
+
+  function keyFilterCounts() {
+    const all = state?.store?.keys || [], readable = readableSet(), refused = new Set(rejectedKeys().map((r) => r.key));
+    return KEY_FILTERS.map(([id, label, test]) => [id, label, all.filter((k) => test(k, readable, refused)).length]);
+  }
+
   function shownKeys() {
-    const all = state?.store?.keys || [];
+    let keys = state?.store?.keys || [];
     const q = query.trim().toLowerCase();
-    return q ? all.filter((k) => k.toLowerCase().includes(q)) : all;
+    if (q) keys = keys.filter((k) => k.toLowerCase().includes(q));
+    const chosen = KEY_FILTERS.find(([id]) => id === keyFilter);
+    if (chosen) {
+      const readable = readableSet(), refused = new Set(rejectedKeys().map((r) => r.key));
+      keys = keys.filter((k) => chosen[2](k, readable, refused));
+    }
+    if (keySort === "new") {
+      const at = state?.store?.updated || {};
+      keys = [...keys].sort((a, b) => (at[b] || 0) - (at[a] || 0) || a.localeCompare(b));
+    } else if (keySort === "used") {
+      const last = (k) => Date.parse((state?.usage || {})[k]?.last || "") || 0;
+      keys = [...keys].sort((a, b) => last(b) - last(a) || a.localeCompare(b));
+    } else if (keySort === "name") keys = [...keys].sort((a, b) => a.localeCompare(b));
+    return keys;
+  }
+
+  /** The chips and the order picker under the search box. */
+  function keyFilterBar() {
+    const counts = keyFilterCounts().filter(([, , n]) => n > 0);
+    const total = (state?.store?.keys || []).length;
+    if (!total) return "";
+    return `<div class="keyfilters">
+      <div class="fchips">${counts.length ? `<button class="fchip" data-key-filter="all" aria-pressed="${keyFilter === "all"}">All<span>${total}</span></button>` : ""}
+        ${counts.map(([id, label, n]) => `<button class="fchip" data-key-filter="${id}" aria-pressed="${keyFilter === id}">${label}<span>${n}</span></button>`).join("")}</div>
+      <select data-key-sort aria-label="Order">${KEY_SORTS.map(([id, label]) =>
+        `<option value="${id}" ${keySort === id ? "selected" : ""}>${label}</option>`).join("")}</select>
+    </div>`;
   }
 
   function searchField(id) {
@@ -1675,6 +1827,7 @@ Use the copy button to put it on the clipboard."
   function navCounts() {
     const links = state?.links || {};
     return {
+      attention: attentionItems().length,
       keys: (state?.store?.keys || []).length,
       signins: (signins || []).length,
       // What the page lists, so the badge and the list cannot disagree.
@@ -1732,12 +1885,14 @@ Use the copy button to put it on the clipboard."
     const counts = navCounts();
     nav.innerHTML = `
       <div class="brand"><img src="mark.png" alt="" /><span>PassBook</span></div>
+      ${attentionEntry(counts.attention)}
       <div class="navlist">${PAGES.map(([id, label, glyph]) => `
         <button data-page="${id}" aria-current="${page === id}">
           ${icon(glyph, "navicon")}<span class="navlabel">${label}</span>
           ${counts[id] ? `<span class="navcount">${counts[id]}</span>` : ""}
         </button>`).join("")}</div>
       <div class="navbottom">
+        <button class="palhint" data-palette="1" title="Find a key, a page or something to do">${icon("search", "tinyicon")}<span>Find anything</span><kbd>\u2318K</kbd></button>
         <div class="navlist">
           <button data-page="settings" aria-current="${inSettings()}">
             ${icon("sliders", "navicon")}<span class="navlabel">Settings</span>
@@ -1746,6 +1901,7 @@ Use the copy button to put it on the clipboard."
         </div>
         ${navFoot()}
       </div>`;
+    nav.querySelectorAll("[data-palette]").forEach((b) => b.onclick = () => palOpen());
     nav.querySelectorAll("[data-page]").forEach((b) =>
       b.onclick = () => {
         page = b.dataset.page; resetRows(); paint();
@@ -1753,6 +1909,7 @@ Use the copy button to put it on the clipboard."
         // — rather than on every poll, whatever page they were on.
         if (page === "record" && !chain.answer && !chain.busy) checkChain();
         if (page === "balances") loadBalances();
+        if (page === "machines") loadSync(true);
       });
     // Lock puts the WINDOW away — nothing else. It used to sign the broker out,
     // which meant closing the app at the end of the day also stopped every
@@ -1831,7 +1988,8 @@ Use the copy button to put it on the clipboard."
             aria-label="Copy the name ${esc(k)}">${icon(copied["name:" + k] ? "check" : "copy")}</button>
           ${shown ? "" : `<span class="masked" title="Hidden">••••••••••</span>`}
           ${bare ? `<span class="bare" title="This value is not encrypted. Anything running as you can read it, signed in or not.">${icon("unlock", "tinyicon")} readable</span>` : ""}
-          ${isGuarded(k) ? `<span class="bare guarded" title="${esc(guardedWhy(k))}">${icon("lock", "tinyicon")} guarded</span>` : ""}</span>
+          ${isGuarded(k) ? `<span class="bare guarded" title="${esc(guardedWhy(k))}">${icon("lock", "tinyicon")} guarded</span>` : ""}
+          ${refusedWhy(k) ? `<span class="bare refused" title="${esc(refusedWhy(k))}">${icon("alert", "tinyicon")} refused</span>` : ""}</span>
         ${isGuarded(k)
           ? `<button class="iconbtn" disabled title="${esc(guardedWhy(k))}"
                aria-label="Guarded: never shown">${icon("lock")}</button>`
@@ -1948,9 +2106,120 @@ Use the copy button to put it on the clipboard."
           <button class="act" data-projadd data-key="${esc(k)}">${icon("plus")} Add</button>
         </div>`}
 
+      <div class="drow"><span class="dlabel">On your devices</span>
+        <span class="sub">${esc(whereLine(k))}</span></div>
+
+      <div class="drow"><span class="dlabel">Replace it</span>
+        <button class="act" data-rotate-open="${esc(k)}">${rotateView.key === k ? "Close" : "Rotate…"}</button></div>
+      ${rotateView.key === k ? `<div class="dfull">${rotatePanel(k)}</div>` : ""}
+
       <div class="drow"><span class="dlabel">History</span>
         <button class="act" data-hist="${esc(k)}">${history[k] ? "Hide" : "Who has used this"}</button></div>
       ${history[k] ? `<div class="dfull">${historyBlock(k)}</div>` : ""}
+    </div>`;
+  }
+
+  /** Where a key is, in a sentence. */
+  function whereLine(k) {
+    const d = syncView.data;
+    if (!d) return "Not checked yet.";
+    const others = (d.devices || []).filter((r) => r.reachable);
+    if (!others.length) return "Only this device is exchanging keys right now.";
+    const lacking = lackingDevices(k);
+    if (!lacking.length) return `This device and ${others.length === 1 ? deviceName(others[0].host) : `all ${others.length} others`}.`;
+    return `Not on ${lacking.map(deviceName).join(", ")} yet.`;
+  }
+
+  // ── rotating a key ─────────────────────────────────────────────────────
+  //
+  // `passbook rotate` already does this well from a terminal: replace the value, push it to every
+  // service that holds the key, keep the old one until the new one is confirmed, roll back if not. The
+  // window had no way in. This is the same verb as four steps on the key itself: make the new key at
+  // the provider, paste it, see where it went, then say it works or put the old one back.
+  let rotateView = { key: "", data: null, busy: "", error: "", check: null };
+
+  /** Open a key's Rotate steps. From the key itself the button also closes them; from anywhere else
+   *  (`stay`) it only ever opens. */
+  async function openRotate(k, stay = false) {
+    if (rotateView.key === k && !stay) { rotateView = { key: "", data: null, busy: "", error: "", check: null }; paint(); return; }
+    rotateView = { key: k, data: null, busy: "load", error: "", check: null };
+    showKeyRow(k);
+    try { rotateView.data = await invoke("rotate_status", { key: k }); }
+    catch (e) { rotateView.error = balanceError(e); }
+    rotateView.busy = ""; paint();
+    scrollToKey(k, "nearest");
+  }
+
+  const scrollToKey = (k, block) => [...main.querySelectorAll("[data-keyrow]")].find((el) => el.dataset.keyrow === k)?.scrollIntoView({ block });
+
+  /** Bring one key's row on screen, opened: the Keys page, past any search or filter that hides it, and
+   *  far enough down the list that its row has been built. */
+  function showKeyRow(k) {
+    page = "keys";
+    if (!shownKeys().includes(k)) { query = ""; keyFilter = "all"; }
+    const where = shownKeys().indexOf(k);
+    if (where >= rowLimit) rowLimit = where + ROW_PAGE;
+    expanded[k] = true;
+    paint();
+    scrollToKey(k, "center");
+  }
+
+  async function rotateStep(busyAs, command, args) {
+    rotateView.busy = busyAs; rotateView.error = ""; paint();
+    try {
+      const answer = await invoke(command, args);
+      if (command === "rotate_verify") rotateView.check = answer;
+      else {
+        rotateView.data = answer;
+        if (answer && answer.ok === false) rotateView.error = (answer.problems || []).join(" ") || "That did not go through.";
+        state = await invoke("state");
+      }
+    } catch (e) { rotateView.error = balanceError(e); }
+    rotateView.busy = ""; paint();
+  }
+
+  function rotatePanel(k) {
+    const v = rotateView, d = v.data;
+    if (!d) return `<div class="rotate"><p class="note flat">${v.error ? esc(v.error) : "Looking up where this key lives…"}</p></div>`;
+    const busy = !!v.busy, pending = d.pending, provider = d.provider;
+    const where = `<div class="rotwhere">
+        ${(d.services || []).length ? `<div><span class="dlabel">${pending ? "PassBook updated" : "PassBook will update"}</span><div class="chips inline">${d.services.map((x) =>
+          `<span class="chip">${esc(x.service)}${pending && x.service in (pending.pushed || {}) ? (pending.pushed[x.service] ? " \u2713" : " \u2717") : ""}</span>`).join("")}</div></div>` : ""}
+        ${(d.places || []).length ? `<div><span class="dlabel">Update these yourself</span><div class="chips inline">${d.places.map((x) =>
+          `<span class="chip">${esc(x.where)}${x.note ? ` (${esc(x.note)})` : ""}</span>`).join("")}</div></div>` : ""}
+        ${!(d.services || []).length && !(d.places || []).length ? `<p class="note flat">No service is recorded as holding this key, so only this store and your other devices change.</p>` : ""}
+      </div>`;
+    if (!pending) {
+      return `<div class="rotate">
+        <div class="rotstep"><span class="stepno">1</span><div class="grow"><strong>Make a new key${provider ? ` at ${esc(provider.name)}` : ""}</strong>
+          <div class="note flat">Create the new one before removing the old, so nothing stops working in between.</div></div>
+          ${provider ? `<button class="act" data-topup="${esc(provider.id)}">Open ${esc(provider.name)}</button>` : ""}</div>
+        <div class="rotstep"><span class="stepno">2</span><div class="grow"><strong>Paste it here</strong>
+          <div class="note flat">PassBook replaces the value, sends it to your other devices, and keeps the old one until you say the new one works.</div>
+          ${where}
+          <div class="alform"><input id="rotvalue" type="password" autocomplete="off" spellcheck="false" placeholder="The new value for ${esc(k)}" size="36" />
+            <button class="act primary" data-rotate-start="${esc(k)}" ${busy ? "disabled" : ""}>${v.busy === "start" ? "Replacing…" : "Replace"}</button></div></div></div>
+        ${v.error ? `<p class="note flat err">${esc(v.error)}</p>` : ""}
+      </div>`;
+    }
+    const failed = Object.entries(pending.pushed || {}).filter(([, ok]) => !ok).map(([name]) => name);
+    const checked = v.check;
+    return `<div class="rotate">
+      <div class="rotstep"><span class="stepno done">${icon("check", "tinyicon")}</span><div class="grow"><strong>${pending.restored ? "The previous value is back in place" : "The new value is in place"}</strong>
+        <div class="note flat">Since ${esc(sinceEpoch(pending.startedAt, "a moment ago"))}. ${pending.restored ? "" : "The previous value is still kept, in case this one does not work."}</div>
+        ${where}
+        ${failed.length ? `<p class="note flat err">Did not take it: ${esc(failed.join(", "))}. Try again from a terminal: passbook services retry ${esc(k)}</p>` : ""}</div></div>
+      <div class="rotstep"><span class="stepno">3</span><div class="grow"><strong>Check it works</strong>
+        <div class="note flat">${provider?.canVerify
+          ? (checked ? esc(checked.status === "ready" ? `${provider.name} accepted it.` : checked.rejected ? `${provider.name} refused it: ${checked.message}` : `${provider.name} did not give a clear answer: ${checked.message}`)
+                     : `PassBook can ask ${esc(provider.name)} with the new value.`)
+          : "PassBook cannot ask this service itself. Run whatever uses the key and see that it still works."}</div></div>
+        ${provider?.canVerify ? `<button class="act" data-rotate-verify="${esc(provider.id)}" ${busy ? "disabled" : ""}>${v.busy === "verify" ? "Asking…" : checked ? "Ask again" : "Ask now"}</button>` : ""}</div>
+      <div class="rotstep"><span class="stepno">4</span><div class="grow"><strong>Finish</strong>
+        <div class="note flat">Confirming forgets the previous value for good. Putting it back also sends it to the services that got the new one.</div></div>
+        <button class="act" data-rotate-finish="rollback" data-key="${esc(k)}" ${busy ? "disabled" : ""}>${v.busy === "rollback" ? "Putting it back…" : "Put the old one back"}</button>
+        <button class="act primary" data-rotate-finish="confirm" data-key="${esc(k)}" ${busy ? "disabled" : ""}>${v.busy === "confirm" ? "Confirming…" : "It works"}</button></div>
+      ${v.error ? `<p class="note flat err">${esc(v.error)}</p>` : ""}
     </div>`;
   }
 
@@ -2055,7 +2324,8 @@ Use the copy button to put it on the clipboard."
     const readable = readableSet();
     const flat = () => keys.slice(0, rowLimit).map((k) => keyRow(k, readable)).join("")
       + moreRow(keys.length - rowLimit);
-    if (!cat?.available || query.trim()) return flat();
+    // Groups are the default view. A search, a filter or an order is a question about keys, not groups.
+    if (!cat?.available || query.trim() || keyFilter !== "all" || keySort !== "group") return flat();
 
     const shown = new Set(keys);
     const buckets = [];
@@ -2157,17 +2427,19 @@ Use the copy button to put it on the clipboard."
           <button class="act ${adding ? "primary" : ""}" data-addopen="1">
             ${icon("plus")} Add key</button>
         </div>
-        ${adding ? `<div class="addrow">
+        ${adding ? (pasted ? pastedPanel() : `<div class="addrow">
           <input id="k" placeholder="Name" spellcheck="false" autocapitalize="off" />
           <input id="v" type="password" placeholder="Value" />
           <button class="act primary${justAdded ? " done" : ""}" id="addgo"
             ${busy ? "disabled" : ""}>${justAdded
               ? `${icon("check")} Added` : "Add"}</button>
-        </div>` : ""}
+        </div>
+        <div class="addhint" id="addhint"><span class="sub">Paste <span class="mono">NAME=value</span> lines, or a whole .env, to add several at once.</span></div>`) : ""}
+        ${keyFilterBar()}
         ${selectMode ? bulkBar(keys) : ""}
         ${groupedKeys(keys)
           || `<div class="empty">${query.trim()
-                ? `Nothing matches “${esc(query)}”.` : "No keys yet."}</div>`}
+                ? `Nothing matches “${esc(query)}”.` : keyFilter !== "all" ? "No key matches that." : "No keys yet."}</div>`}
       </div>
       ${query.trim() || !all ? "" : `<p class="note countnote">${countLabel(keys.length, all)}</p>`}`;
   }
@@ -2851,6 +3123,168 @@ passbook oauth connect google:work</pre>
         Nothing about you, this computer or your keys is sent.</p>`, "How updates work")}`;
   }
 
+  // ── where keys are, between devices ────────────────────────────────────
+  //
+  // Asked for after a day spent finding out why two paired Macs each lacked the other's key (2026-10-13):
+  // the window had no way to show that one device could not answer and the other was holding keys back.
+  // `sync_status` is names and counts from each device's own account of itself; nothing is opened.
+  let syncView = { data: null, busy: false, working: "", error: "", said: "", open: "" };
+  const deviceName = (host) => String(host || "").replace(/^hivemindos-/, "");
+
+  async function loadSync(quiet = false) {
+    if (syncView.busy || syncView.working) return;
+    syncView.busy = true;
+    if (!quiet) { syncView.error = ""; paint(); }
+    try { syncView.data = await invoke("sync_status"); }
+    catch (e) { if (!quiet) syncView.error = balanceError(e); }
+    finally { syncView.busy = false; if (!quiet || ["machines", "attention", "keys"].includes(page)) paint(); else paintNav(); }
+  }
+
+  async function syncNow() {
+    syncView.working = "sync"; syncView.error = ""; syncView.said = ""; paint();
+    try {
+      const d = await invoke("sync_now");
+      syncView.data = d;
+      const pulled = (d.ran?.pulled || []).length, sent = Object.values(d.ran?.sent || {}).reduce((a, b) => a + b, 0);
+      syncView.said = pulled || sent ? `Received ${pulled} key${pulled === 1 ? "" : "s"}, sent ${sent}.`
+        : (d.devices || []).length ? "Nothing needed to move." : "There is no other device to exchange keys with.";
+      state = await invoke("state");
+    } catch (e) { syncView.error = balanceError(e); }
+    finally { syncView.working = ""; paint(); }
+  }
+
+  /** Seconds since the epoch as "5m ago", or what to say when it never happened. */
+  const sinceEpoch = (when, never) => (when ? ago(new Date(when * 1000).toISOString()) : never);
+
+  /** The Devices page's first panel: is every key everywhere, and if not, where is it stuck. */
+  function syncPanel() {
+    const v = syncView, d = v.data;
+    if (!d) return `<div class="group"><h3>Sync</h3><div class="row"><div class="grow note flat">${v.error ? esc(v.error) : "Checking the other devices…"}</div></div></div>`;
+    const devices = d.devices || [];
+    if (!devices.length) return `<div class="group"><h3>Sync</h3><div class="row"><div class="grow note flat">No other device on your network is exchanging keys with this one.</div></div></div>`;
+    const apart = Object.keys(d.notEverywhere || {}).length;
+    const down = devices.filter((r) => !r.reachable).length;
+    const stuck = devices.reduce((n, r) => n + r.heldBack.length, 0);
+    const fine = !apart && !down && !stuck && !devices.some((r) => r.missingHere.length);
+    const names = (list) => list.slice(0, 14).map((k) => `<span class="chip mono">${esc(k)}</span>`).join("")
+      + (list.length > 14 ? `<span class="sub">and ${list.length - 14} more</span>` : "");
+    const row = (r) => {
+      const open = v.open === r.host;
+      const facts = !r.reachable ? ["Not answering. Keys cannot move to or from it until it does."] : [
+        `${r.serves} keys`,
+        ...(r.missingThere.length ? [`lacks ${r.missingThere.length} of this device's`] : []),
+        ...(r.missingHere.length ? [`has ${r.missingHere.length} this device lacks`] : []),
+        ...(r.heldBack.length ? [`holds ${r.heldBack.length} it cannot hand over yet`] : []),
+      ];
+      const tag = !r.reachable ? ["off", "Not answering"] : r.missingThere.length || r.missingHere.length || r.heldBack.length ? ["", "Catching up"] : ["on", "In step"];
+      const detail = r.missingThere.length || r.missingHere.length || r.heldBack.length;
+      return `<div class="row top">
+        <span class="statustile ${!r.reachable ? "warn" : detail ? "plain" : "good"} sm">${icon("monitor")}</span>
+        <div class="grow"><strong>${esc(deviceName(r.host))}</strong>
+          <div class="note flat">${esc(facts.join(" \u00b7 "))}</div>
+          ${r.pulledAt || r.sentAt ? `<div class="note flat">${esc([r.pulledAt ? `Last received from it ${sinceEpoch(r.pulledAt)}` : "", r.sentAt ? `last sent to it ${sinceEpoch(r.sentAt)}` : ""].filter(Boolean).join(" \u00b7 ").replace(/^l/, "L"))}</div>` : ""}
+          ${open ? `${r.missingThere.length ? `<div class="synclist"><span class="dlabel">Not on it yet</span><div class="chips inline">${names(r.missingThere)}</div></div>` : ""}
+            ${r.missingHere.length ? `<div class="synclist"><span class="dlabel">Not on this device yet</span><div class="chips inline">${names(r.missingHere)}</div></div>` : ""}
+            ${r.heldBack.length ? `<div class="synclist"><span class="dlabel">Held there, not handed over</span><div class="chips inline">${names(r.heldBack)}</div>
+              <div class="note flat">${r.restartWouldServe.length ? "It will hand these over once its background collector restarts, which it now does by itself." : "That device keeps these to itself, or cannot open them until someone signs in there."}</div></div>` : ""}` : ""}
+        </div>
+        <span class="tag ${tag[0]}">${tag[1]}</span>
+        ${detail ? `<button class="act" data-sync-open="${esc(r.host)}">${open ? "Hide" : "Which keys"}</button>` : ""}
+      </div>`;
+    };
+    return `<div class="group"><h3>Sync</h3>
+      <div class="row">
+        <span class="statustile ${fine ? "good" : "plain"}">${icon(fine ? "check" : "history")}</span>
+        <div class="grow"><strong>${fine ? "Every key is on every device" : apart ? `${apart} key${apart === 1 ? " is" : "s are"} not on every device` : down ? `${down} device${down === 1 ? " is" : "s are"} not answering` : "Some keys are still on their way"}</strong>
+          <div class="note flat">${esc(v.working ? "Exchanging keys with the other devices…" : v.said || `Checked ${sinceEpoch(d.checkedAt, "just now")}. Devices exchange keys by themselves every ten minutes.`)}</div></div>
+        <button class="act" data-sync-check="1" ${v.busy || v.working ? "disabled" : ""}>${v.busy ? "Checking…" : "Check again"}</button>
+        <button class="act primary" data-sync-now="1" ${v.busy || v.working ? "disabled" : ""}>${v.working ? "Syncing…" : "Sync now"}</button>
+      </div>
+      ${devices.map(row).join("")}
+      ${v.error ? `<div class="row"><div class="grow note flat">${esc(v.error)}</div></div>` : ""}
+    </div>`;
+  }
+
+  /** What a key's own service said when it refused it, or "" when it has not. */
+  const refusedWhy = (k) => { const hit = rejectedKeys().find((r) => r.key === k); return hit ? `${hit.provider}: ${hit.why}` : ""; };
+
+  /** Which devices a key is missing from, for its detail and for the "not on every device" filter. */
+  const lackingDevices = (k) => (syncView.data?.notEverywhere || {})[k] || [];
+
+  // ── attention ──────────────────────────────────────────────────────────
+  //
+  // Everything that wants a decision, in one list, each with the one thing to press. Until this page
+  // the same facts were spread over six places or said nowhere: four keys their services had refused,
+  // a background service three versions old, values lying unencrypted, a device that could not sync.
+  // It only collects what the other pages already know; nothing is asked of anything to build it.
+
+  /** Keys whose own service refused them, from the balance readings: [{key, provider, why}]. */
+  function rejectedKeys() {
+    return (balancesView.data?.providers || []).filter((r) => r.status === "error" && r.providerError && r.keyName)
+      .map((r) => ({ key: r.keyName, provider: r.name, why: r.message }));
+  }
+
+  function attentionItems() {
+    if (!state) return [];
+    const items = [];
+    const pending = (state.broker?.pending || []).length;
+    if (pending) items.push({ tone: "warn", glyph: "inbox", title: `${pending} request${pending === 1 ? " is" : "s are"} waiting for your answer`,
+      detail: "Something asked for a key and is waiting on you.", go: ["access", "Review"] });
+    for (const r of state.rotations || []) items.push({ tone: "warn", glyph: "history", title: `${r.key} is half rotated`,
+      detail: r.restored ? "The previous value was put back; the services that got the new one still need it." : "The new value is in place and the previous one is still being kept until you say it works.",
+      rotate: r.key, label: "Finish" });
+    for (const r of rejectedKeys()) items.push({ tone: "warn", glyph: "alert", title: `${r.provider} refused ${r.key}`,
+      detail: r.why, rotate: r.key, label: "Replace it" });
+    for (const low of balancesView.data?.summary?.low || []) items.push({ tone: "warn", glyph: "coins", title: `${low.name} is running low`,
+      detail: low.why, topup: low.id, label: "Top up" });
+    const u = updatesView.data;
+    if (u?.app?.available) items.push({ tone: "plain", glyph: "download", title: `PassBook ${u.app.latest} is out`, detail: `This is ${u.app.current}.`, go: ["updates", "Update"] });
+    else if (u?.cli?.behind) items.push({ tone: "plain", glyph: "download", title: "The command line is behind the app", detail: `It is ${u.cli.installed}; ${u.cli.latest} is out.`, go: ["updates", "Update"] });
+    if (u?.cli?.service_behind) items.push({ tone: "plain", glyph: "hub", title: "The background service is running an old version",
+      detail: `It is still ${u.cli.service}. Restarting it closes the vault until you sign in again.`, go: ["updates", "Review"] });
+    const bare = (vault?.plaintext?.length ?? 0) + (vault?.legacy_v1?.length ?? 0);
+    if (vault?.supported && bare) items.push({ tone: "plain", glyph: "unlock", title: `${bare} value${bare === 1 ? " is" : "s are"} not encrypted`,
+      detail: "Anything running as you can read them, signed in or not.", go: ["vault", "Encrypt"] });
+    const d = syncView.data;
+    if (d) {
+      const down = (d.devices || []).filter((r) => !r.reachable);
+      if (down.length) items.push({ tone: "plain", glyph: "monitor", title: `${down.map((r) => deviceName(r.host)).join(", ")} ${down.length === 1 ? "is" : "are"} not answering`,
+        detail: "Keys cannot move to or from it until it does.", go: ["machines", "See devices"] });
+      const apart = Object.keys(d.notEverywhere || {}).length;
+      if (apart) items.push({ tone: "plain", glyph: "monitor", title: `${apart} key${apart === 1 ? " is" : "s are"} not on every device`,
+        detail: "Devices exchange keys by themselves every ten minutes; this is what has not arrived.", go: ["machines", "See devices"] });
+    }
+    return items;
+  }
+
+  /** Attention's place in the sidebar. It is not one of the permanent pages: the list stays as short as
+   *  it was, and this row appears above it only while something wants a decision (or while you are on
+   *  the page, so it does not vanish from under you as the last item clears). */
+  function attentionEntry(count) {
+    if (!count && page !== "attention") return "";
+    return `<div class="navlist attn"><button data-page="attention" aria-current="${page === "attention"}">
+      ${icon("bell", "navicon")}<span class="navlabel">Attention</span>
+      ${count ? `<span class="navcount hot">${count}</span>` : ""}</button></div>`;
+  }
+
+  function attentionPage() {
+    const items = attentionItems();
+    return `<h2>Attention</h2>
+      <p class="lede">${items.length ? "What wants a decision from you, each with the one thing to press." : "Nothing needs you right now."}</p>
+      ${items.length ? `<div class="group">${items.map((item) => `<div class="row">
+          <span class="statustile ${item.tone}">${icon(item.glyph)}</span>
+          <div class="grow"><strong>${esc(item.title)}</strong><div class="note flat">${esc(item.detail || "")}</div></div>
+          ${item.go ? `<button class="act" data-goto="${item.go[0]}">${esc(item.go[1])}</button>` : ""}
+          ${item.rotate ? `<button class="act" data-rotate-go="${esc(item.rotate)}">${esc(item.label)}</button>` : ""}
+          ${item.topup ? `<button class="act" data-topup="${esc(item.topup)}">${esc(item.label)}</button>` : ""}
+        </div>`).join("")}</div>`
+      : `<div class="group"><div class="row"><span class="statustile good">${icon("check")}</span>
+          <div class="grow note flat">No requests waiting, nothing refused, nothing low, every key where it should be, and this is the newest release.</div></div></div>`}
+      ${aside(`<p>This page collects what the others already know: requests on Permissions, refused keys and low
+        balances from Balances (when it is on), versions from Updates, unencrypted values from Security, and
+        where keys are from Devices. Turning Balances on is what lets it tell you a service has refused a key.</p>`, "Where this comes from")}`;
+  }
+
   // ── balances: what the page says ───────────────────────────────────────
   //
   // Rebuilt for 1.10.7 (Liam, 2026-10-13: "at a glance visibility so users can see immediately what's
@@ -3438,6 +3872,7 @@ passbook oauth connect google:work</pre>
       <h2>Devices</h2>
       <p class="lede">Every device that holds this store \u2014 the ones you paired with,
       and the ones that have it because they are on your network.</p>
+      ${syncPanel()}
       <div class="group">
         <h3>This device</h3>
         <div class="row">
@@ -3745,9 +4180,17 @@ passbook oauth connect google:work</pre>
   }
 
   /** The last thing that happened, said once, in the colour it deserves. */
+  /** Say that something went well: the same bar, in its good colour, gone by itself in a few seconds.
+   *  `notice` alone is how this window reports a failure, and it stays until dismissed. */
+  let saidWell = "";
+  function sayWell(words) {
+    saidWell = words; notice = words;
+    setTimeout(() => { if (notice === words) { notice = ""; paintKeepingCaret(); } }, 4500);
+  }
+
   function noticeBar() {
     if (!notice) return "";
-    const good = /\bcopied\.$/.test(notice);
+    const good = notice === saidWell || /\bcopied\.$/.test(notice);
     return `<div class="noticebar ${good ? "good" : ""}">${icon(good ? "check" : "alert")}
       <span class="grow">${esc(notice)}</span>
       <button data-noticeclear="1" title="Dismiss" aria-label="Dismiss">${icon("cross", "tinyicon")}</button>
@@ -3757,6 +4200,7 @@ passbook oauth connect google:work</pre>
   const PAGE_ICON = Object.fromEntries([...PAGES, ...SETTINGS]
     .map(([id, , glyph]) => [id, glyph]));
   PAGE_ICON.settings = "sliders";
+  PAGE_ICON.attention = "bell";
   // Reached from the source list's foot rather than from the list itself: it is
   // where you go to leave or to come back, not a section you browse.
   PAGE_ICON.switch = "building";
@@ -5321,7 +5765,7 @@ passbook oauth connect google:work</pre>
                    access: accessPage, apps: appsPage, settings: settingsPage,
                    machines: machinesPage, switch: switchPage,
                    broker: brokerPage, record: recordPage, balances: balancesPage,
-                   updates: updatesPage }[page]();
+                   updates: updatesPage, attention: attentionPage }[page]();
     main.innerHTML = lockBanner() + body + noticeBar();
     paintGate();
     paintSheet();
@@ -5330,6 +5774,25 @@ passbook oauth connect google:work</pre>
     main.querySelectorAll("[data-goto]").forEach((b) => b.onclick = () => {
       page = b.dataset.goto; notice = ""; paint();
       if (page === "updates" && Date.now() - updatesView.checked > 60000) loadUpdates();
+    });
+    main.querySelectorAll("[data-key-filter]").forEach((b) => b.onclick = () => { keyFilter = b.dataset.keyFilter; resetRows(); paint(); });
+    main.querySelectorAll("[data-key-sort]").forEach((b) => b.onchange = () => { keySort = b.value; resetRows(); paint(); });
+    main.querySelectorAll("[data-sync-check]").forEach((b) => b.onclick = () => loadSync());
+    main.querySelectorAll("[data-sync-now]").forEach((b) => b.onclick = () => syncNow());
+    main.querySelectorAll("[data-sync-open]").forEach((b) => b.onclick = () => {
+      syncView.open = syncView.open === b.dataset.syncOpen ? "" : b.dataset.syncOpen; paint();
+    });
+    main.querySelectorAll("[data-rotate-open]").forEach((b) => b.onclick = () => openRotate(b.dataset.rotateOpen));
+    main.querySelectorAll("[data-rotate-go]").forEach((b) => b.onclick = () => openRotate(b.dataset.rotateGo, true));
+    main.querySelectorAll("[data-rotate-start]").forEach((b) => b.onclick = () => {
+      const value = String(document.getElementById("rotvalue")?.value || "").trim();
+      if (!value) { rotateView.error = "Paste the new value first."; paint(); return; }
+      rotateStep("start", "rotate_start", { key: b.dataset.rotateStart, value });
+    });
+    main.querySelectorAll("[data-rotate-verify]").forEach((b) => b.onclick = () => rotateStep("verify", "rotate_verify", { provider: b.dataset.rotateVerify }));
+    main.querySelectorAll("[data-rotate-finish]").forEach((b) => b.onclick = async () => {
+      await rotateStep(b.dataset.rotateFinish, "rotate_finish", { key: b.dataset.key, action: b.dataset.rotateFinish });
+      if (!rotateView.error && !rotateView.data?.pending) { rotateView = { key: "", data: null, busy: "", error: "", check: null }; paint(); }
     });
     main.querySelectorAll("[data-appearance]").forEach((b) => b.onclick = async () => {
       applyAppearance(b.dataset.appearance); paint();
@@ -5984,6 +6447,49 @@ passbook oauth connect google:work</pre>
         }
       };
     });
+    // A paste of NAME=value lines into either field is an offer to add them all.
+    for (const id of ["k", "v"]) {
+      const field = document.getElementById(id);
+      if (!field) continue;
+      field.addEventListener("paste", (event) => {
+        const text = event.clipboardData?.getData("text") || "";
+        if (!/[\r\n]/.test(text.trim()) && !KEY_LINE.test(text)) return;
+        const found = readPasted(text);
+        if (!found) return;
+        // One line pasted into the name field is just a name and a value: fill the two fields.
+        if (found.names.length === 1) {
+          event.preventDefault();
+          document.getElementById("k").value = found.names[0];
+          document.getElementById("v").value = found.text.slice(found.names[0].length + 1);
+          document.getElementById("addgo")?.focus();
+          return;
+        }
+        event.preventDefault();
+        pasted = found; paint();
+      });
+    }
+    const valueField = document.getElementById("v"), nameField = document.getElementById("k"), hint = document.getElementById("addhint");
+    if (valueField && nameField && hint) {
+      const quiet = hint.innerHTML;
+      valueField.addEventListener("input", () => {
+        const shape = nameField.value.trim() ? null : valueShape(valueField.value);
+        hint.innerHTML = shape ? `<span class="sub">Looks like a key from ${esc(shape[2])}.</span>
+          <button class="act" id="usename">Name it ${esc(shape[1])}</button>` : quiet;
+        const use = document.getElementById("usename");
+        if (use) use.onclick = () => { nameField.value = shape[1]; hint.innerHTML = quiet; document.getElementById("addgo")?.focus(); };
+      });
+    }
+    main.querySelectorAll("[data-pasted-cancel]").forEach((b) => b.onclick = () => { pasted = null; paint(); });
+    main.querySelectorAll("[data-pasted-add]").forEach((b) => b.onclick = async () => {
+      const replace = b.dataset.pastedAdd === "replace";
+      const keep = replace ? null : new Set(pasted.names.filter((n) => !pasted.existing.includes(n)));
+      const text = keep ? pasted.text.split("\n").filter((line) => keep.has(line.slice(0, line.indexOf("=")))).join("\n") : pasted.text;
+      const names = keep ? [...keep] : pasted.names;
+      if (!await call("add_pasted", { text, replace })) { pasted = { ...pasted, problem: notice }; notice = ""; paint(); return; }
+      pasted = null; keyFilter = "all"; keySort = "new"; query = ""; resetRows();
+      sayWell(`Added ${names.length} key${names.length === 1 ? "" : "s"}. Newest are first.`);
+      paint(); loadSync(true);
+    });
     const go = document.getElementById("addgo");
     if (go) go.onclick = async () => {
       const name = document.getElementById("k").value;
@@ -6046,6 +6552,10 @@ passbook oauth connect google:work</pre>
       await authorization.load();
       await webLink.load();
       wireDrop();
+      // Where every key is, for Devices, Attention and the key rows: asked now and every ten minutes,
+      // which is how often the devices exchange keys by themselves.
+      loadSync(true);
+      setInterval(() => loadSync(true), 10 * 60 * 1000);
       // Balances keeps a history, so a reading is taken now and each hour while the app is open (when
       // the page is on; off, this asks nothing of anyone).
       loadBalances(false, true);
@@ -6066,6 +6576,112 @@ passbook oauth connect google:work</pre>
     }
     catch (e) { main.innerHTML = `<h2>PassBook</h2><p class="lede err">${esc(String(e))}</p>`; }
   }
+  // ── the palette, and the keyboard ──────────────────────────────────────
+  //
+  // Nothing in this window answered a key press until now: every key, page and action was a pointer
+  // away. Cmd+K (Ctrl+K elsewhere) opens one box that finds any of them by a few letters. Enter does the
+  // obvious thing; on a key, Cmd+Enter copies its name instead of opening it. Besides that: "/" puts the
+  // cursor in the search box, and Cmd+N opens Add key.
+  const palette = document.createElement("div");
+  palette.id = "palette";
+  palette.hidden = true;
+  palette.innerHTML = `<div class="palbox" role="dialog" aria-label="Find anything">
+    <input id="palq" type="text" placeholder="Find a key, a page or something to do" spellcheck="false" autocomplete="off" autocapitalize="off" />
+    <div id="pallist" role="listbox"></div>
+    <div class="palfoot"><span><b>\u2191\u2193</b> move</span><span><b>\u21b5</b> open</span><span><b>\u2318\u21b5</b> copy a key's name</span><span><b>esc</b> close</span></div></div>`;
+  document.body.appendChild(palette);
+  let palRows = [], palAt = 0;
+
+  /** How well `text` answers `typed`: 0 for not at all; starting with it beats containing it beats its letters in order. */
+  function palScore(text, typed) {
+    const hay = text.toLowerCase(), q = typed.toLowerCase().replace(/\s+/g, "_");
+    if (!q) return 1;
+    if (hay.startsWith(q)) return 100 - Math.min(hay.length, 60) / 10;
+    const at = hay.indexOf(q);
+    if (at >= 0) return 70 - at / 10;
+    const plain = typed.toLowerCase().replace(/[\s_]+/g, "");
+    let i = 0;
+    for (const ch of hay) if (ch === plain[i]) i++;
+    return plain && i === plain.length ? 30 - hay.length / 20 : 0;
+  }
+
+  function palActions() {
+    const go = (id, label, glyph) => ({ kind: "Go to", label, glyph, run: () => { page = id; notice = ""; resetRows(); paint(); if (id === "balances") loadBalances(); if (id === "machines") loadSync(); if (id === "updates") loadUpdates(); } });
+    return [
+      go("attention", "Attention", "bell"), ...PAGES.map(([id, label, glyph]) => go(id, label, glyph)),
+      go("settings", "Settings", "sliders"), ...SETTINGS.map(([id, label, glyph]) => go(id, label, glyph)),
+      { kind: "Do", label: "Add a key", glyph: "plus", run: () => { page = "keys"; adding = true; pasted = null; paint(); document.getElementById("k")?.focus(); } },
+      { kind: "Do", label: "Sync with my other devices now", glyph: "monitor", run: () => { page = "machines"; paint(); syncNow(); } },
+      { kind: "Do", label: "Check for updates", glyph: "download", run: () => { page = "updates"; paint(); loadUpdates(); } },
+      { kind: "Do", label: "Lock this window", glyph: "lock", run: () => lockWindow() },
+      ...APPEARANCES.map(([id, label]) => ({ kind: "Appearance", label, glyph: "moon", run: async () => { applyAppearance(id); paint(); try { await invoke("set_appearance", { choice: id }); } catch { /* the page changed; the app will follow next time */ } } })),
+    ];
+  }
+
+  function palSearch(typed) {
+    const actions = palActions().map((row) => ({ ...row, score: palScore(row.label, typed) * (typed ? 1 : 1) })).filter((row) => row.score > 0);
+    const keys = typed.trim() ? (state?.store?.keys || []).map((k) => ({ kind: "Key", label: k, glyph: "key", key: k, score: palScore(k, typed) }))
+      .filter((row) => row.score > 0).sort((a, b) => b.score - a.score).slice(0, 9) : [];
+    const ranked = typed.trim() ? [...keys, ...actions].sort((a, b) => b.score - a.score || (a.kind === "Key" ? -1 : 1)) : actions;
+    return ranked.slice(0, 12);
+  }
+
+  function palPaint() {
+    const list = document.getElementById("pallist");
+    list.innerHTML = palRows.length ? palRows.map((row, i) => `<button class="palrow" role="option" data-pal="${i}" aria-selected="${i === palAt}">
+      ${icon(row.glyph || "chevron", "navicon")}<span class="${row.kind === "Key" ? "mono" : ""}">${esc(row.label)}</span><span class="palkind">${esc(row.kind)}</span></button>`).join("")
+      : `<div class="palnone">Nothing here goes by that.</div>`;
+    list.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
+    list.querySelectorAll("[data-pal]").forEach((b) => { b.onclick = () => palRun(Number(b.dataset.pal), false); b.onmousemove = () => { if (palAt !== Number(b.dataset.pal)) { palAt = Number(b.dataset.pal); palPaint(); } }; });
+  }
+
+  function palOpen() {
+    if (!state || appLocked || !palette.hidden) return;
+    hideTip();
+    palette.hidden = false;
+    const box = document.getElementById("palq");
+    box.value = ""; palRows = palSearch(""); palAt = 0; palPaint(); box.focus();
+  }
+  function palClose() { palette.hidden = true; }
+
+  async function palRun(index, copyName) {
+    const row = palRows[index];
+    if (!row) return;
+    palClose();
+    if (row.kind !== "Key") { row.run(); return; }
+    if (copyName) {
+      // `copytext`: a key's name, the one thing this window may put on the clipboard itself.
+      const copytext = row.key;
+      try { await navigator.clipboard.writeText(copytext); sayWell(`Copied the name ${copytext}.`); }
+      catch (e) { notice = String(e); }
+      paint(); return;
+    }
+    showKeyRow(row.key);
+  }
+
+  document.getElementById("palq").addEventListener("input", (event) => { palRows = palSearch(event.target.value); palAt = 0; palPaint(); });
+  palette.addEventListener("mousedown", (event) => { if (event.target === palette) palClose(); });
+  document.addEventListener("keydown", (event) => {
+    const mod = event.metaKey || event.ctrlKey;
+    if (mod && !event.altKey && event.key.toLowerCase() === "k") { event.preventDefault(); if (palette.hidden) palOpen(); else palClose(); return; }
+    if (!palette.hidden) {
+      if (event.key === "Escape") { event.preventDefault(); palClose(); }
+      else if (event.key === "ArrowDown") { event.preventDefault(); palAt = Math.min(palAt + 1, palRows.length - 1); palPaint(); }
+      else if (event.key === "ArrowUp") { event.preventDefault(); palAt = Math.max(palAt - 1, 0); palPaint(); }
+      else if (event.key === "Enter") { event.preventDefault(); palRun(palAt, mod); }
+      return;
+    }
+    if (!state || appLocked) return;
+    const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || "") || document.activeElement?.isContentEditable;
+    if (mod && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "n") {
+      event.preventDefault(); page = "keys"; adding = true; pasted = null; paint(); document.getElementById("k")?.focus();
+    } else if (event.key === "/" && !mod && !typing) {
+      const box = document.querySelector("main input.search");
+      if (!box) { page = "keys"; paint(); }
+      event.preventDefault(); document.querySelector("main input.search")?.focus();
+    }
+  });
+
   // ── tooltips ───────────────────────────────────────────────────────────
   // One tooltip for the whole window. Markup keeps saying `title="…"`, which is where a description of
   // a control belongs and what a screen reader already reads; the moment such an element appears its

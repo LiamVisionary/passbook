@@ -4,6 +4,71 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+
+## [1.10.13] — 2026-10-13
+
+### Six things that make the window answer questions it could not
+
+Asked for by Liam, 2026-10-13 ("build all 6"), after a list drawn from what had
+gone wrong or been invisible that week.
+
+- **Sync you can see (Devices).** A Sync panel heads the page: whether every key
+  is on every device, and for each device how many keys it has, how many of
+  this device's it lacks, how many it has that this one lacks, how many it holds
+  but cannot hand over yet (and whether a restart of its collector would release
+  them), and when keys last moved either way. **Which keys** opens the names.
+  **Sync now** does at once what the devices do by themselves every ten minutes.
+  Each key's settings say which devices it is on. Behind it:
+  `passbook sync --status` (names and counts only; it opens no value and needs
+  no grant), and a record of when keys were last sent to or received from each
+  machine.
+- **Attention.** One page, first in the sidebar with a count, listing what wants
+  a decision, each with the one thing to press: requests waiting for an answer,
+  a rotation left half done, keys their own service refused, services running
+  low, a newer release, a background service still on an old version, values
+  that are not encrypted, a device that is not answering, keys that are not on
+  every device. It asks nothing new of anything; it collects what the other
+  pages already know.
+- **Keys: filters and order.** Under the search box, a chip for each question
+  that has an answer in this store (new this week, not on every device, not
+  encrypted, guarded, refused by its service, never used) with its count, and
+  an order: by group, newest first, recently used, A to Z. A key its service
+  refused carries a badge saying so. `passbook state` now says when each key was
+  last written (`store.updated`).
+- **The keyboard.** Cmd+K (Ctrl+K) opens a palette that finds any key, page or
+  action by a few letters; Enter opens it, Cmd+Enter copies a key's name. "/"
+  puts the cursor in the search box and Cmd+N opens Add key. Before this the
+  window answered no key press at all.
+- **Adding.** Paste `NAME=value` lines, or a whole `.env`, into either field and
+  the window lists the names (never the values), says which are already here,
+  and adds them in one go; one pasted line fills both fields. A value typed into
+  an empty form says whose key it looks like (23 services, by how the value
+  starts) and offers the name it usually goes by.
+- **Rotating, step by step.** **Rotate…** in a key's settings is
+  `passbook rotate` as four steps on the key itself: make a new key at the
+  provider (one button opens its site), paste it, see which services took it
+  and which places you must update yourself, ask the provider whether it works
+  (where PassBook can), then **It works** or **Put the old one back**. The old
+  value is kept until you choose. `passbook rotate` gained `--status` and
+  `--json` for this, and an open rotation is in `passbook state`.
+
+Also:
+
+- A machine no longer counts itself among its own peers. Its Hivemind Link node
+  is on the network as a peer of the machine it runs on, so every plan listed
+  the machine as unreachable, owed keys, and offered its own keys back.
+- `USEPOD_HOST_*` keys are per-machine and never offered to another machine,
+  as HivemindOS already treated them; every plan had offered them and reported
+  them "sent".
+- `passbook sync --json` answers in JSON when there is nobody to sync with.
+- Good news in the window's notice bar is green and goes by itself; a failure
+  stays red until dismissed. The bar is no longer see-through over the page.
+
+Checked: 37 cases in WebKit at the window's size, on this machine's real state
+and sync answers; and every new command run from a real build of the app
+against a throwaway store (two keys pasted in, one rotated and confirmed, one
+rotated and rolled back, the store read back afterwards).
+
 ## [1.10.12] — 2026-10-13
 
 ### `passbook run --capture`: a command that never holds the key

@@ -363,6 +363,176 @@ fn add_key(name: String, value: String, replace: bool) -> Result<Value, String> 
     state()
 }
 
+/// A key's name as the store spells one: letters, digits and underscores, not starting with a digit.
+fn is_key_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    matches!(chars.next(), Some(first) if first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && name.len() <= 128
+}
+
+/// Pipe text to a PassBook command's stdin: (whether it succeeded, what it printed, what it complained
+/// of). For the commands that take a secret: stdin, never an argument, for the reason `add_key` gives.
+fn run_with_stdin(args: &[&str], input: &str) -> Result<(bool, String, String), String> {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = passbook_command()
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("Could not run PassBook: {error}"))?;
+    {
+        let stdin = child.stdin.as_mut().ok_or("Could not write to PassBook")?;
+        stdin
+            .write_all(input.as_bytes())
+            .map_err(|error| format!("Could not write to PassBook: {error}"))?;
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("PassBook did not finish: {error}"))?;
+    Ok((
+        output.status.success(),
+        String::from_utf8_lossy(&output.stdout).to_string(),
+        String::from_utf8_lossy(&output.stderr).trim().to_string(),
+    ))
+}
+
+/// A `--json` answer from a command that also reports failure inside it: read the answer when there is
+/// one (it says what went wrong), and fall back to what the command complained of when there is not.
+fn json_or_complaint(ran: (bool, String, String)) -> Result<Value, String> {
+    let (_, printed, complaint) = ran;
+    match serde_json::from_str::<Value>(printed.trim()) {
+        Ok(answer) => Ok(answer),
+        Err(_) if !complaint.is_empty() => Err(complaint),
+        Err(error) => Err(format!("PassBook returned something unreadable: {error}")),
+    }
+}
+
+/// Add several keys pasted as `NAME=value` lines (a `.env` block), in one go, sent to the other machines
+/// like any key added here. Every line is checked first: one that is not a name and a value stops the
+/// whole paste, so half of a block is never added.
+#[tauri::command(async)]
+fn add_pasted(text: String, replace: bool) -> Result<Value, String> {
+    let mut lines = String::new();
+    let mut count = 0usize;
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let line = line.strip_prefix("export ").unwrap_or(line).trim();
+        let Some((name, value)) = line.split_once('=') else {
+            return Err("Every line needs to be NAME=value.".into());
+        };
+        let (name, value) = (name.trim(), value.trim());
+        if !is_key_name(name) {
+            return Err(format!("{name} is not a name a key can have."));
+        }
+        if value.is_empty() {
+            return Err(format!("{name} has no value."));
+        }
+        lines.push_str(&format!("{name}={value}\n"));
+        count += 1;
+    }
+    if count == 0 {
+        return Err("Nothing to add.".into());
+    }
+    let mut args = vec!["add", "--stdin", "--sync"];
+    if replace {
+        args.push("--replace");
+    }
+    let (ok, _, complaint) = run_with_stdin(&args, &lines)?;
+    if !ok {
+        return Err(if complaint.is_empty() { "PassBook could not add those keys.".into() } else { complaint });
+    }
+    state()
+}
+
+// ── where keys are, between machines ───────────────────────────────────────
+
+/// Which machines have which keys, and when keys last moved (`passbook sync --status`). Names and counts.
+#[tauri::command(async)]
+fn sync_status() -> Result<Value, String> {
+    run_json(&["sync", "--status", "--json"])
+}
+
+/// Exchange keys with the other machines now: what the collectors do by themselves every ten minutes,
+/// done at once (`passbook sync --maintenance --apply`). Answers with where things stand afterwards.
+#[tauri::command(async)]
+fn sync_now() -> Result<Value, String> {
+    let ran = run_json(&["sync", "--maintenance", "--apply", "--json"])?;
+    let mut status = sync_status()?;
+    if let Some(map) = status.as_object_mut() {
+        map.insert("ran".into(), serde_json::json!({
+            "pulled": ran.get("pulled").cloned().unwrap_or(Value::Null),
+            "sent": ran.get("sent").cloned().unwrap_or(Value::Null),
+            "unreachable": ran.get("unreachable").cloned().unwrap_or(Value::Null),
+        }));
+    }
+    Ok(status)
+}
+
+// ── rotating a key ─────────────────────────────────────────────────────────
+//
+// The verb is `passbook rotate`: replace, push to every service that holds the key, keep the old value
+// until the new one is confirmed, roll back if it is not. These are that verb, one step each, for the
+// window's guided flow. The new value goes in on stdin and nothing here ever returns a value.
+
+#[tauri::command(async)]
+fn rotate_status(key: String) -> Result<Value, String> {
+    let key = key.trim();
+    if !is_key_name(key) {
+        return Err("Which key?".into());
+    }
+    run_json(&["rotate", key, "--status"])
+}
+
+#[tauri::command(async)]
+fn rotate_start(key: String, value: String) -> Result<Value, String> {
+    let key = key.trim();
+    if !is_key_name(key) {
+        return Err("Which key?".into());
+    }
+    if value.trim().is_empty() {
+        return Err("Type the new value.".into());
+    }
+    json_or_complaint(run_with_stdin(&["rotate", key, "--stdin", "--json", "--app", "passbook-app"], value.trim())?)
+}
+
+#[tauri::command(async)]
+fn rotate_finish(key: String, action: String) -> Result<Value, String> {
+    let key = key.trim();
+    if !is_key_name(key) {
+        return Err("Which key?".into());
+    }
+    let flag = match action.as_str() {
+        "confirm" => "--confirm",
+        "rollback" => "--rollback",
+        _ => return Err("Confirm the new value, or roll it back.".into()),
+    };
+    json_or_complaint(run_with_stdin(&["rotate", key, flag, "--json", "--app", "passbook-app"], "")?)
+}
+
+/// Ask the key's own provider whether the value now in the store works: one fresh balance reading for
+/// that provider. `ready` means it answered; a rejected key says so. Only a provider id leaves here.
+#[tauri::command(async)]
+fn rotate_verify(provider: String) -> Result<Value, String> {
+    let provider = provider.trim();
+    if provider.is_empty() || !provider.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
+        return Err("Which provider?".into());
+    }
+    let read = run_json(&["balances", "list", provider, "--fresh", "--json", "--app", "passbook-app"])?;
+    let row = read.get("providers").and_then(Value::as_array).and_then(|rows| rows.first()).cloned().unwrap_or(Value::Null);
+    Ok(serde_json::json!({
+        "status": row.get("status").cloned().unwrap_or(Value::Null),
+        "message": row.get("message").cloned().unwrap_or(Value::Null),
+        "rejected": row.get("providerError").is_some(),
+    }))
+}
+
 /// Delete a key from the store.
 ///
 /// The one operation here that can break something else on this machine, so it
@@ -2460,6 +2630,7 @@ fn main() {
             github_state, github_connect_token, github_connect_gh, github_connect_device,
             github_disconnect, github_targets, github_environments, github_check, github_push,
             balances_state, balances_enable, balances_open, balances_icons, balances_full, balances_alerts, appearance, set_appearance,
+            add_pasted, sync_status, sync_now, rotate_status, rotate_start, rotate_finish, rotate_verify,
             update_state, update_install
         ])
         .run(tauri::generate_context!())

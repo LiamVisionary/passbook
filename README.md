@@ -1443,6 +1443,18 @@ the app, the command line it drives, and the background service.
 From a terminal, `passbook update` updates the command line alone
 (`passbook update --check` only looks).
 
+**Finding things.** Cmd+K (Ctrl+K on Windows and Linux) opens a palette that
+finds any key, page or action; Enter opens it and Cmd+Enter copies a key's name.
+"/" jumps to the search box and Cmd+N opens Add key. **Attention**, first in the
+sidebar, lists whatever wants a decision from you, each with the one thing to
+press. On **Keys**, chips under the search box filter to what is new, not on
+every device, not encrypted, guarded, refused by its service or never used, and
+the list can be ordered by group, age, last use or name. **Devices** opens on a
+Sync panel: which devices have which keys, what is held up and where, and a
+**Sync now** button (`passbook sync --status` from a terminal). Paste a `.env`
+into Add key to add several at once. **Rotate…** in a key's settings walks
+through replacing it: `passbook rotate`, one step at a time.
+
 **Settings → Appearance** is System, Light or Dark. System follows the
 computer; the other two hold whatever the computer is set to.
 

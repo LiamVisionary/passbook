@@ -1342,11 +1342,6 @@ def _spawn(payload: Mapping[str, Any], root: Path | None,
     if not command:
         return {"ok": False, "error": "no command"}
     wanted = [str(k).strip() for k in (payload.get("keys") or []) if str(k).strip()]
-    if payload.get("capture") is not None:
-        # Capture lasts as long as the child and answers as it runs, which is
-        # the streamed spawn. Refused here rather than ignored: a caller that
-        # asked for stand-ins must never be handed a child holding real values.
-        return {"ok": False, "error": "capture is only available for a streamed run"}
     status = (caller or {}).get("status", "unknown")
     reason = (str(payload.get("reason") or "")[:200] or f"ran {Path(command[0]).name}")
     reason = f"{reason} [{status} caller]"
@@ -1482,42 +1477,6 @@ def _proxy(payload: Mapping[str, Any], root: Path | None,
     return answer
 
 
-def _capture_session(payload: Mapping[str, Any], wanted: Sequence[str],
-                     values: Mapping[str, str], refused: Sequence[tuple[str, str]],
-                     policy: Mapping[str, Any], base: Mapping[str, str]):
-    """Start a capture for a streamed spawn: (session, "") or (None, why not).
-
-    The hosts are decided HERE, from the policy this broker read, and the
-    caller's own list is held to it: a caller may name a host for a key nobody
-    bound and may narrow a binding, and may not widen one. Every wanted key has
-    to have both a host and a value, or nothing starts. A child that got
-    stand-ins for two keys and nothing for a third fails in a way that reads as
-    a bad credential.
-    """
-    try:
-        import passbook_capture
-    except ImportError:
-        return None, "capture is not installed on this machine"
-    asked = payload.get("capture")
-    named = asked.get("hosts") if isinstance(asked, Mapping) else None
-    try:
-        flags = {str(key): [passbook_capture.host_entry(host) for host in (hosts or [])]
-                 for key, hosts in (named.items() if isinstance(named, Mapping) else [])}
-        allowed_hosts = passbook_capture.allowlist(wanted, policy, flags)
-        why = dict(refused)
-        absent = [key for key in wanted if not values.get(key)]
-        if absent:
-            raise passbook_capture.CaptureError(
-                "--capture has no value to stand in for: " + "; ".join(
-                    f"{key} ({why.get(key) or 'not in the store, or locked'})" for key in absent),
-                "The command was not run.")
-        session = passbook_capture.Session(
-            {key: values[key] for key in wanted}, allowed_hosts, base_env=base)
-        return session.start(), ""
-    except passbook_capture.CaptureError as error:
-        return None, f"{error}\n{error.remedy}".strip()
-
-
 def _spawn_streaming(payload: Mapping[str, Any], root: Path | None,
                      caller: Mapping[str, Any] | None, connection) -> None:
     """Spawn, and send the child's output back as it arrives, already scrubbed.
@@ -1592,24 +1551,10 @@ def _spawn_streaming(payload: Mapping[str, Any], root: Path | None,
         _record("denied", [key for key, _ in refused], app=app, granted=False,
                 reason="; ".join(sorted({why for _, why in refused}))[:200],
                 workspace=workspace, root=root)
-    # With capture, the child is given stand-ins and this broker puts the
-    # values on the wire itself. Without it, nothing below differs from before.
-    context = _child_context(payload, workspace, root)
-    session, holding = None, values
-    if payload.get("capture") is not None:
-        session, why_not = _capture_session(payload, wanted, values, refused, policy, context)
-        if session is None:
-            _record("denied", sorted(wanted) or ["*"], app=app, granted=False,
-                    reason=f"capture: {why_not}"[:200], workspace=workspace, root=root)
-            send({"t": "end", "ok": False, "error": why_not})
-            return
-        context = {**context, **session.environment()}
-        holding = session.standins
     send({"t": "begin", "keys": sorted(values), "workspace": workspace,
           "denied": sorted(key for key, _ in refused),
           "why": {key: why for key, why in refused},
-          "redacted": passbook_grant.redactions_for(values),
-          **({"capture": True} if session is not None else {})})
+          "redacted": passbook_grant.redactions_for(values)})
 
     class _Frames:
         """Stands in for a text stream, turning writes into frames."""
@@ -1640,36 +1585,24 @@ def _spawn_streaming(payload: Mapping[str, Any], root: Path | None,
             return False
 
     started: list = []
-    captured: dict[str, Any] = {}
-    try:
-        answer = passbook_grant.stream(
-            command, holding, app=app, cwd=str(payload.get("cwd") or ""),
-            extra_env=context,
-            grant=token, stdout=_Frames("out"), stderr=_Frames("err"),
-            caller_present=_caller_present,
-            on_child=lambda child: (_watch_child(child), started.append(child)))
-    finally:
-        if session is not None:
-            # Whatever ended the child, the proxy and its key go with it.
-            captured = {"capture": session.report()}
-            session.stop()
+    answer = passbook_grant.stream(
+        command, values, app=app, cwd=str(payload.get("cwd") or ""),
+        extra_env=_child_context(payload, workspace, root),
+        grant=token, stdout=_Frames("out"), stderr=_Frames("err"),
+        caller_present=_caller_present,
+        on_child=lambda child: (_watch_child(child), started.append(child)))
 
     for child in started:
         # It has already exited; keeping the handle would make the shutdown
         # sweep grow without bound on a long-lived broker.
         _forget_child(child)
     if answer.get("ok"):
-        # A captured child was given no key, so its grant covers none. Listing
-        # them would let anything holding the token ask this broker for the
-        # values the child was never meant to have.
-        _remember_grant(token, app=app, keys=() if session is not None else values,
-                        command=command, pid=None,
+        _remember_grant(token, app=app, keys=values, command=command, pid=None,
                         values=values, workspace=workspace, project=project)
         _record("use", sorted(values) or ["*"], app=app, granted=True,
                 reason=f"{reason}: {' '.join(_safe_command(command, values))[:120]}"
-                       + _pinned_note(pinned) + (" [captured]" if session is not None else ""),
-                workspace=workspace, root=root)
-    send({"t": "end", **answer, "workspace": workspace, **captured})
+                       + _pinned_note(pinned), workspace=workspace, root=root)
+    send({"t": "end", **answer, "workspace": workspace})
 
 
 def _managed_refusal(payload: Mapping[str, Any], root: Path | None) -> dict[str, Any] | None:
@@ -1763,8 +1696,7 @@ def _handle(payload: Mapping[str, Any], root: Path | None = None,
     operation = str(payload.get("op") or "").strip().lower()
     if operation == "ping":
         return {"ok": True, "pid": os.getpid(), "spec_version": SPEC_VERSION,
-                "managed_integrations": 1, "web_links": 1, "capture": 1,
-                "version": _RUNNING_VERSION}
+                "managed_integrations": 1, "web_links": 1, "version": _RUNNING_VERSION}
     if operation == "managed":
         import passbook_integrations
         return passbook_integrations.handle(payload, store_root(root), sys.modules[__name__])
@@ -2253,21 +2185,9 @@ def _ask(payload: Mapping[str, Any], *, root: Path | None = None, timeout: float
         return None
 
 
-def offers_capture(*, root: Path | None = None) -> bool:
-    """Does the broker that is running know what a capture request is?
-
-    Asked before sending one, because the answer cannot be learned afterwards:
-    a broker from before capture ignores the field and starts the child with
-    real values.
-    """
-    answer = _ask({"op": "ping"}, root=root, timeout=1.0)
-    return bool(answer and answer.get("ok") and answer.get("capture"))
-
-
 def spawn_streaming(command: Sequence[str], keys: Iterable[str], *, app: str,
                     cwd: str = "", reason: str = "", project: str = "", workspace: str = "",
-                    out=None, err=None, root: Path | None = None,
-                    capture: Mapping[str, Any] | None = None) -> dict[str, Any] | None:
+                    out=None, err=None, root: Path | None = None) -> dict[str, Any] | None:
     """Have the broker run a command, writing its scrubbed output here as it comes.
 
     The client end of `_spawn_streaming`. Returns the final frame, or None when
@@ -2289,8 +2209,6 @@ def spawn_streaming(command: Sequence[str], keys: Iterable[str], *, app: str,
         "env": {name: value for name, value in os.environ.items()
                 if value and name != "PASSBOOK_GRANT"},
     }
-    if capture is not None:
-        payload["capture"] = dict(capture)
     try:
         # No overall deadline: the child decides how long this takes, and a
         # timeout here would kill a legitimate build at an arbitrary minute.

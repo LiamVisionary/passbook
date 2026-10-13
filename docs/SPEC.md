@@ -259,127 +259,6 @@ the caller's output, not in its transcript, and not in the record.
 
 Reference implementation: `passbook_grant.py`.
 
-## Standing in for a credential (optional)
-
-Not required for conformance. The previous section keeps a value out of the
-caller's output. The process that was started still holds it, in its
-environment, where every library it loads, every crash report it writes and
-every other process running as the same user can read it. An implementation may
-offer a launch in which the process is given a **stand-in** and the value is put
-on the wire for it.
-
-For one launch, asked for by name (`passbook run --only KEY --capture`):
-
-- each named key's variable holds a random stand-in instead of the value
-- a forward proxy listens on loopback, on a port the system chose, and is the
-  process's HTTPS proxy
-- a connection to a host a key may be sent to is terminated at the proxy, under
-  a certificate authority made for that launch. A stand-in in the request is
-  replaced by the value, and the request goes on over a connection whose
-  certificate was verified against the system's roots and the host's own name
-- a connection to any other host is copied through without being read
-
-An implementation that offers this must hold to all of:
-
-1. a stand-in is replaced only on a connection to a host **that key** may be
-   sent to. The list is per key: a second key's stand-in on the same connection
-   stays a stand-in unless its own list names the host
-2. a key with no host does not start. The launch is refused, naming the key and
-   what would fix it. It never falls back to the value in the environment, which
-   would be the behaviour the caller asked to be rid of
-3. a host comes from the owner's binding for the key (rule 5 above) or from the
-   caller for that launch, and from nowhere else. A caller's host may narrow a
-   binding and may not widen it. A host is an exact name or a leading dot for a
-   domain and everything under it. An implementation must not infer a host from
-   a key's name: a wrong guess sends a credential to somebody else's server
-4. a connection to a host on no key's list is not decrypted, and no certificate
-   is made for it
-5. nothing is replaced on a cleartext request, and the process is given no
-   cleartext proxy
-6. the request's `Host` names the host the connection is to, or the request is
-   refused. A shared front end routes on `Host`, so a request that connects to
-   an allowed name and names another tenant would carry the key to that tenant
-7. a redirect is returned to the process and never followed for it. The
-   process's next connection is judged on its own host
-8. what comes back on an opened connection has every stood-in value removed, in
-   the encodings of rule 2 above, in headers and body. A response that cannot be
-   read cannot be checked, and is refused rather than passed on
-9. the proxy serves only a caller presenting a credential made for that launch
-10. the authority's private key exists only in memory. What is written to disk
-    is public certificates, in a file only the owner can read
-11. the proxy, the key and the files are gone when the process exits, and its
-    exit status is the launch's
-12. it is asked for per launch. A launch that did not ask is not changed by it
-13. where a broker holds the values (sealed reads, a guarded key, a pin) the
-    broker runs the proxy, and the grant it gives the process lists no key: a
-    grant that listed them could be traded back for the values. A client must
-    confirm the broker knows the request before sending it, because one that
-    ignores an unknown field starts the process holding real values
-14. a launch the implementation knows will put the key's value somewhere (a
-    secret store, a deploy target) is refused: it would put the stand-in there,
-    succeed, and be recorded as a place the key lives
-
-The limits, stated rather than implied.
-
-**It is not a sandbox for hostile code.** The process can use the key against
-its own host for as long as it runs. A host that will transform what it is sent
-and return it (a model asked to spell a string backwards) hands the value back
-in a form no redaction recognises. This stops a value sitting in an environment
-and stops it travelling to another host. It does not confine a program that is
-trying, and must not be described as if it did.
-
-**Only what goes through the proxy is replaced.** A program that ignores the
-proxy variables, pins certificates, or trusts the operating system's store and
-not the variables it was given sends the stand-in or refuses the connection. It
-fails to authenticate. It does not leak. Also bypassed: a host the caller's own
-`NO_PROXY` names.
-
-**Only a value sent as it is.** A bearer token, a key in a query string or a
-body, a Basic-auth pair. A key used to *sign* (AWS SigV4, a JWT, a webhook
-signature) is never on the wire, so the signature is made with the stand-in. A
-client that checks the key's shape before sending may reject the stand-in.
-
-**The stand-ins and the proxy credential are in the process's environment.**
-Anything that can read that environment can use the key against its host while
-the launch lasts. It cannot learn the value or send it elsewhere.
-
-**Where the process can read the store, it can read the store.** A stand-in in
-the environment does not stop a program opening the file. Sealed reads do.
-
-The reference implementation is narrower than the rules require, and says so:
-
-- HTTP/1.1 only on an opened connection. No HTTP/2, so no gRPC. A protocol
-  upgrade (WebSocket) to a listed host is refused with `501`
-- port 443 only. A listed host on another port is copied through unread
-- a request body up to 8 MiB is searched. A larger one is passed on as it
-  arrives, unsearched, with the request line and headers still replaced. A
-  compressed request body is not searched
-- responses are asked for uncompressed. `gzip` and `deflate` sent anyway are
-  inflated and checked; any other coding is refused with `502`
-- it connects to the host directly. A machine that reaches the internet only
-  through its own proxy cannot use it
-- a value under six characters cannot be removed from a response, and the launch
-  says which
-- the value is in the memory of the process running the proxy (PassBook, or the
-  broker), with the same-user caveat of the previous section. The key is
-  dropped when the launch ends, not wiped
-- a PassBook that is killed outright leaves the process running with no proxy,
-  and the directory of public certificates behind
-- certificates last 365 days. A process that runs longer has to be restarted
-- not on Windows
-
-The stand-in is `pbk-standin-` and 32 lower-case hexadecimal characters, new for
-each key on each launch. The process is given `HTTPS_PROXY` and `https_proxy`;
-`SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE` and `CURL_CA_BUNDLE`, each a file holding
-the roots that variable would otherwise have named plus the launch's own;
-`NODE_EXTRA_CA_CERTS`, the launch's own; and `NODE_USE_ENV_PROXY=1`. No system
-trust store, proxy setting or shell profile is touched.
-
-The store's format is not involved, so the single-file implementations
-(`passbook.py`, `passbook.mjs`) need nothing for this and do not load it.
-
-Reference implementation: `passbook_capture.py`.
-
 ## Pinning what may hold a key (optional)
 
 Not required for conformance. The bindings in the previous section constrain a
@@ -443,8 +322,8 @@ Reference implementation: `passbook_identity.py`.
 ## Nothing else may become required
 
 Every optional part of this standard — stamping, sealing, linking, brokering,
-access modes, using without reading, standing in, process hardening — must leave
-a bare implementation working on its own. Concretely:
+access modes, using without reading, process hardening — must leave a bare
+implementation working on its own. Concretely:
 
 1. an app that vendors only the store implementation resolves credentials with
    no daemon, no companion module and no other application installed

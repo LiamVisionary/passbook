@@ -2273,25 +2273,12 @@ def _sealed_run(command: list[str], who: str, args: argparse.Namespace,
               file=sys.stderr)
         return None
 
-    # `--capture` on this path is the broker's to do: it holds the values, so it
-    # runs the proxy. Asked for only when capturing, so every other run sends
-    # the request it always sent.
-    capture: dict[str, Any] = {}
-    if getattr(args, "capture", False):
-        # A broker started before capture existed ignores a field it has never
-        # heard of and hands the child real values, under a flag that promised
-        # it would not. So ask first, and refuse rather than find out.
-        if not passbook_broker.offers_capture():
-            return _fail("The running broker predates --capture and would give the command real values.",
-                         "Restart it:  passbook broker restart")
-        capture = {"capture": {"hosts": getattr(args, "capture_hosts", None) or {}}}
-
     # The broker spawns the child and keeps the values. We get bytes it has
     # already scrubbed, which is why this is a socket round trip rather than the
     # `os.execvpe` below: an exec would need the values in THIS process first.
     answer = passbook_broker.spawn_streaming(
         command, wanted, app=who, reason=reason or f"run {Path(command[0]).name}",
-        project=passbook.project(), **capture)
+        project=passbook.project())
     if answer is None:
         return _fail("The broker did not answer.", "Check it:  passbook broker start")
     if not answer.get("ok"):
@@ -2320,150 +2307,7 @@ def _sealed_run(command: list[str], who: str, args: argparse.Namespace,
                   f"(shortest: {', '.join(unscrubbed[:3])}…). "
                   f"Name what you need with --only to see the full list.",
                   file=sys.stderr)
-    if capture:
-        _capture_notes(answer.get("capture") or {}, int(answer.get("exit_code") or 0))
     return int(answer.get("exit_code") or 0)
-
-
-def _capture_refusal(args: argparse.Namespace) -> tuple[str, str] | None:
-    """Why this run cannot be captured as asked, before anything is read.
-
-    Returns (message, remedy), or None when it can. On the way it works out
-    where each key may be sent and leaves that on `args`, so the refusal for a
-    key with no host comes before the store is opened and before the command
-    exists: capture that quietly fell back to the real value would be the old
-    behaviour under a flag that promises the new one.
-    """
-    if not getattr(args, "capture", False):
-        return ("--capture-host needs --capture.", "")
-    if not args.only:
-        # Capture is a statement about particular keys: each needs a host it
-        # may go to. "Everything in the store" has no such list, and a run that
-        # captured some keys and passed the rest through as real values would
-        # look protected and not be.
-        return ("--capture needs --only KEY: it stands in for named keys, not the whole store.",
-                "Like:  passbook run --only KEY --capture --capture-host KEY=api.example.com -- <command>")
-    both = sorted(set(args.only).intersection(getattr(args, "keep", None) or []))
-    if both:
-        return (f"--keep and --capture both name {', '.join(both)}.",
-                "--keep says a name is the caller's own setting; --capture says it is a credential.")
-    try:
-        import passbook_capture
-    except ImportError:
-        return ("capture is not installed on this machine.", "")
-    try:
-        import passbook_access as access
-
-        policy = access.read_policy()
-    except ImportError:
-        policy = {}
-    try:
-        args.capture_hosts = passbook_capture.parse_host_flags(getattr(args, "capture_host", None))
-        args.capture_allow = passbook_capture.allowlist(args.only, policy, args.capture_hosts)
-    except passbook_capture.CaptureError as error:
-        return (str(error), error.remedy)
-    return None
-
-
-def _capture_notes(report: dict, code: int) -> None:
-    """After a captured command failed, say what capture saw. Names only.
-
-    A program that ignores HTTPS_PROXY, or will not take the per-launch
-    certificate, fails as an ordinary authentication error with nothing in it
-    that points here. This is the line that does.
-    """
-    if code == 0:
-        return
-    for host in sorted(report.get("distrusted") or {}):
-        print(f"note: the command refused the capture certificate for {host} "
-              "(it pins certificates, or trusts only the system store), so nothing was sent there.",
-              file=sys.stderr)
-    for host in sorted(report.get("unreachable") or {}):
-        print(f"note: capture could not reach {host}.", file=sys.stderr)
-    if not report.get("swapped") and not report.get("distrusted"):
-        print("note: no request carrying a captured key went through the capture proxy. "
-              "If this was an authentication failure, the command may not use HTTPS_PROXY.",
-              file=sys.stderr)
-
-
-def _captured_run(command: list[str], child: dict[str, str], args: argparse.Namespace) -> int:
-    """Run the command holding stand-ins, and stay to put the values on the wire.
-
-    `child` is the environment a plain run would have exec'd with, real values
-    and all. Each captured name in it is replaced by a stand-in, and this
-    process does not exec: it has to outlive the child, because it is the only
-    place the values now are. Everything capture made is gone when this
-    returns, and the child's exit code is ours.
-    """
-    import passbook_capture
-
-    values = {name: child.get(name, "") for name in args.only}
-    empty = [name for name in args.only if not values[name]]
-    if empty:
-        # Said above, by name, as absent or locked. Running anyway would give
-        # the command a variable that is not there and a proxy with nothing to
-        # swap, and the failure would read as a bad key.
-        return _fail(f"--capture has no value to stand in for: {', '.join(empty)}.",
-                     "The command was not run.")
-    try:
-        session = passbook_capture.Session(values, args.capture_allow, base_env=child).start()
-    except passbook_capture.CaptureError as error:
-        return _fail(str(error), error.remedy)
-    try:
-        for note in session.notes:
-            print(f"note: {note}.", file=sys.stderr)
-        short = session.unredactable()
-        if short:
-            print(f"note: {', '.join(short)} {'is' if len(short) == 1 else 'are'} "
-                  "too short to redact from responses.", file=sys.stderr)
-        code = _run_and_wait(command, {**child, **session.environment()})
-    finally:
-        report = session.report()
-        session.stop()
-    _capture_notes(report, code)
-    return code
-
-
-def _run_and_wait(command: list[str], environment: dict[str, str]) -> int:
-    """Start the command, wait for it, and return its exit code as a shell would."""
-    import signal
-
-    try:
-        process = subprocess.Popen(command, env=environment)  # noqa: S603 — argv, never a shell string
-    except FileNotFoundError:
-        return _fail(f"{command[0]}: command not found")
-    except OSError as error:
-        return _fail(f"Could not run {command[0]}: {error}")
-
-    def forward(signum, _frame):
-        try:
-            process.send_signal(signum)
-        except (OSError, ValueError):
-            pass
-
-    # A plain run execs, so a signal sent to it lands on the command. This one
-    # stays in between, and a SIGTERM that stopped here would leave the command
-    # running with a proxy that had just gone.
-    previous = {}
-    for name in ("SIGTERM", "SIGHUP"):
-        signum = getattr(signal, name, None)
-        if signum is None:
-            continue
-        try:
-            previous[signum] = signal.signal(signum, forward)
-        except (ValueError, OSError):  # not the main thread; nothing to forward from
-            pass
-    try:
-        while True:
-            try:
-                code = process.wait()
-                break
-            except KeyboardInterrupt:
-                continue  # Ctrl-C reached the command too; wait for it to finish
-    finally:
-        for signum, handler in previous.items():
-            signal.signal(signum, handler)
-    return 128 - code if code < 0 else code
 
 
 def _rerun_under_grant(app: str, reason: str, keys: Iterable[str] | None = None) -> int | None:
@@ -2614,22 +2458,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         return _fail("--push-command needs --used-in, to name the service it pushes to.")
     if getattr(args, "push_command", "") and len(set(args.only)) != 1:
         return _fail("--push-command pushes one key; give exactly one --only KEY.")
-    capturing = bool(getattr(args, "capture", False))
-    if capturing or getattr(args, "capture_host", None):
-        refusal = _capture_refusal(args)
-        if refusal:
-            return _fail(*refusal)
     try:
         plan = _run_recording_plan(command, args)
     except Exception as error:  # noqa: BLE001 — a bad label fails before anything runs
         return _fail(str(error))
-    if capturing and plan:
-        # This command's job is to put the key's VALUE somewhere: a secret
-        # store, a deploy target. Under capture it would put the stand-in
-        # there, exit 0, and be recorded as a service that holds the key.
-        return _fail("This command puts the key itself on a service, and under --capture "
-                     "it would put the stand-in there instead.",
-                     "Run it without --capture.")
     sealed = _sealed_run(command, who, args, reason)
     if sealed is not None:
         if plan and sealed == 0:
@@ -2706,8 +2538,6 @@ def cmd_run(args: argparse.Namespace) -> int:
     # to whoever asked for this environment, not to `passbook-run`. Set after
     # the merge so an explicit --app beats an inherited variable.
     child["PASSBOOK_APP"] = who
-    if capturing:
-        return _captured_run(command, child, args)
     # Windows has no exec. `os.execvpe` is emulated there by spawning and
     # exiting, so this process returns before the child has written anything
     # and whoever captured our output gets an empty string and a success code.
@@ -7625,13 +7455,6 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--push-stdin", dest="push_stdin", action="store_true",
                      help="with --push-command: also give it the value on stdin")
     run.add_argument("--note", default="", help="with --used-in: a note kept beside it")
-    run.add_argument("--capture", action="store_true",
-                     help="with --only: give the command a stand-in for each key and put "
-                          "the real value on the wire only to that key's own host")
-    run.add_argument("--capture-host", dest="capture_host", action="append", default=[],
-                     metavar="KEY=HOST",
-                     help="with --capture: a host this key may be sent to, api.example.com "
-                          "or .example.com; repeatable")
     run.add_argument("command", nargs=argparse.REMAINDER)
     run.set_defaults(func=cmd_run)
 

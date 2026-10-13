@@ -4,58 +4,6 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
-### `passbook run --capture`: a command that never holds the key
-
-- **The gap.** `passbook run --only A,B -- <command>` puts the real values in
-  the command's environment. Every dependency the command loads can read them
-  there, and so can any other process running as the same user. `proxy_request`
-  already avoids that, but only for a caller that knows to write `{{KEY}}`.
-- **Now, per launch and only when asked.** With `--capture`, each `--only` key's
-  variable holds a random stand-in (`pbk-standin-` and 32 hex characters).
-  PassBook runs a forward proxy on `127.0.0.1`, on a port the system picks, for
-  the life of that one command, and points the command at it with `HTTPS_PROXY`
-  and a credential made for the launch. A request to a host the key is allowed
-  for has the stand-in replaced by the value (request line, headers, Basic auth,
-  body) and goes on over verified TLS. A request to any other host is copied
-  through unread, with no certificate made for it. A response from an allowed
-  host has the value removed before the command sees it. Everything is gone
-  when the command exits, and its exit code is PassBook's.
-- **A key needs a host, or nothing starts.** The host comes from `passbook guard
-  KEY --to HOST` or from the new `--capture-host KEY=HOST` (repeatable; an exact
-  name or `.example.com`). The flag may narrow a guard and may not widen it. A
-  key with neither is refused by name. No host is guessed from a key's name.
-  `--capture` without `--only` is refused, and so is a captured key the store
-  does not hold.
-- **No change to the machine.** The command trusts the launch's certificate
-  through `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` (the roots
-  each would have used, plus ours) and `NODE_EXTRA_CA_CERTS`. Only public
-  certificates are written, to a `0600` file in a `0700` temporary directory.
-  The authority's private key is never written; TLS is handed it through a pipe.
-- **Sealed reads, guarded keys and pins.** There the broker holds the values, so
-  the broker runs the proxy. The grant it gives the command lists no key.
-  `passbook run` asks the running broker whether it knows `--capture` first, and
-  refuses with "restart it" if it does not: a broker from before this would
-  ignore the request and start the command with real values. **After updating,
-  restart the broker** (`passbook broker restart`) before
-  using `--capture` on such a machine.
-- **Limits.** Not a sandbox: the command can use the key against its own host
-  while it runs, and a host that reworks what it is sent can return the value
-  unrecognised. Only what goes through the proxy is replaced, so a program that
-  ignores `HTTPS_PROXY`, pins certificates or uses only the system trust store
-  fails to authenticate instead. Only a key sent as it is; one that signs
-  requests is not helped. HTTP/1.1 and port 443 only, no HTTP/2, a WebSocket
-  upgrade to a listed host is refused, and a request body over 8 MiB is sent on
-  unsearched. A command that stores the key somewhere (`--used-in`, a recognised
-  push) is refused, since it would store the stand-in. Not on Windows. The MCP
-  `run_with_credentials` tool does not offer it yet.
-- **Unchanged without the flag.** A run that does not pass `--capture` execs
-  with the environment it always had, sends the broker the request it always
-  sent, and never loads the new module. `passbook.py` and `passbook.mjs` are
-  untouched: the store's format is not involved.
-- New: `src/passbook_capture.py`, `tests/test_passbook_capture.py`,
-  `tests/capture_harness.py`, and `scripts/measure-capture.py`, which prints
-  where one made-up key can be seen under `run` and under `run --capture`.
-
 ## [1.10.11] — 2026-10-13
 
 ### A key added in the app reaches your other machines

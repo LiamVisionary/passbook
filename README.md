@@ -1221,6 +1221,79 @@ there to check the pin, and refusing would protect nothing on a store the
 process can already read — so it runs the command and says on stderr that it
 could not check.
 
+### A command that never holds the key
+
+`passbook run` puts real values in the command's environment. Every library the
+command loads can read them there, and so can any other process running as you.
+`--capture` gives the command a stand-in instead and has PassBook put the value
+on the wire itself:
+
+```bash
+passbook run --only OPENAI_API_KEY --capture \
+  --capture-host OPENAI_API_KEY=api.openai.com -- node agent.mjs
+```
+
+`node agent.mjs` finds `OPENAI_API_KEY=pbk-standin-…` and uses it as it would
+the real one. Its HTTPS goes through a proxy PassBook runs on `127.0.0.1` for
+that one launch. A request to `api.openai.com` has the stand-in replaced by the
+key and is sent on. A request to any other host is passed through unread, and a
+stand-in sent there arrives as a stand-in. If the API repeats the key in its
+answer, it comes back as `[redacted:OPENAI_API_KEY]`.
+
+A key has to have a host or nothing starts. Either name it on the launch, as
+above (`api.example.com`, or `.example.com` for a domain and everything under
+it), or bind it once and leave the flag off:
+
+```bash
+passbook guard OPENAI_API_KEY --to api.openai.com
+passbook run --only OPENAI_API_KEY --capture -- node agent.mjs
+```
+
+A guarded key is the broker's to hand out, so that form needs the broker
+running. There, and on a machine that seals reads, the broker runs the proxy.
+`--capture-host` may narrow a binding and may not widen it. PassBook does not
+guess a host from a key's name.
+
+Nothing on the machine is changed to make this work. The command is pointed at
+the proxy and at a certificate made for that launch through environment
+variables (`HTTPS_PROXY`, `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`,
+`CURL_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`), and all of it is gone when the command
+exits. `python scripts/measure-capture.py` runs one made-up key both ways
+against two local servers and prints where the value could be seen:
+
+```
+where                                                    passbook run          passbook run --capture
+-------------------------------------------------------  --------------------  ----------------------
+in the program's environment                             REAL VALUE            stand-in
+in the program's arguments                               absent                absent
+received by the key's own host (api.allowed.test)        REAL VALUE            REAL VALUE
+received by another host (other.example.test)            REAL VALUE            stand-in
+in the reply the program read (the host echoes the key)  REAL VALUE            redacted
+```
+
+**What it does not do.**
+
+- It is not a sandbox. The command can use the key against its own host for as
+  long as it runs, and a host that will rework what it is sent and return it (a
+  model asked to spell a string backwards) gives the value back in a form
+  nothing can recognise.
+- It only works on what goes through the proxy. A program that ignores
+  `HTTPS_PROXY`, pins certificates, or trusts the system's certificate store and
+  not these variables (Go programs on macOS, Java) will fail to authenticate. It
+  will not leak. curl, Python and Node were tried; nothing else was.
+- It only works for a key sent as it is: a bearer token, a query parameter, a
+  JSON or form field, Basic auth. A key that *signs* requests (AWS, a JWT) never
+  travels, so there is nothing to replace.
+- HTTP/1.1 and port 443 only. No HTTP/2 or gRPC, and a WebSocket upgrade to a
+  listed host is refused. A request body over 8 MiB is sent on unsearched.
+- A command that stores the key somewhere (anything with `--used-in`, or a push
+  PassBook recognises) is refused, because it would store the stand-in.
+- Where the command can read the store file, it still can. `passbook policy
+  --reads sealed` is what stops that.
+- Not on Windows yet.
+
+The full list is in `docs/SPEC.md`, under *Standing in for a credential*.
+
 ## Backup
 
 ```bash
@@ -1392,6 +1465,13 @@ But the command still holds the real value, and a command that can reach the
 network can send it wherever it likes — only binding the key to specific hosts
 constrains that.
 
+**`run --capture` keeps a value out of a command's environment, not away from
+the command.** The command holds a stand-in, the key goes only to its own host,
+and an echoed key comes back redacted. But the command can still use the key
+against that host while it runs, and a host that reworks what it is sent can
+hand the value back unrecognised. It narrows where a key can go. It does not
+confine a program that is trying to take it.
+
 **Refusing a debugger closes a hole that cost nothing to walk through.** The
 broker and its children hold credentials in memory, and `lldb` ships with macOS
 and attached to both on the first try — no exploit, no root. They now refuse
@@ -1482,6 +1562,7 @@ are the sort of promise that erodes one convenience at a time.
 | `passbook_mcp.py` | an MCP server, so agents can find all this |
 | `passbook_oauth.py` | sign-ins that stay alive, renewed on read |
 | `passbook_broker.py` | one door for reads, and a record of them |
+| `passbook_capture.py` | `run --capture`: a stand-in for the command, the key only to its host |
 | `passbook_stamp.py` | a tamper evident record of who read what |
 | `passbook_services.py` | where each key lives, and pushing it there again |
 | `passbook_sinks.py` | recognising a push in a command, and `--to` specs |

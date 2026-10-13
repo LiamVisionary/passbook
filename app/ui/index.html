@@ -180,6 +180,18 @@
   .mono { font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
   .prewrap { white-space: pre-wrap; }
 
+  /* ── tooltip ─────────────────────────────────────────────────────────── */
+  /* The app's own, in place of the operating system's: that one arrives after a second, in the
+     system's font and colours, and is the only thing in the window that does not look like the window.
+     Inverse of the page, so it reads as a label laid over it in either appearance. */
+  #tip { position: fixed; left: 0; top: 0; z-index: 1000; max-width: 300px; padding: 5px 9px; border-radius: 7px;
+    background: var(--ink1); color: var(--bg); font-size: 11.5px; line-height: 1.4; font-weight: 500;
+    box-shadow: 0 4px 14px rgba(0,0,0,.24); pointer-events: none; opacity: 0; visibility: hidden;
+    transform: translateY(2px); transition: opacity .12s ease, transform .12s ease;
+    white-space: normal; overflow-wrap: anywhere; }
+  #tip.show { opacity: 1; visibility: visible; transform: none; }
+  @media (prefers-reduced-motion: reduce) { #tip { transition: none; transform: none; } }
+
   /* ── balances ────────────────────────────────────────────────────────── */
   /* Amber is the one colour this page adds: between "fine" and "low" there is
      "getting there", and a meter with only two colours cannot say it. */
@@ -425,6 +437,12 @@
     align-self: stretch; cursor: default;
   }
   .keyrow .head .mono { flex: 0 1 auto; min-width: 0; overflow-wrap: anywhere; font-size: 12.5px; }
+  /* A name is text to select and copy: it takes the text cursor and a selection, where the rest of the
+     row stays a thing to click. The copy beside it is there for whoever would rather press once. */
+  .keyrow .keyname { cursor: text; user-select: text; -webkit-user-select: text; }
+  .iconbtn.namecopy { width: 22px; height: 22px; flex: 0 0 22px; margin-left: -5px; color: var(--ink3); opacity: .55; }
+  .iconbtn.namecopy svg { width: 13px; height: 13px; }
+  .keyrow:hover .iconbtn.namecopy, .iconbtn.namecopy:focus-visible, .iconbtn.namecopy.done { opacity: 1; }
   .keyrow .val {
     width: 100%; margin-top: 7px; font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
     padding: 5px 9px; border-radius: 7px; border: 1px solid var(--accent);
@@ -1807,7 +1825,10 @@ Use the copy button to put it on the clipboard."
       <div class="head">
         ${selectMode ? `<input type="checkbox" class="pick" data-pick="${esc(k)}"
           ${picked[k] ? "checked" : ""} aria-label="Select ${esc(k)}" />` : ""}
-        <span class="named" data-open="${esc(k)}"><span class="mono">${esc(k)}</span>
+        <span class="named" data-open="${esc(k)}"><span class="mono keyname">${esc(k)}</span>
+          <button class="iconbtn namecopy ${copied["name:" + k] ? "done" : ""}" data-copytext="${esc(k)}" data-copymark="name:${esc(k)}"
+            title="${copied["name:" + k] ? "Copied" : "Copy key name"}"
+            aria-label="Copy the name ${esc(k)}">${icon(copied["name:" + k] ? "check" : "copy")}</button>
           ${shown ? "" : `<span class="masked" title="Hidden">••••••••••</span>`}
           ${bare ? `<span class="bare" title="This value is not encrypted. Anything running as you can read it, signed in or not.">${icon("unlock", "tinyicon")} readable</span>` : ""}
           ${isGuarded(k) ? `<span class="bare guarded" title="${esc(guardedWhy(k))}">${icon("lock", "tinyicon")} guarded</span>` : ""}</span>
@@ -1939,6 +1960,26 @@ Use the copy button to put it on the clipboard."
    *  every node — a class set on the button would be gone by the next tick of
    *  the background refresh.
    */
+  let openTimer = 0;
+  /** Whether somebody has text selected inside `root` right now. */
+  function selectionIn(root) {
+    const chosen = window.getSelection?.();
+    if (!chosen || chosen.isCollapsed || !String(chosen).trim()) return false;
+    return !!chosen.anchorNode && root.contains(chosen.anchorNode);
+  }
+
+  /** Open or close a key's settings. */
+  function toggleKeyRow(k) {
+    if (expanded[k]) delete expanded[k]; else expanded[k] = true;
+    // Leaving a row closes whatever editor it had open, so reopening it
+    // starts from the summary rather than half-way through a change.
+    if (!expanded[k]) {
+      if (audienceFor === k) { audienceFor = null; audienceDraft = null; }
+      if (projectsFor === k) { projectsFor = null; projectsDraft = null; }
+    }
+    paint();
+  }
+
   function markCopied(mark) {
     if (!mark) return;
     copied[mark] = true;
@@ -2897,7 +2938,7 @@ passbook oauth connect google:work</pre>
       const h = Math.max(p.v / top * (tall - 6), p.v > 0 ? 2 : 0);
       const on = i >= days.length - lit;
       return `<rect x="${(i * w + w * 0.14).toFixed(2)}%" y="${(tall - h).toFixed(1)}" width="${(w * 0.72).toFixed(2)}%" height="${h.toFixed(1)}" rx="1.5"
-        class="${on ? "on" : ""}${i === days.length - 1 ? " now" : ""}"><title>${esc(shortDay(p.d))} · ${esc(amount(p.v, unit))}</title></rect>`;
+        class="${on ? "on" : ""}${i === days.length - 1 ? " now" : ""}" data-tip="${esc(shortDay(p.d))} · ${esc(amount(p.v, unit))}"></rect>`;
     }).join("");
     return `<div class="daybars"><svg class="bars" width="100%" height="${tall}" role="img" aria-label="Spend per day">
       <line x1="0" x2="100%" y1="${tall - 0.5}" y2="${tall - 0.5}" class="base"/>${bars}</svg>
@@ -5517,16 +5558,22 @@ passbook oauth connect google:work</pre>
 
     // Opening a key's settings repaints only to add the block — the search box
     // and any typed-in value are rebuilt from state, so nothing is lost.
-    main.querySelectorAll("[data-open]").forEach((b) => b.onclick = () => {
+    //
+    // The name is also text somebody may want to select and copy. Opening the row repaints it, and a
+    // repaint drops the selection, so a drag across a name ended with the click that follows a drag
+    // opening the row and the selection gone ("when I do it deselects right away", Liam 2026-10-13); a
+    // double-click to take the whole name toggled the row twice. So a click that leaves text selected
+    // opens nothing, and a click on the name waits a moment to see whether it is the first of two.
+    main.querySelectorAll("[data-open]").forEach((b) => b.onclick = (event) => {
       const k = b.dataset.open;
-      if (expanded[k]) delete expanded[k]; else expanded[k] = true;
-      // Leaving a row closes whatever editor it had open, so reopening it
-      // starts from the summary rather than half-way through a change.
-      if (!expanded[k]) {
-        if (audienceFor === k) { audienceFor = null; audienceDraft = null; }
-        if (projectsFor === k) { projectsFor = null; projectsDraft = null; }
+      if (selectionIn(main)) return;
+      if (b.classList.contains("named")) {
+        clearTimeout(openTimer);
+        if (event.detail > 1) return;
+        openTimer = setTimeout(() => { if (!selectionIn(main)) toggleKeyRow(k); }, 240);
+        return;
       }
-      paint();
+      toggleKeyRow(k);
     });
     main.querySelectorAll("[data-selectmode]").forEach((b) => b.onclick = () => {
       selectMode = !selectMode;
@@ -5817,7 +5864,9 @@ passbook oauth connect google:work</pre>
       catch (e) { history[k] = []; notice = String(e); }
       paint();
     });
-    main.querySelectorAll("[data-copytext]").forEach((b) => b.onclick = async () => {
+    main.querySelectorAll("[data-copytext]").forEach((b) => b.onclick = async (event) => {
+      // Some of these sit inside a row that opens on a click (the copy beside a key's name).
+      event.stopPropagation();
       try { await navigator.clipboard.writeText(b.dataset.copytext); markCopied(b.dataset.copymark); }
       catch (e) { notice = String(e); }
       paint();
@@ -6017,6 +6066,90 @@ passbook oauth connect google:work</pre>
     }
     catch (e) { main.innerHTML = `<h2>PassBook</h2><p class="lede err">${esc(String(e))}</p>`; }
   }
+  // ── tooltips ───────────────────────────────────────────────────────────
+  // One tooltip for the whole window. Markup keeps saying `title="…"`, which is where a description of
+  // a control belongs and what a screen reader already reads; the moment such an element appears its
+  // title is taken over (`data-tip`), so the system's tooltip never has anything to show. An icon-only
+  // control with no other name keeps the words as its `aria-label`.
+  const tip = document.createElement("div");
+  tip.id = "tip";
+  tip.setAttribute("role", "tooltip");
+  document.body.appendChild(tip);
+  let tipFor = null, tipTimer = 0, tipWatch = 0, tipHidAt = 0;
+  const TIP_DELAY = 380;
+
+  function adoptTitles(root) {
+    const found = root.matches?.("[title]") ? [root] : [];
+    for (const el of [...found, ...(root.querySelectorAll?.("[title]") || [])]) {
+      const words = el.getAttribute("title");
+      el.removeAttribute("title");
+      if (!words) continue;
+      el.dataset.tip = words;
+      if (!el.getAttribute("aria-label") && !el.textContent.trim()) el.setAttribute("aria-label", words);
+    }
+  }
+  adoptTitles(document.body);
+  new MutationObserver((changes) => {
+    for (const change of changes) {
+      if (change.type === "attributes") adoptTitles(change.target);
+      else change.addedNodes.forEach((node) => { if (node.nodeType === 1) adoptTitles(node); });
+    }
+  }).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["title"] });
+
+  function hideTip() {
+    clearTimeout(tipTimer); clearInterval(tipWatch);
+    if (tip.classList.contains("show")) tipHidAt = Date.now();
+    tip.classList.remove("show");
+    tipFor = null;
+  }
+
+  function showTip(el) {
+    const words = el.dataset.tip;
+    if (!words || !el.isConnected) return;
+    tip.textContent = words;
+    // Above the thing it describes, centred on it; below when there is no room above; never off an edge.
+    const at = el.getBoundingClientRect(), box = tip.getBoundingClientRect(), gap = 7, edge = 8;
+    const above = at.top - box.height - gap;
+    const top = above >= edge ? above : Math.min(at.bottom + gap, window.innerHeight - box.height - edge);
+    const left = Math.max(edge, Math.min(at.left + at.width / 2 - box.width / 2, window.innerWidth - box.width - edge));
+    tip.style.transform = "";
+    tip.style.left = `${Math.round(left)}px`;
+    tip.style.top = `${Math.round(top)}px`;
+    tip.classList.add("show");
+    // A repaint can take the element away from under a pointer that never moved.
+    clearInterval(tipWatch);
+    tipWatch = setInterval(() => { if (!tipFor || !tipFor.isConnected) hideTip(); }, 200);
+  }
+
+  function wantTip(el) {
+    if (el === tipFor) return;
+    hideTip();
+    if (!el) return;
+    tipFor = el;
+    // Moving along a row of buttons, the next one answers at once: the wait is for arriving, not for reading.
+    const wait = Date.now() - tipHidAt < 400 ? 60 : TIP_DELAY;
+    tipTimer = setTimeout(() => { if (tipFor === el) showTip(el); }, wait);
+  }
+
+  const tipTarget = (node) => node?.closest?.("[data-tip], [title]") || null;
+  document.addEventListener("mouseover", (event) => {
+    const el = tipTarget(event.target);
+    if (el) adoptTitles(el);
+    wantTip(el && el.dataset.tip ? el : null);
+  });
+  document.addEventListener("mouseout", (event) => {
+    if (tipFor && !tipFor.contains(event.relatedTarget)) hideTip();
+  });
+  // By keyboard too, but not for a click that happens to focus something.
+  document.addEventListener("focusin", (event) => {
+    const el = tipTarget(event.target);
+    if (el && el.dataset.tip && event.target.matches?.(":focus-visible")) wantTip(el);
+  });
+  document.addEventListener("focusout", hideTip);
+  for (const gone of ["mousedown", "keydown", "wheel"]) document.addEventListener(gone, hideTip, { passive: true });
+  document.addEventListener("scroll", hideTip, { capture: true, passive: true });
+  window.addEventListener("blur", hideTip);
+
   boot();
   // A poll that repaints unconditionally repaints for nothing nearly every
   // time. Most five-second windows change nothing at all, and a repaint of a
@@ -6036,6 +6169,8 @@ passbook oauth connect google:work</pre>
     if (busy || confirming || audienceFor || bulkConfirm
         || Object.keys(picked).length || Object.keys(connecting).length
         || Object.keys(revealing).length) return;
+    // Nor text somebody is in the middle of selecting to copy: a repaint drops the selection.
+    if (selectionIn(main)) return;
     // Anything half-typed must survive the refresh — a key's name as much as
     // its value. Naming the few fields worth protecting was the earlier
     // approach, and it missed every field nobody thought to name: the repaint

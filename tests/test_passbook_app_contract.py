@@ -1199,3 +1199,19 @@ def test_a_key_added_in_the_window_is_sent_to_the_other_machines():
     for call in adds:
         assert '"--stdin"' in call and '"--sync"' in call, f"{call} would keep the key on this machine"
 
+
+def test_a_key_name_can_be_selected_and_copied_and_no_tooltip_is_the_systems():
+    """Three things asked for together (Liam, 2026-10-13), each of which a later edit could quietly undo."""
+    page = UI.read_text(encoding="utf-8")
+    row = page[page.index("function keyRow("):page.index("function markCopied(")]
+    # The name is its own selectable element, with a copy button that carries the NAME, not a value.
+    assert 'class="mono keyname"' in row
+    assert "iconbtn namecopy" in row and 'data-copytext="${esc(k)}" data-copymark="name:${esc(k)}"' in row, \
+        "the copy button beside a key's name"
+    assert "Copy key name" in row
+    # Opening a row gives way to a selection, and so does the background refresh.
+    assert page.count("selectionIn(main)") >= 3
+    # Every title is taken over as it appears; nothing is left for the operating system to show.
+    assert 'attributeFilter: ["title"]' in page and "function adoptTitles(" in page
+    assert page.count("<title>") == 1, "only the document's own; an SVG <title> is a system tooltip too, use data-tip"
+

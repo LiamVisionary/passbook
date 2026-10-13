@@ -4,6 +4,8 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [1.10.12] — 2026-10-13
+
 ### `passbook run --capture`: a command that never holds the key
 
 - **The gap.** `passbook run --only A,B -- <command>` puts the real values in
@@ -55,6 +57,34 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 - New: `src/passbook_capture.py`, `tests/test_passbook_capture.py`,
   `tests/capture_harness.py`, and `scripts/measure-capture.py`, which prints
   where one made-up key can be seen under `run` and under `run --capture`.
+
+### Key names you can select and copy, and the app's own tooltips
+
+- **Asked for.** Liam, 2026-10-13: "i should be able to highlight a key name to
+  copy it but when i do it deselects right away… there should be a copy icon
+  button next to the key name with a hover over tooltip that says 'copy key
+  name'. we also need proper custom tooltips for all the other tooltips, i dont
+  like the system os tooltip."
+- **Selecting a name.** The name sat inside the part of the row that opens its
+  settings on a click. Opening repaints the row and a repaint drops the
+  selection, so the click that ends a drag opened the row and the selection was
+  gone; a double-click toggled it twice. Now a click that leaves text selected
+  opens nothing, a click on the name waits a quarter of a second to see whether
+  it is the first of two, and the background refresh does not repaint under a
+  selection. The name takes the text cursor.
+- **Copy key name.** A small copy button beside every name. It copies the name
+  (never a value), shows a tick, and does not open the row.
+- **Tooltips.** One tooltip for the whole window, in the window's own type and
+  colours, in place of the operating system's. Markup still says `title`; each
+  one is taken over the moment its element appears, so the system has nothing to
+  show (303 of them on the Keys page before, none now, on every page). It
+  appears after a short wait, at once when moving along a row of buttons, sits
+  above the control or below when there is no room, stays inside the window,
+  works for a disabled control and from the keyboard, and goes on a click, a
+  key, a scroll, or when a repaint takes the control away.
+- **Checked** in WebKit at the window's size: sixteen cases, including a
+  double-click and a drag across a name on the released page (selection lost)
+  and on this one (kept). Not yet seen in the app's own window.
 
 ## [1.10.11] — 2026-10-13
 

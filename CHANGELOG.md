@@ -4,6 +4,28 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [1.10.11] — 2026-10-13
+
+### A key added in the app reaches your other machines
+
+- **Reported.** Liam, 2026-10-13: PassBook open on two paired Macs, a key added
+  in the app on each, "neither machine is showing the other's key… they should
+  auto-sync".
+- **Cause.** `passbook add` sends a typed key to the other machines at once, but
+  keeps a piped one local unless told `--sync` (a piped add is how a peer applies
+  a push, and echoing it back would bounce every change round the fleet). The
+  window adds through a pipe, so a key added there was never sent. The other
+  machines could still pull it, but a collector serves from the grant it started
+  with, and that was older than the key, so they were told the machine "holds
+  it, cannot serve it" until the collector next restarted.
+- **Fix.** Both adds the window makes (Add key, and Add to PassBook links) pass
+  `--sync`. A push that cannot reach a machine is queued as before; it never
+  fails the add.
+- Two further causes were on the HivemindOS side and are fixed there: launchers
+  left pointing at a path that no longer existed made one Mac's collector too
+  slow to answer a pull at all, and a collector now restarts for a fresh grant
+  when a key is added after it started.
+
 ## [1.10.10] — 2026-10-13
 
 ### Dark mode you can choose

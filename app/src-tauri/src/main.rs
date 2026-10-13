@@ -333,7 +333,11 @@ fn add_key(name: String, value: String, replace: bool) -> Result<Value, String> 
     if name.trim().is_empty() || value.trim().is_empty() {
         return Err("A key needs a name and a value.".into());
     }
-    let mut args = vec!["add", "--stdin"];
+    // `--sync`: a key a person adds in this window goes to their other machines now, as one typed at a
+    // terminal does. Piped adds stay local by default (that is how a peer applies a push), and this is a
+    // piped add, so until 1.10.11 a key added here never left the machine: the other machines could only
+    // pull it, and a collector serves from the grant it started with, which predates the key.
+    let mut args = vec!["add", "--stdin", "--sync"];
     if replace {
         args.push("--replace");
     }
@@ -2233,7 +2237,11 @@ fn apply_ask(id: String, typed: Vec<(String, String)>, replace: bool) -> Result<
         return Err("Nothing to add.".into());
     }
 
-    let mut args = vec!["add", "--stdin"];
+    // `--sync`: a key a person adds in this window goes to their other machines now, as one typed at a
+    // terminal does. Piped adds stay local by default (that is how a peer applies a push), and this is a
+    // piped add, so until 1.10.11 a key added here never left the machine: the other machines could only
+    // pull it, and a collector serves from the grant it started with, which predates the key.
+    let mut args = vec!["add", "--stdin", "--sync"];
     if replace {
         args.push("--replace");
     }

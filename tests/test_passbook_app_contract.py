@@ -1184,3 +1184,18 @@ def test_no_block_on_the_balances_page_is_pulled_over_another():
     assert ".balfilters" in styles and ".stats4" in styles and ".brow" in styles, "the balances styles moved; point this test at them"
     pulled = re.findall(r"^\s*([^{}\n]+)\{[^}]*margin[a-z-]*:[^;}]*-\d", styles, re.M)
     assert not pulled, f"negative margins on the Balances page: {pulled}"
+
+
+def test_a_key_added_in_the_window_is_sent_to_the_other_machines():
+    """A piped `add` stays on this machine unless asked, and the window's add is piped.
+
+    Liam added a key in the app on each of two paired Macs and neither showed the other's (2026-10-13):
+    nothing pushed it, and each machine's collector serves from the grant it started with, which was
+    older than the key. Every add the window makes says `--sync`.
+    """
+    source = RUST.read_text(encoding="utf-8")
+    adds = re.findall(r'vec!\["add",[^\]]*\]', source)
+    assert len(adds) >= 2, "the window's add commands moved; point this test at them"
+    for call in adds:
+        assert '"--stdin"' in call and '"--sync"' in call, f"{call} would keep the key on this machine"
+

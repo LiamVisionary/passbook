@@ -22,8 +22,10 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
   `history_for_key` read on into the archives when the ledger is short, and
   `usage_by_key` keeps counting every read: what the archived rows contributed
   is saved as a base (`credential-access-usage-base.json`) when they leave.
-- Tests: `tests/test_passbook_ledger_archive.py` (5). Full suite: 1546 passed,
-  3 skipped.
+- **No read waits on it.** Moving the ledger aside happens under the ledger
+  lock, which every credential read takes; gzipping and pruning older segments
+  happen after it is released, since packing a large segment takes seconds.
+- Tests: `tests/test_passbook_ledger_archive.py` (6). Full suite: 1547 passed, 3 skipped.
 
 ## [1.10.13] — 2026-10-13
 

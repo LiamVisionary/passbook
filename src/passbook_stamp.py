@@ -291,7 +291,7 @@ def _write_json_atomically(target: Path, value: Any) -> None:
     os.replace(temporary, target)
 
 
-def _archive_if_large(path: Path, *, at_bytes: int, kept: int) -> Path | None:
+def _archive_if_large(path: Path, *, at_bytes: int) -> Path | None:
     """Move a ledger past `at_bytes` into the archive. Called with the lock held."""
     try:
         if path.stat().st_size < at_bytes:
@@ -310,18 +310,32 @@ def _archive_if_large(path: Path, *, at_bytes: int, kept: int) -> Path | None:
     taken = [number for when, number in map(_segment_order, _archives(path)) if when == name]
     target = folder / (f"{name}-{max(taken) + 1}.jsonl" if taken else f"{name}.jsonl")
     os.replace(path, target)
-    for older in _archives(path):
-        if older.name.endswith(".jsonl") and older != target:
-            packed = older.with_name(older.name + ".gz")
-            temporary = packed.with_name(packed.name + ".tmp")
+    return target
+
+
+def _pack_and_prune(path: Path, *, kept: int) -> None:
+    """Gzip every archived segment but the newest, then drop all but `kept`.
+
+    Runs after the lock is released: packing a large segment takes seconds, and
+    every credential read waits on that lock. It touches only segments already
+    archived, and two processes doing it at once each finish or find it done.
+    """
+    segments = _archives(path)
+    for older in segments[:-1]:
+        if not older.name.endswith(".jsonl"):
+            continue
+        packed = older.with_name(older.name + ".gz")
+        temporary = packed.with_name(f"{packed.name}.{os.getpid()}.tmp")
+        try:
             with older.open("rb") as source, gzip.open(temporary, "wb") as sink:
                 while chunk := source.read(1 << 20):
                     sink.write(chunk)
             os.replace(temporary, packed)
             older.unlink()
+        except FileNotFoundError:
+            temporary.unlink(missing_ok=True)  # another process packed it first
     for gone in _archives(path)[:-kept] if kept > 0 else []:
-        gone.unlink()
-    return target
+        gone.unlink(missing_ok=True)
 
 
 # ── writing ────────────────────────────────────────────────────────────────
@@ -363,10 +377,11 @@ def stamp(
     names = sorted({str(key).strip() for key in keys if str(key).strip()})
 
     path = proof_path(root)
+    archived = None
     with _FileLock(path.with_suffix(path.suffix + ".lock")):
         previous = _previous_hash(path)
         try:
-            _archive_if_large(path, at_bytes=ARCHIVE_AT_BYTES, kept=ARCHIVES_KEPT)
+            archived = _archive_if_large(path, at_bytes=ARCHIVE_AT_BYTES)
         except OSError:
             pass  # a ledger that cannot be archived is still written to
         row: dict[str, Any] = {
@@ -389,6 +404,11 @@ def stamp(
         with open(path, "a", encoding="utf-8") as stream:
             stream.write(line + "\n")
         _tighten(path)
+    if archived is not None:
+        try:
+            _pack_and_prune(path, kept=ARCHIVES_KEPT)
+        except OSError:
+            pass  # unpacked segments are still read and verified
     return row
 
 

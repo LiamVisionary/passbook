@@ -89,3 +89,28 @@ def test_a_small_ledger_is_never_archived(tmp_path):
 
     assert passbook_stamp._archives(tmp_path / passbook_stamp.PROOF_FILENAME) == []
     assert passbook_stamp.verify_chain(root=tmp_path)["segments"] == 1
+
+
+def test_packing_runs_after_the_lock_is_released(ledger, monkeypatch):
+    """Packing a large segment takes seconds and every credential read waits on the lock."""
+    held: list[bool] = []
+    real_pack = passbook_stamp._pack_and_prune
+    lock_file = ledger / (passbook_stamp.PROOF_FILENAME + ".lock")
+
+    fcntl = pytest.importorskip("fcntl")  # POSIX locking; Windows has none to hold
+
+    def watching(path, *, kept):
+        with open(lock_file, "a+") as probe:
+            try:
+                fcntl.flock(probe.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(probe.fileno(), fcntl.LOCK_UN)
+                held.append(False)
+            except BlockingIOError:
+                held.append(True)
+        real_pack(path, kept=kept)
+
+    monkeypatch.setattr(passbook_stamp, "_pack_and_prune", watching)
+    _stamp(ledger, 10)
+
+    assert held and not any(held), "the ledger lock was free while segments were packed"
+    assert passbook_stamp.verify_chain(root=ledger)["ok"] is True

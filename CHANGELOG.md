@@ -4,6 +4,26 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+### The access ledger is archived in segments, so it stops growing without bound
+
+- **The problem.** Every credential read is a row, and the desktop app reads
+  about ten times a minute: one Mac's `credential-access-proofs.jsonl` reached
+  1.3GB in a month (2026-10-14).
+- **Now.** Past 64MB the ledger moves into `credential-access-proofs/` beside
+  it and a new one starts. The newest archived segment stays plain so reading
+  recent rows stays cheap; older ones are gzipped; the newest 16 are kept.
+- **The chain is unbroken.** The new file's first row chains onto the archived
+  file's last, and `verify_chain` walks every segment in order as one chain
+  (and reports `segments`). An edit inside an archived segment is still found.
+  Dropping the oldest segment is the same as dropping the oldest rows, which the
+  chain never detected: it proves what is written was not altered, not that
+  nothing came before it.
+- **Nothing a reader relied on goes missing.** `read_stamps` and
+  `history_for_key` read on into the archives when the ledger is short, and
+  `usage_by_key` keeps counting every read: what the archived rows contributed
+  is saved as a base (`credential-access-usage-base.json`) when they leave.
+- Tests: `tests/test_passbook_ledger_archive.py` (5). Full suite: 1546 passed,
+  3 skipped.
 
 ## [1.10.13] — 2026-10-13
 

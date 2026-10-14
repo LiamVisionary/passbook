@@ -28,6 +28,7 @@ other proof — one ledger format, one story about provenance.
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import json
 import os
@@ -43,6 +44,7 @@ except ImportError:  # pragma: no cover — exercised on Windows only
     fcntl = None  # type: ignore[assignment]
 
 __all__ = [
+    "ARCHIVE_AT_BYTES",
     "PROOF_FILENAME",
     "ChainBreak",
     "canonical_json",
@@ -228,6 +230,100 @@ class _FileLock:
         self._handle = None
 
 
+# ── keeping the ledger to a size ───────────────────────────────────────────
+#
+# Every credential read is a row, and the desktop app reads about ten times a
+# minute: one Mac's ledger reached 1.3GB in a month (2026-10-14). Past
+# ARCHIVE_AT_BYTES the ledger moves into the archive folder beside it and a new
+# one starts. The chain does not break there: `stamp` reads the last row's hash
+# before it moves the file, so the new file's first row chains onto the archived
+# one, and `verify_chain` walks the segments in order as one chain. The newest
+# archive stays plain so a tail read stays cheap; older ones are gzipped, and
+# only the newest ARCHIVES_KEPT are kept. Removing the oldest segment is the
+# same as removing the oldest rows, which the chain never could detect: it
+# proves what is written was not altered, not that nothing came before it.
+# Usage counts survive it: what the archived rows contributed is saved as the
+# base that `usage_by_key` folds the current file onto.
+
+ARCHIVE_AT_BYTES = 64 * 1024 * 1024
+ARCHIVES_KEPT = 16
+ARCHIVE_DIRNAME = "credential-access-proofs"
+USAGE_BASE_FILENAME = "credential-access-usage-base.json"
+
+
+def _archive_dir(path: Path) -> Path:
+    return path.with_name(ARCHIVE_DIRNAME)
+
+
+def _archives(path: Path) -> list[Path]:
+    """The archived segments, oldest first. Names are UTC times, so they sort."""
+    folder = _archive_dir(path)
+    try:
+        found = [item for item in folder.iterdir() if item.name.endswith((".jsonl", ".jsonl.gz"))]
+    except OSError:
+        return []
+    return sorted(found, key=_segment_order)
+
+
+def _segment_order(segment: Path) -> tuple[str, int]:
+    """By time, then by the suffix two segments archived in one second get.
+
+    A plain name sort puts "…Z-1.jsonl" before "…Z.jsonl.gz" ("-" sorts before
+    "."), which would read the second segment of that second first.
+    """
+    stem = segment.name.split(".", 1)[0]
+    when, _, number = stem.partition("-")
+    return when, int(number) if number.isdigit() else 0
+
+
+def _segment_text(segment: Path) -> str:
+    if segment.name.endswith(".gz"):
+        with gzip.open(segment, "rt", encoding="utf-8", newline="") as stream:
+            return stream.read()
+    return segment.read_text(encoding="utf-8")
+
+
+def _write_json_atomically(target: Path, value: Any) -> None:
+    temporary = target.with_name(f"{target.name}.{os.getpid()}.tmp")
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        json.dump(value, stream, ensure_ascii=False, separators=(",", ":"))
+    os.replace(temporary, target)
+
+
+def _archive_if_large(path: Path, *, at_bytes: int, kept: int) -> Path | None:
+    """Move a ledger past `at_bytes` into the archive. Called with the lock held."""
+    try:
+        if path.stat().st_size < at_bytes:
+            return None
+    except OSError:
+        return None
+    # Counts first, while every row they come from is still in the ledger.
+    _write_json_atomically(path.with_name(USAGE_BASE_FILENAME), {
+        "version": _USAGE_VERSION, "seen": usage_by_key(root=path.parent),
+    })
+    folder = _archive_dir(path)
+    folder.mkdir(mode=0o700, exist_ok=True)
+    name = _now().replace("-", "").replace(":", "")
+    # Always after every segment of the same second, even one already pruned
+    # away: reusing a freed name would sort a new segment before older ones.
+    taken = [number for when, number in map(_segment_order, _archives(path)) if when == name]
+    target = folder / (f"{name}-{max(taken) + 1}.jsonl" if taken else f"{name}.jsonl")
+    os.replace(path, target)
+    for older in _archives(path):
+        if older.name.endswith(".jsonl") and older != target:
+            packed = older.with_name(older.name + ".gz")
+            temporary = packed.with_name(packed.name + ".tmp")
+            with older.open("rb") as source, gzip.open(temporary, "wb") as sink:
+                while chunk := source.read(1 << 20):
+                    sink.write(chunk)
+            os.replace(temporary, packed)
+            older.unlink()
+    for gone in _archives(path)[:-kept] if kept > 0 else []:
+        gone.unlink()
+    return target
+
+
 # ── writing ────────────────────────────────────────────────────────────────
 
 
@@ -269,6 +365,10 @@ def stamp(
     path = proof_path(root)
     with _FileLock(path.with_suffix(path.suffix + ".lock")):
         previous = _previous_hash(path)
+        try:
+            _archive_if_large(path, at_bytes=ARCHIVE_AT_BYTES, kept=ARCHIVES_KEPT)
+        except OSError:
+            pass  # a ledger that cannot be archived is still written to
         row: dict[str, Any] = {
             "kind": PROOF_KIND,
             "specVersion": SPEC_VERSION,
@@ -343,10 +443,21 @@ def _tail_lines(path: Path, limit: int) -> list[str]:
 def read_stamps(*, limit: int = 200, root: Path | None = None) -> list[dict[str, Any]]:
     """The most recent receipts, newest last. Safe to show anyone."""
     path = proof_path(root)
+    wanted = max(1, limit)
     try:
-        lines = _tail_lines(path, max(1, limit))
+        lines = _tail_lines(path, wanted) if path.exists() else []
     except (OSError, UnicodeDecodeError):
-        return []
+        lines = []
+    # Just after an archive the ledger is short: the rest come from the segments.
+    for segment in reversed(_archives(path)):
+        if len(lines) >= wanted:
+            break
+        try:
+            older = (_tail_lines(segment, wanted - len(lines)) if segment.name.endswith(".jsonl")
+                     else [line for line in _segment_text(segment).split("\n") if line.strip()])
+        except (OSError, UnicodeDecodeError, EOFError):
+            continue
+        lines = older[-(wanted - len(lines)):] + lines
     rows = []
     for line in lines:
         try:
@@ -386,6 +497,16 @@ def _fold_bytes(seen: dict[str, dict[str, Any]], raw: bytes) -> None:
             continue
         if isinstance(row, dict):
             _fold_usage(seen, row)
+
+
+def _usage_base(path: Path) -> dict[str, dict[str, Any]]:
+    """What the archived rows contributed, saved when they were archived."""
+    try:
+        saved = json.loads(path.with_name(USAGE_BASE_FILENAME).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    seen = saved.get("seen") if isinstance(saved, dict) and saved.get("version") == _USAGE_VERSION else None
+    return seen if isinstance(seen, dict) else {}
 
 
 def usage_by_key(*, root: Path | None = None, limit: int | None = None) -> dict[str, Any]:
@@ -441,7 +562,7 @@ def usage_by_key(*, root: Path | None = None, limit: int | None = None) -> dict[
             tail = handle.read(offset - probe_start)
             valid = cached.get("tail") == proof_sha256(tail.decode("utf-8", errors="replace"))
         if not valid:
-            offset, seen = 0, {}
+            offset, seen = 0, _usage_base(path)
 
         # In chunks: the first fold of a large ledger is the whole file.
         handle.seek(offset)
@@ -519,15 +640,22 @@ def verify_chain(*, root: Path | None = None) -> dict[str, Any]:
     not been altered since.
     """
     path = proof_path(root)
-    try:
-        raw = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
+    segments = _archives(path) + ([path] if path.exists() else [])
+    texts: list[str] = []
+    for segment in segments:
+        try:
+            texts.append(_segment_text(segment))
+        except (OSError, UnicodeDecodeError, EOFError):
+            texts.append("")  # an unreadable segment shows up as the break after it
+    if not segments:
         return {"ok": True, "rows": 0, "breaks": [], "detail": "No access ledger on this machine yet."}
 
+    # The archived segments and the ledger, oldest first, are one chain.
+    lines = (item for text in texts for item in text.split("\n") if item.strip())
     breaks: list[ChainBreak] = []
     expected_previous: str | None = None
     count = 0
-    for index, line in enumerate((item for item in raw.split("\n") if item.strip()), start=1):
+    for index, line in enumerate(lines, start=1):
         count += 1
         try:
             row = json.loads(line)
@@ -550,6 +678,7 @@ def verify_chain(*, root: Path | None = None) -> dict[str, Any]:
         "rows": count,
         "breaks": breaks,
         "path": str(path),
+        "segments": len(segments),
         "detail": "Every access row chains onto the one before it."
         if not breaks
         else f"{len(breaks)} break(s) — the ledger has been altered since it was written.",

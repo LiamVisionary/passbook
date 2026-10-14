@@ -4,6 +4,8 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [1.10.14] — 2026-10-14
+
 ### The access ledger is archived in segments, so it stops growing without bound
 
 - **The problem.** Every credential read is a row, and the desktop app reads

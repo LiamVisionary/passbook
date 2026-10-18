@@ -4,6 +4,8 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [1.10.16] — 2026-10-18
+
 ### Several keys for one provider are several accounts, each named, each with its own balance key
 
 Liam, 2026-10-18, on 1.10.15: "i have multiple antrhopic api keys, which one is this for? ... users might have

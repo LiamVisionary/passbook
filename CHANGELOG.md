@@ -4,6 +4,8 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [1.10.19] — 2026-10-19
+
 ### Anthropic credits from the Console, with a sign-in PassBook keeps for Balances only
 
 Liam, 2026-10-19: "let me sign in to the Anthropic Console in PassBook so it reads the live credit balance the

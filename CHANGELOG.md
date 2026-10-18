@@ -4,6 +4,8 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [1.10.17] — 2026-10-18
+
 ### Anthropic: say which accounts can be read, and ask for the key that can read them
 
 Liam, on 1.10.16: "my claude liamnabut key has organization scope, most do, i believe, so most should be able

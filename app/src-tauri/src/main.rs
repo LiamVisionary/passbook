@@ -923,7 +923,10 @@ fn balances_icons() -> Result<Value, String> {
 #[tauri::command(async)]
 fn balances_full(id: String, amount: Option<f64>) -> Result<Value, String> {
     let id = id.trim();
-    if id.is_empty() || !id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
+    // A second account's row is `provider/KEY_NAME` (`fal/FAL_KEY_BACKUP`); it starts as a provider id
+    // does, so it can never read as an option.
+    let first_ok = id.chars().next().map_or(false, |c| c.is_ascii_lowercase() || c.is_ascii_digit());
+    if !first_ok || !id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '/' | '_')) {
         return Err("Which provider?".into());
     }
     let amount = match amount {

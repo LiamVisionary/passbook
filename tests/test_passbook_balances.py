@@ -543,3 +543,24 @@ def test_open_keys_goes_to_the_page_for_making_a_key(store, monkeypatch, capsys)
     args.provider = ["fal/FAL_KEY_BACKUP"]
     args.keys = False
     assert passbook_cli.cmd_balances(args) == 0 and opened[-1] == "https://fal.ai/dashboard/usage-billing/billing"
+
+
+def test_a_guarded_key_makes_balances_run_again_under_a_grant(store, monkeypatch):
+    """Stripe's keys are guarded: a plain read leaves them out entirely, so their row said "locked" until
+    the reading ran itself again inside a process the broker started, as `run` does (2026-10-18)."""
+    import passbook_broker
+    import passbook_cli
+    import passbook_grant
+
+    monkeypatch.setattr(passbook_grant, "guarded", lambda policy: ["STRIPE_MANAGEMENT_API_KEY"])
+    monkeypatch.setattr(passbook_broker, "running", lambda: True)
+    monkeypatch.setattr(passbook_cli, "_use_broker_for_sealed_values", lambda *a, **k: set())
+    asked = []
+    monkeypatch.setattr(passbook_cli, "_rerun_under_grant",
+                        lambda app, reason, keys=None, guarded=False: asked.append((app, list(keys), guarded)) or 0)
+    assert passbook_cli._balance_values("hivemindos", ["STRIPE_MANAGEMENT_API_KEY"]) == 0
+    assert asked == [("hivemindos", ["STRIPE_MANAGEMENT_API_KEY"], True)]
+    asked.clear()
+    monkeypatch.setattr(passbook_grant, "guarded", lambda policy: [])
+    passbook_cli._balance_values("hivemindos", ["STRIPE_MANAGEMENT_API_KEY"])
+    assert asked == [("hivemindos", ["STRIPE_MANAGEMENT_API_KEY"], False)], "an unguarded missing key keeps the old path"

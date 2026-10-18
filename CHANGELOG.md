@@ -31,6 +31,10 @@ key". Every new reader was checked against his own keys through a probe that pri
   the same list first. The wording lives in `passbook_balances.issue_for`, so HivemindOS can say the same.
 - **Guarded keys are read.** Balances runs itself under a broker grant when a guarded key (Stripe's) is
   involved, as `run` does; before, those rows said "locked".
+- **"Set what full is" works on a second account's row**: the window's `balances_full` takes
+  `provider/KEY_NAME` ids.
+- **A balance-only key's app limit stays on the machine that set it.** Sync carries keys, not audiences:
+  on the other machines it arrives open to every app until it is limited there too.
 - Not read, and why: xAI (needs a management key and team), Alchemy (an admin key), Hetzner, Render, Groq,
   Gemini, Hugging Face, Modal and the subscriptions report no balance to an API key.
 

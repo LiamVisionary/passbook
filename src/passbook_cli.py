@@ -3192,8 +3192,10 @@ def cmd_balances(args: argparse.Namespace) -> int:
     # The keys are read every time, so a reading from the last two minutes is reused only for the same key:
     # a rotated key is asked afresh, never shown the old account's numbers.
     recent = {} if args.fresh else balances.cached(root)
+    known = balances.identities(root)
     rows = balances.readings(values, present, everything=args.all, only=ids, salt=balances.salt_for(root),
-                             fresh_from=recent)
+                             fresh_from=recent, known=known)
+    balances.remember_identities(root, known)
     asked = [row for row in rows if row.get("status") == "ready" and row is not recent.get(row["providerId"])]
     if asked or args.fresh:
         balances.remember(root, [*rows, *[row for pid, row in recent.items() if pid not in {r["providerId"] for r in rows}]])
@@ -3221,6 +3223,8 @@ def cmd_balances(args: argparse.Namespace) -> int:
         print(f"Needs a look ({len(todo)}):")
         for item in todo:
             print(f"  {item['name']}: {item['title']}. {item['fix']}")
+            if item.get("keys"):
+                print(f"      keys in this account: {', '.join(item['keys'])}")
             if item.get("action") == "add-key":
                 print(f"      add it:  passbook add {item['key']}   then:  passbook agents set {item['key']} --only "
                       + " ".join(balances.BALANCE_KEY_READERS) + (f"\n      make one: {item['createUrl']}" if item.get("createUrl") else ""))

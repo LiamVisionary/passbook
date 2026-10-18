@@ -36,9 +36,9 @@ from typing import Any, Callable, Iterable, Mapping
 # balance. `keys` are the credentials the provider is used with; `reading_keys`, when present, are the only
 # ones that can read its billing. Generated from HivemindOS's catalog on 2026-10-12.
 PROVIDERS: tuple[dict, ...] = (
-    {"id": "openrouter", "name": "OpenRouter", "category": "Models", "keys": ('OPENROUTER_API_KEY',), "reading_keys": ('OPENROUTER_MANAGEMENT_KEY',), "accounts": ({"key": "OPENROUTER_BENCH_API_KEY", "label": "bench key", "adapter": "openrouter-key"},), "billing_key": {"key": "OPENROUTER_BALANCE_KEY", "why": "Only a management key can see the account's credits.", "label": "OpenRouter management key", "permission": "A management key. Inference keys cannot read the account's credits.", "create_url": "https://openrouter.ai/settings/management-keys"}, "billing": "prepaid", "console_url": "https://openrouter.ai", "billing_url": "https://openrouter.ai/settings/credits", "adapter": "openrouter", "docs_url": "https://openrouter.ai/docs/api/api-reference/credits/get-remaining-credits", "verified": "2026-10-02", "payment_note": "Buy credits on OpenRouter. Its former Coinbase Commerce top-up API is deprecated; no payment is made here."},
-    {"id": "openai-api", "name": "OpenAI API", "category": "Models", "keys": ('OPENAI_API_KEY',), "reading_keys": (), "adapter": "openai-costs", "billing": "mixed", "billing_key": {"key": "OPENAI_BALANCE_KEY", "why": "OpenAI shows spend only to organization Admin keys.", "label": "OpenAI admin key", "permission": "An organization Admin key (made by an organization owner). OpenAI reports spend to it, not the credit left: no key can read the prepaid balance.", "create_url": "https://platform.openai.com/settings/organization/admin-keys"}, "console_url": "https://platform.openai.com", "billing_url": "https://platform.openai.com/settings/organization/billing/overview", "docs_url": "https://platform.openai.com/docs/api-reference/usage/costs", "verified": "2026-10-18", "payment_note": "API billing is separate from ChatGPT subscriptions. Purchase credits on the OpenAI billing page."},
-    {"id": "anthropic", "name": "Anthropic API", "category": "Models", "keys": ('ANTHROPIC_API_KEY', 'CLAUDE_API_KEY_LIAM_AT_RIZZMA_IO'), "reading_keys": (), "adapter": "anthropic-costs", "billing": "mixed", "billing_key": {"key": "ANTHROPIC_BALANCE_KEY", "why": "Anthropic shows spend only to Admin API keys.", "label": "Anthropic Admin API key", "permission": "An Admin API key (sk-ant-admin…, made by an organization admin). Anthropic reports spend to it, not the credit left.", "create_url": "https://platform.claude.com/settings/admin-keys"}, "console_url": "https://platform.claude.com", "billing_url": "https://platform.claude.com/settings/billing", "docs_url": "https://platform.claude.com/docs/en/api/admin-api/usage-cost/get-cost-report", "verified": "2026-10-18", "payment_note": "API billing is separate from Claude subscriptions. Confirm your account’s billing model on the billing page."},
+    {"id": "openrouter", "name": "OpenRouter", "category": "Models", "keys": ('OPENROUTER_API_KEY',), "key_patterns": (r"^OPENROUTER_[A-Z0-9_]*KEY$",), "identify": "openrouter", "reading_keys": ('OPENROUTER_MANAGEMENT_KEY',), "accounts": ({"key": "OPENROUTER_BENCH_API_KEY", "label": "bench key", "adapter": "openrouter-key"},), "billing_key": {"key": "OPENROUTER_BALANCE_KEY", "why": "Only a management key can see the account's credits.", "label": "OpenRouter management key", "permission": "A management key. Inference keys cannot read the account's credits.", "create_url": "https://openrouter.ai/settings/management-keys"}, "billing": "prepaid", "console_url": "https://openrouter.ai", "billing_url": "https://openrouter.ai/settings/credits", "adapter": "openrouter", "docs_url": "https://openrouter.ai/docs/api/api-reference/credits/get-remaining-credits", "verified": "2026-10-02", "payment_note": "Buy credits on OpenRouter. Its former Coinbase Commerce top-up API is deprecated; no payment is made here."},
+    {"id": "openai-api", "name": "OpenAI API", "category": "Models", "keys": ('OPENAI_API_KEY',), "key_patterns": (r"^OPENAI_[A-Z0-9_]*API_KEY[A-Z0-9_]*$",), "reading_keys": (), "refusal_is_permission": True, "adapter": "openai-costs", "billing": "mixed", "billing_key": {"key": "OPENAI_BALANCE_KEY", "why": "OpenAI shows spend only to organization Admin keys.", "label": "OpenAI admin key", "permission": "An organization Admin key (made by an organization owner). OpenAI reports spend to it, not the credit left: no key can read the prepaid balance.", "create_url": "https://platform.openai.com/settings/organization/admin-keys"}, "console_url": "https://platform.openai.com", "billing_url": "https://platform.openai.com/settings/organization/billing/overview", "docs_url": "https://platform.openai.com/docs/api-reference/usage/costs", "verified": "2026-10-18", "payment_note": "API billing is separate from ChatGPT subscriptions. Purchase credits on the OpenAI billing page."},
+    {"id": "anthropic", "name": "Anthropic API", "category": "Models", "keys": ('ANTHROPIC_API_KEY',), "key_patterns": (r"^(ANTHROPIC|CLAUDE)_[A-Z0-9_]*API_KEY[A-Z0-9_]*$",), "identify": "anthropic", "try_each": True, "refusal_is_permission": True, "adapter": "anthropic-costs", "billing": "mixed", "billing_key": {"key": "ANTHROPIC_BALANCE_KEY", "why": "Anthropic shows spend only to an Admin key, or an organization key allowed to read cost.", "label": "Anthropic Admin API key", "permission": "An Admin API key (sk-ant-admin…), or an organization-scoped key with permission to read usage and cost, made in this organization. Anthropic reports spend to it, not the credit left.", "create_url": "https://platform.claude.com/settings/admin-keys"}, "console_url": "https://platform.claude.com", "billing_url": "https://platform.claude.com/settings/billing", "docs_url": "https://platform.claude.com/docs/en/api/admin-api/usage-cost/get-cost-report", "verified": "2026-10-18", "payment_note": "API billing is separate from Claude subscriptions. Confirm your account’s billing model on the billing page."},
     {"id": "xai", "name": "xAI API", "category": "Models", "keys": ('XAI_API_KEY',), "billing": "mixed", "console_url": "https://console.x.ai", "docs_url": "https://docs.x.ai/developers/rest-api-reference/management/billing", "verified": "2026-10-02", "payment_note": "xAI documents a top-up API requiring a management key and team. In-app charging stays unavailable until payment identity and duplicate-charge reconciliation are verified. Use the console for now.", "reading_note": "xAI reports the prepaid balance only to a management key (Console → Settings → Management keys) together with your team id; PassBook does not read it yet. Check it on the console."},
     {"id": "fal", "name": "fal", "category": "Media", "keys": ('FAL_KEY',), "reading_keys": ('FAL_ADMIN_KEY', 'FAL_KEY'), "accounts": ({"key": "FAL_KEY_BACKUP", "label": "backup key"},), "billing_key": {"key": "FAL_BALANCE_KEY", "why": "Only a key with billing read access (the Billing preset) can see it.", "label": "fal Admin key", "permission": "A key with the Billing or Read-only preset (it carries billing:usage:read), or a legacy ADMIN key. API keys run models but cannot read billing.", "create_url": "https://fal.ai/dashboard/keys"}, "billing": "prepaid", "console_url": "https://fal.ai/dashboard", "billing_url": "https://fal.ai/dashboard/usage-billing/billing", "adapter": "fal", "docs_url": "https://fal.ai/docs/platform-apis/v1/account/billing", "verified": "2026-10-02", "payment_note": "A billing read requires an Admin key. An existing FAL_KEY is tried read-only; the provider enforces its permissions. Complete purchases on fal’s billing page."},
     {"id": "meshy", "name": "Meshy", "category": "Media", "keys": ('MESHY_API_KEY', 'MESHY_AMI_API_KEY'), "billing": "mixed", "console_url": "https://www.meshy.ai/workspace", "adapter": "meshy", "docs_url": "https://docs.meshy.ai/en/api/balance", "verified": "2026-10-02", "payment_note": "Meshy reports credits, not dollars. Subscription credits and API purchases must be checked on the provider’s site."},
@@ -140,6 +140,37 @@ REQUESTS: dict[str, tuple] = {
     "openai-costs": ("https://api.openai.com/v1/organization/costs?start_time={month_start}&bucket_width=1d&limit=31", "Bearer"),
     "anthropic-costs": ("https://api.anthropic.com/v1/organizations/cost_report?starting_at={month_start_iso}&bucket_width=1d&limit=31", "x-api-key"),
 }
+
+# Which account a key belongs to, for a provider that will say so to any key. Keys of one account are one
+# row; keys of different accounts are different rows, each with its own balance-only key. Anthropic answers
+# `/v1/organizations/me` to an ordinary key with the organization's id and name (seen live on six keys,
+# 2026-10-18, though the docs file it under the Admin API); OpenRouter's `/api/v1/key` names the workspace.
+IDENTIFY: dict[str, tuple[str, str]] = {
+    "anthropic": ("https://api.anthropic.com/v1/organizations/me", "x-api-key"),
+    "openrouter": ("https://openrouter.ai/api/v1/key", "Bearer"),
+}
+IDENTITY_FILE = "balances-identities.json"
+IDENTITY_SECONDS = 7 * 86400
+
+
+def parse_identity(kind: str, payload: Any) -> dict | None:
+    """{"id", "name"} of the account a key belongs to, or None when the answer does not say."""
+    body = _record(payload)
+    if kind == "anthropic":
+        found = {"id": _text(body.get("id")), "name": _text(body.get("name"))}
+    elif kind == "openrouter":
+        data = _record(body.get("data"))
+        found = {"id": _text(data.get("workspace_id")) or _text(data.get("organization_id")) or _text(data.get("creator_user_id")),
+                 "name": None}
+    else:
+        return None
+    return found if found["id"] else None
+
+
+def fetch_identity(kind: str, key: str, *, timeout: float = 12.0) -> tuple[int, Any]:
+    url, scheme = IDENTIFY[kind]
+    return _get(url, scheme, key, timeout, 200_000)
+
 
 # What a ready reading means, said once per kind: the reading is never more than the provider reported.
 READY_NOTES = {
@@ -587,7 +618,10 @@ def provider(provider_id: str) -> dict | None:
     if entry is None or not key:
         return entry
     account = next((item for item in entry.get("accounts", ()) if item["key"] == key), None)
-    return _account_entry(entry, account) if account else None
+    if account:
+        return _account_entry(entry, account)
+    # Another account of the provider, named by the first of its keys (`anthropic/CLAUDE_API_KEY_LIAM_NABUT`).
+    return _group_entry(entry, [key], None) if entry.get("adapter") else None
 
 
 def _account_entry(entry: Mapping[str, Any], account: Mapping[str, Any]) -> dict:
@@ -595,6 +629,17 @@ def _account_entry(entry: Mapping[str, Any], account: Mapping[str, Any]) -> dict
     return {**entry, "id": f"{entry['id']}/{account['key']}", "name": f"{entry['name']} · {account['label']}",
             "keys": (account["key"],), "reading_keys": (account["key"],), "accounts": (), "billing_key": None,
             "adapter": account.get("adapter", entry.get("adapter")), "base": entry["id"]}
+
+
+def _group_entry(entry: Mapping[str, Any], keys: list[str], identity: Mapping[str, Any] | None) -> dict:
+    """An account of the provider other than the one its first key belongs to: its own row, named by the
+    account when the provider says what it is called, else by its first key, and with a balance-only key of
+    its own. The id is the provider's and that first key, so removing the key renames the row."""
+    anchor = sorted(keys)[0]
+    given = dict(entry.get("billing_key") or {})
+    given["key"] = f"{anchor}_BALANCE_KEY"
+    return {**entry, "id": f"{entry['id']}/{anchor}", "base": entry["id"], "group": True, "accounts": (),
+            "name": f"{entry['name']} · {(identity or {}).get('name') or anchor}", "billing_key": given}
 
 
 def top_up_url(entry: Mapping[str, Any]) -> str:
@@ -608,7 +653,7 @@ def balance_key(entry: Mapping[str, Any]) -> dict | None:
     the balance is read with a stronger key kept apart for it. The catalog names the permission it needs
     where that is known; otherwise any key of the account that can read billing.
     """
-    if not entry.get("adapter") or entry.get("base") or entry.get("pairs"):
+    if not entry.get("adapter") or entry.get("pairs") or (entry.get("base") and not entry.get("group")):
         return None
     given = entry.get("billing_key") or {}
     stem = entry["id"].upper().replace("-", "_")
@@ -624,6 +669,24 @@ def _reading_names(entry: Mapping[str, Any]) -> tuple[str, ...]:
     slot = (balance_key(entry) or {}).get("key")
     names = entry["reading_keys"] if "reading_keys" in entry else entry.get("keys", ())
     return tuple(dict.fromkeys(name for name in (slot, *names) if name))
+
+
+def _slot_names() -> set[str]:
+    return {slot["key"] for slot in map(balance_key, PROVIDERS) if slot}
+
+
+def held_names(entry: Mapping[str, Any], held: Iterable[str]) -> list[str]:
+    """Every key held for this provider, in the catalog's order and then by name: the ones it lists, and any
+    other key named like them (`key_patterns`), so a fifth Anthropic key is read without a release. Never a
+    balance-only key, another account's own key (`accounts`) or the id half of a pair."""
+    held = set(held)
+    import re
+
+    skip = _slot_names() | {item["key"] for item in entry.get("accounts", ())} | set((entry.get("pairs") or {}).values())
+    listed = [name for name in dict.fromkeys((*entry.get("keys", ()), *entry.get("reading_keys", ()))) if name in held]
+    found = sorted(name for name in held if any(re.match(pattern, name) for pattern in entry.get("key_patterns", ())))
+    return [name for name in dict.fromkeys((*listed, *found))
+            if name not in skip and not name.endswith("_BALANCE_KEY")]
 
 
 def _all_names(entry: Mapping[str, Any]) -> tuple[str, ...]:
@@ -644,12 +707,14 @@ def _base(entry: Mapping[str, Any], present: set[str], checked_at: str) -> dict:
         "topUpUrl": top_up_url(entry), "paymentNote": entry.get("payment_note", ""),
         "message": entry.get("reading_note") or MANUAL_NOTE,
         "balanceKey": {**slot, "held": slot["key"] in present} if slot else None,
+        "accountKeys": [], "accountId": None,
     }
 
 
 # What needs doing, said once for every surface: which row, what is wrong in a few words, what fixes it,
 # and the one action that does. Worst first by `rank`. A ready row has none.
-ISSUE_RANK = {"key-rejected": 1, "needs-balance-key": 2, "missing-key": 2, "locked": 3, "unreachable": 4, "no-api": 9}
+ISSUE_RANK = {"key-rejected": 1, "wrong-account": 1, "needs-balance-key": 2, "missing-key": 2, "locked": 3, "unreachable": 4,
+              "no-api": 9}
 
 
 def _a(words: str) -> str:
@@ -680,6 +745,12 @@ def issue_for(row: Mapping[str, Any]) -> dict | None:
         if slot:
             return made("needs-balance-key", f"Needs {_a(slot['label'])}", slot["why"] or slot["permission"], **add)
         return made("missing-key", "No key", "No saved key can read this balance.", action="open")
+    if http in (401, 403) and row.get("refusalIsPermission") and slot:
+        # For a cost report a refusal says the key lacks the permission, not that it is dead (Anthropic: 401
+        # "requires an Admin API key or an organization-scoped API key", 403 to an organization key without it).
+        lacks = (f"{used} is an organization key without permission to read cost." if http == 403
+                 else f"{used} can't read cost. {slot['why'] or slot['permission']}")
+        return made("needs-balance-key", f"Needs {_a(slot['label'])}", lacks, **add)
     if http == 401:
         why = "Revoked or expired"
         why += ", or this computer's address is not on the key's allowed list" if row["provider"] == "vultr" else ""
@@ -714,17 +785,33 @@ def salt_for(root: Path) -> bytes:
     return salt
 
 
+def _open(values: Mapping[str, str], name: str) -> str:
+    value = str(values.get(name) or "")
+    return "" if value.startswith("hive-sealed:") else value
+
+
 def read_provider(entry: Mapping[str, Any], values: Mapping[str, str], present: set[str], *,
                   fetch: Callable[[str, str], tuple[int, Any]] = fetch_reading, now: Callable[[], float] = time.time,
-                  salt: bytes = b"", fresh_from: Mapping[str, dict] | None = None) -> dict:
-    """One provider's reading: ready, error, missing (no key), locked (held but not readable here) or manual."""
+                  salt: bytes = b"", fresh_from: Mapping[str, dict] | None = None,
+                  names: Iterable[str] | None = None) -> dict:
+    """One account's reading: ready, error, missing (no key), locked (held but not readable here) or manual.
+    `names` are the keys to try, in order (the account's own, when a provider holds several)."""
     reading = _base(entry, present, _iso(now()))
     adapter = entry.get("adapter")
     if not adapter:
         reading["issue"] = issue_for(reading)
         return reading
-    names = _reading_names(entry)
-    key_name = next((name for name in names if values.get(name) and not str(values[name]).startswith("hive-sealed:")), None)
+    names = tuple(names) if names is not None else _reading_names(entry)
+    openable = [name for name in names if _open(values, name)]
+    if entry.get("try_each") and len(openable) > 1:
+        # Several keys may stand for the account and only some may read its cost: ask each until one does,
+        # and if none can, say what the last one was told.
+        for name in openable[:-1]:
+            first = read_provider(entry, values, present, fetch=fetch, now=now, salt=salt, fresh_from=fresh_from, names=(name,))
+            if first.get("status") == "ready":
+                return first
+        names = (openable[-1],)
+    key_name = next((name for name in names if _open(values, name)), None)
     key = values.get(key_name or "", "")
     pair = (entry.get("pairs") or {}).get(key_name or "")
     if pair:
@@ -762,6 +849,7 @@ def read_provider(entry: Mapping[str, Any], values: Mapping[str, str], present: 
     if status in (401, 403):
         reading.update(status="error", providerError={"httpStatus": status,
                        "category": "authentication-rejected" if status == 401 else "access-denied"},
+                       refusalIsPermission=bool(entry.get("refusal_is_permission")),
                        message="The provider rejected the key. Check it and the account on the provider's site." if status == 401
                        else "The provider refused this key billing access. Check its permissions on the provider's site.")
         reading["issue"] = issue_for(reading)
@@ -787,12 +875,15 @@ def _accounts(entry: Mapping[str, Any], held: set[str]) -> list[dict]:
 
 
 def wanted_keys(present: Iterable[str], *, everything: bool = False, only: Iterable[str] = ()) -> list[str]:
-    """The keys the readers need, among those held: what `run` must open for this."""
+    """The keys the readers need, among those held: what `run` must open for this. Every key of a provider
+    with a reader, since each may be a different account, and every balance-only key."""
     held = set(present)
-    chosen = _chosen(held, everything=everything, only=only)
-    entries = [item for entry in chosen if entry.get("adapter") for item in (entry, *_accounts(entry, held))]
-    names = {name for entry in entries for name in _reading_names(entry)}
-    names |= {pair for entry in entries for name, pair in (entry.get("pairs") or {}).items() if name in names}
+    names: set[str] = {name for name in held if name.endswith("_BALANCE_KEY")} | (_slot_names() & held)
+    for entry in _chosen(held, everything=everything, only=only):
+        if not entry.get("adapter"):
+            continue
+        mine = set(held_names(entry, held)) | {item["key"] for item in entry.get("accounts", ())} | set(_reading_names(entry))
+        names |= mine | {pair for name, pair in (entry.get("pairs") or {}).items() if name in mine}
     return sorted(name for name in names if name in held)
 
 
@@ -802,7 +893,7 @@ def _chosen(held: set[str], *, everything: bool, only: Iterable[str]) -> list[di
         return [entry for entry in PROVIDERS if entry["id"] in asked]
     if everything:
         return list(PROVIDERS)
-    return [entry for entry in PROVIDERS if any(name in held for name in (
+    return [entry for entry in PROVIDERS if held_names(entry, held) or any(name in held for name in (
         *_all_names(entry), *(item["key"] for item in entry.get("accounts", ()))))]
 
 
@@ -812,28 +903,128 @@ def _same_account(one: Mapping[str, Any], other: Mapping[str, Any]) -> bool:
     return one.get("status") == other.get("status") == "ready" and all(one.get(f) == other.get(f) for f in figures)
 
 
+def identities(root: Path) -> dict[str, dict]:
+    """Which account each key belongs to, by key fingerprint: kept so a row keeps its id while offline."""
+    try:
+        loaded = json.loads((Path(root) / IDENTITY_FILE).read_text(encoding="utf-8"))
+        return loaded if isinstance(loaded, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def remember_identities(root: Path, known: Mapping[str, dict]) -> None:
+    path = Path(root) / IDENTITY_FILE
+    path.write_text(json.dumps(dict(known)) + "\n", encoding="utf-8")
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+
+
+def _identity(entry: Mapping[str, Any], name: str, values: Mapping[str, str], *, identify: Callable[[str, str], tuple[int, Any]],
+              known: dict[str, dict] | None, salt: bytes, now: Callable[[], float]) -> dict | None:
+    kind, value = entry.get("identify"), _open(values, name)
+    if not kind or not value:
+        return None
+    mark = fingerprint(salt, f"{entry['id']}#who", value) if salt else ""
+    kept = (known or {}).get(mark) if mark else None
+    if kept and now() - float(kept.get("at") or 0) < IDENTITY_SECONDS:
+        return {"id": kept["id"], "name": kept.get("name")}
+    try:
+        status, payload = identify(kind, value)
+        found = parse_identity(kind, payload) if status == 200 else None
+    except Exception:  # noqa: BLE001 — offline: an identity read before still stands, however old
+        found = None
+    if found and known is not None and mark:
+        known[mark] = {**found, "at": now()}
+    return found or ({"id": kept["id"], "name": kept.get("name")} if kept else None)
+
+
+def _account_groups(entry: Mapping[str, Any], names: list[str], values: Mapping[str, str], **who: Any) -> list[tuple[list[str], dict | None]]:
+    """The provider's held keys, by account. A key whose account cannot be told is an account of its own,
+    never quietly merged; the account holding the catalog's first key comes first and keeps the bare id."""
+    if not names:
+        return [([], None)]
+    if entry.get("identify"):
+        grouped: dict[str, tuple[list[str], dict]] = {}
+        alone: list[tuple[list[str], dict | None]] = []
+        for name in names:
+            found = _identity(entry, name, values, **who)
+            if found:
+                grouped.setdefault(found["id"], ([], found))[0].append(name)
+            else:
+                alone.append(([name], None))
+        groups = [*grouped.values(), *alone]
+        return sorted(groups, key=lambda group: names.index(group[0][0]))
+    if "reading_keys" in entry:
+        # Its billing keys read for the account; which account the other keys are in is not known.
+        return [(names, None)]
+    return [([name], None) for name in names]
+
+
 def readings(values: Mapping[str, str], present: Iterable[str], *, everything: bool = False, only: Iterable[str] = (),
              fetch: Callable[[str, str], tuple[int, Any]] = fetch_reading, now: Callable[[], float] = time.time,
-             salt: bytes = b"", fresh_from: Mapping[str, dict] | None = None) -> list[dict]:
-    """A reading per provider you hold a key for (every provider with `everything`, or the ones named), and
-    one more for each other account held (`accounts`: a second RunPod login, fal's backup key).
-    `fresh_from` answers a provider from a recent reading when the same key made it (see `fingerprint`)."""
+             salt: bytes = b"", fresh_from: Mapping[str, dict] | None = None,
+             identify: Callable[[str, str], tuple[int, Any]] = fetch_identity, known: dict[str, dict] | None = None) -> list[dict]:
+    """A reading per account you hold a key for (every provider with `everything`, or the ones named).
+
+    A person can hold several keys for one provider (six for Anthropic, in four organizations). Each account
+    is its own row, saying which keys are in it, with a balance-only key of its own; two keys that read the
+    same figures are one account. `fresh_from` answers from a recent reading made with the same key.
+    """
     held = set(present)
+    who = {"identify": identify, "known": known, "salt": salt, "now": now}
     rows: list[dict] = []
     for entry in _chosen(held, everything=everything, only=only):
-        first = read_provider(entry, values, held, fetch=fetch, now=now, salt=salt, fresh_from=fresh_from)
-        rows.append(first)
+        if not entry.get("adapter"):
+            row = read_provider(entry, values, held, fetch=fetch, now=now, salt=salt, fresh_from=fresh_from)
+            row["accountKeys"] = held_names(entry, held)
+            rows.append(row)
+            continue
+        names = held_names(entry, held)
+        mine: list[dict] = []
+        for index, (keys, found) in enumerate(_account_groups(entry, names, values, **who)):
+            account = entry if index == 0 else _group_entry(entry, keys, found)
+            slot = (balance_key(account) or {}).get("key")
+            # A balance-only key made in another account is never read as this one's (`wrong-account`).
+            elsewhere = _identity(entry, slot, values, **who) if slot and found and _open(values, slot) else None
+            stray = elsewhere if elsewhere and elsewhere["id"] != found["id"] else None
+            reading_keys = entry["reading_keys"] if "reading_keys" in entry else keys
+            tried = [name for name in (None if stray else slot, *reading_keys) if name and (name in keys or name == slot or not found)]
+            row = read_provider(account, values, held, fetch=fetch, now=now, salt=salt, fresh_from=fresh_from, names=tried)
+            row.update(accountKeys=list(keys), accountId=(found or {}).get("id"))
+            if found and found.get("name"):
+                row["accountLabel"] = row.get("accountLabel") or found["name"]
+                if index == 0:
+                    row["name"] = f"{entry['name']} · {found['name']}"
+                if row.get("issue") and row["issue"]["kind"] == "needs-balance-key":
+                    # Which of several accounts it is for, in the headline itself.
+                    row["issue"] = {**row["issue"], "title": f"{row['issue']['title']} for {found['name']}"}
+            if stray:
+                row["issue"] = {"kind": "wrong-account", "rank": ISSUE_RANK["wrong-account"], "action": "add-key", "key": slot,
+                                "createUrl": row["balanceKey"]["createUrl"], "detail": f"What to make: {row['balanceKey']['permission']}",
+                                "title": f"{slot} is from another account",
+                                "fix": f"It was made in {stray.get('name') or 'another account'}, not {found.get('name') or 'this one'}. "
+                                       f"Paste a key made in {found.get('name') or 'this account'}."}
+            same = next((kept for kept in mine if _same_account(kept, row)), None)
+            if same:
+                same["accountKeys"] = [*same["accountKeys"], *keys]
+                continue
+            mine.append(row)
         for extra in _accounts(entry, held):
             row = read_provider(extra, values, held, fetch=fetch, now=now, salt=salt, fresh_from=fresh_from)
-            if not _same_account(first, row):
-                rows.append(row)
+            row["accountKeys"] = [extra["keys"][0]]
+            if not any(_same_account(kept, row) for kept in mine):
+                mine.append(row)
+        rows.extend(mine)
     return rows
 
 
 def issues(rows: Iterable[Mapping[str, Any]]) -> list[dict]:
     """Everything that needs doing, worst first: the page's and the command's first lines."""
     found = [{"providerId": row["providerId"], "provider": row.get("provider") or row["providerId"], "name": row["name"],
-              "category": row.get("category"), **row["issue"]} for row in rows if row.get("issue")]
+              "category": row.get("category"), "account": row.get("accountLabel"), "keys": row.get("accountKeys") or [],
+              **row["issue"]} for row in rows if row.get("issue")]
     return sorted(found, key=lambda item: (item["rank"], item["name"].lower()))
 
 
@@ -858,6 +1049,7 @@ def set_enabled(root: Path, enabled: bool, *, now: Callable[[], float] = time.ti
         import passbook_logos
 
         (Path(root) / CACHE_FILE).unlink(missing_ok=True)
+        (Path(root) / IDENTITY_FILE).unlink(missing_ok=True)
         passbook_insights.forget(root)
         passbook_logos.forget(root)
         # Alerts stop with the readings they are made from; where they went is kept for next time.

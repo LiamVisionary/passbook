@@ -4,6 +4,25 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+### Several keys for one provider are several accounts, each named, each with its own balance key
+
+Liam, 2026-10-18, on 1.10.15: "i have multiple antrhopic api keys, which one is this for? ... users might have
+multiple of the same platform's keys". 1.10.15 read the first key it found for a provider and named none.
+
+- **Every key held for a provider is found**, including ones named like the catalog's (`CLAUDE_API_KEY_*`,
+  `OPENAI_*API_KEY*`, `OPENROUTER_*KEY`), and grouped by account. Anthropic names the organization to any
+  key (`/v1/organizations/me`), OpenRouter the workspace (`/api/v1/key`); elsewhere keys that read the same
+  figures are one account, and a key whose account cannot be told is its own row, never merged.
+- **Each account is a row** named by its organization ("Anthropic API · NewVisionary"), listing the keys in
+  it, with a balance-only key of its own (`ANTHROPIC_BALANCE_KEY` for the account of the catalog's first
+  key; `<FIRST KEY>_BALANCE_KEY` for the others). Which account a key is in is kept by key fingerprint
+  (`balances-identities.json`), so rows keep their ids offline.
+- **Each fix names its account and keys**, on the page and in `passbook balances`.
+- **A balance key pasted into the wrong account is caught:** `wrong-account` names the account it came from
+  and is never read as this one.
+- **Anthropic's cost report is tried with each key of the account**: an organization key given permission to
+  read cost works without an Admin key. A refusal there says the key lacks the permission, not that it is dead.
+
 ## [1.10.15] — 2026-10-18
 
 ### Balances reads every balance your keys can reach, and says plainly what stops the rest

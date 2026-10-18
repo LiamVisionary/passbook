@@ -280,7 +280,7 @@ def _balances(monkeypatch, capsys, **flags):
 
     monkeypatch.setattr(balances, "fetch_reading", fetch)
     # read_provider took the default when it was defined; a list call passes it through readings().
-    monkeypatch.setattr(balances, "readings", lambda *a, **kw: _READINGS(*a, **{**kw, "fetch": fetch}))
+    monkeypatch.setattr(balances, "readings", lambda *a, **kw: _READINGS(*a, **{**kw, "fetch": fetch, "identify": lambda kind, key: (401, None)}))
     # No test asks a real provider for anything: the daily figures are their own test, with a stand-in.
     monkeypatch.setattr(balances, "refresh_daily", lambda *a, **k: None)
     args = argparse.Namespace(**{"action": "list", "provider": [], "all": False, "fresh": False, "json": True,
@@ -564,3 +564,90 @@ def test_a_guarded_key_makes_balances_run_again_under_a_grant(store, monkeypatch
     monkeypatch.setattr(passbook_grant, "guarded", lambda policy: [])
     passbook_cli._balance_values("hivemindos", ["STRIPE_MANAGEMENT_API_KEY"])
     assert asked == [("hivemindos", ["STRIPE_MANAGEMENT_API_KEY"], False)], "an unguarded missing key keeps the old path"
+
+
+# ── 2026-10-18, later: several keys for one provider are several accounts, each named ──────────────────
+#
+# Liam: "i have multiple antrhopic api keys, which one is this for? ... users might have multiple of the same
+# platform's keys". He holds six Anthropic keys in four organizations; Anthropic names the organization to
+# any of them at /v1/organizations/me.
+
+ORGS = {"k-main": ("org_main", "NewVisionary"), "k-main-2": ("org_main", "NewVisionary"),
+        "k-ami": ("org_ami", "Ami's Individual Org"), "k-ami-2": ("org_ami", "Ami's Individual Org")}
+
+
+def _who(kind, key):
+    if key not in ORGS:
+        return 401, None
+    return 200, {"id": ORGS[key][0], "name": ORGS[key][1]}
+
+
+def _anthropic_values():
+    return {"ANTHROPIC_API_KEY": "k-main", "CLAUDE_CODE_X_API_KEY": "k-main-2",
+            "ANTHROPIC_API_KEY_AMI": "k-ami", "CLAUDE_API_KEY_VIBE": "k-ami-2"}
+
+
+def test_each_account_is_its_own_row_named_by_its_organization_with_its_own_balance_key():
+    values = _anthropic_values()
+    rows = balances.readings(values, set(values), fetch=lambda a, k: (403, None), identify=_who, known={}, salt=b"s" * 32)
+    by_id = {row["providerId"]: row for row in rows}
+    assert set(by_id) == {"anthropic", "anthropic/ANTHROPIC_API_KEY_AMI"}, "the first key's account keeps the bare id"
+    main, ami = by_id["anthropic"], by_id["anthropic/ANTHROPIC_API_KEY_AMI"]
+    assert main["name"] == "Anthropic API · NewVisionary" and ami["name"] == "Anthropic API · Ami's Individual Org"
+    assert main["accountKeys"] == ["ANTHROPIC_API_KEY", "CLAUDE_CODE_X_API_KEY"]
+    assert ami["accountKeys"] == ["ANTHROPIC_API_KEY_AMI", "CLAUDE_API_KEY_VIBE"]
+    assert main["balanceKey"]["key"] == "ANTHROPIC_BALANCE_KEY" and ami["balanceKey"]["key"] == "ANTHROPIC_API_KEY_AMI_BALANCE_KEY"
+    issue = {item["providerId"]: item for item in balances.issues(rows)}["anthropic/ANTHROPIC_API_KEY_AMI"]
+    assert issue["title"].endswith("for Ami's Individual Org") and issue["keys"] == ami["accountKeys"]
+    assert "organization key without permission" in issue["fix"], "a 403 on a cost report is a missing permission"
+    assert balances.provider("anthropic/ANTHROPIC_API_KEY_AMI")["billing_key"]["key"] == "ANTHROPIC_API_KEY_AMI_BALANCE_KEY"
+
+
+def test_a_key_whose_account_cannot_be_told_is_never_merged_and_ids_hold_offline():
+    values = _anthropic_values()
+    known: dict = {}
+    salt = b"s" * 32
+    balances.readings(values, set(values), fetch=lambda a, k: (403, None), identify=_who, known=known, salt=salt)
+    offline = lambda kind, key: (_ for _ in ()).throw(OSError("offline"))  # noqa: E731
+    again = balances.readings(values, set(values), fetch=lambda a, k: (403, None), identify=offline, known=known, salt=salt)
+    assert {row["providerId"] for row in again} == {"anthropic", "anthropic/ANTHROPIC_API_KEY_AMI"}, "kept identities hold the rows"
+    alone = balances.readings(values, set(values), fetch=lambda a, k: (403, None), identify=offline, known={}, salt=salt)
+    assert len(alone) == 4 and alone[0]["providerId"] == "anthropic", "never known: one row per key, the first keeps its id"
+
+
+def test_a_balance_only_key_from_another_account_is_named_and_never_read_as_this_one():
+    values = {**_anthropic_values(), "ANTHROPIC_API_KEY_AMI_BALANCE_KEY": "k-main"}
+    sent = []
+    rows = balances.readings(values, set(values), fetch=lambda a, k: sent.append(k) or (403, None), identify=_who, known={})
+    ami = next(row for row in rows if row["providerId"] == "anthropic/ANTHROPIC_API_KEY_AMI")
+    assert ami["issue"]["kind"] == "wrong-account" and "NewVisionary" in ami["issue"]["fix"]
+    assert sent.count("k-main") == 1, "the stray key read only for its own account's row, if at all"
+
+
+def test_each_key_of_an_account_is_tried_until_one_can_read_its_cost():
+    values = _anthropic_values()
+    answer = {"k-main-2": (200, {"data": [{"results": [{"amount": "250", "currency": "USD"}]}], "has_more": False})}
+    rows = balances.readings(values, set(values), fetch=lambda a, k: answer.get(k, (401, None)), identify=_who, known={})
+    main = next(row for row in rows if row["providerId"] == "anthropic")
+    assert main["status"] == "ready" and main["keyName"] == "CLAUDE_CODE_X_API_KEY" and main["usageUsd"] == 2.5
+
+
+def test_every_key_named_like_a_providers_is_found_and_balance_keys_are_not_mistaken_for_them():
+    held = {"ANTHROPIC_API_KEY", "CLAUDE_API_KEY_LIAM_NABUT", "CLAUDE_CODE_LIAMVISIONARY_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN",
+            "CLAUDE_API_KEY_LIAM_NABUT_BALANCE_KEY", "ANTHROPIC_BALANCE_KEY", "CLAUDE_CLOUD_CLOUDFLARE_API_TOKEN"}
+    assert balances.held_names(balances.provider("anthropic"), held) == [
+        "ANTHROPIC_API_KEY", "CLAUDE_API_KEY_LIAM_NABUT", "CLAUDE_CODE_LIAMVISIONARY_API_KEY"]
+    wanted = set(balances.wanted_keys(held))
+    assert {"CLAUDE_API_KEY_LIAM_NABUT", "CLAUDE_API_KEY_LIAM_NABUT_BALANCE_KEY", "ANTHROPIC_BALANCE_KEY"} <= wanted
+    assert "CLAUDE_CODE_OAUTH_TOKEN" not in wanted
+
+
+def test_keys_that_read_the_same_figures_are_one_account_and_different_ones_are_two():
+    same = {"STRIPE_MANAGEMENT_API_KEY": "a", "PORTFOLIO_STRIPE_SECRET_KEY": "b"}
+    answer = {"available": [{"amount": 0, "currency": "usd"}], "pending": [], "livemode": True}
+    rows = balances.readings(same, set(same), only=["stripe"], fetch=lambda a, k: (200, answer))
+    assert len(rows) == 1 and rows[0]["accountKeys"] == ["STRIPE_MANAGEMENT_API_KEY", "PORTFOLIO_STRIPE_SECRET_KEY"]
+    other = {**answer, "pending": [{"amount": 500, "currency": "usd"}]}
+    rows = balances.readings(same, set(same), only=["stripe"], fetch=lambda a, k: (200, answer if k == "a" else other))
+    assert [row["providerId"] for row in rows] == ["stripe", "stripe/PORTFOLIO_STRIPE_SECRET_KEY"]
+    assert rows[1]["name"] == "Stripe · PORTFOLIO_STRIPE_SECRET_KEY"

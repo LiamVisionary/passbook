@@ -3175,13 +3175,16 @@ def cmd_balances(args: argparse.Namespace) -> int:
 
     who = caller("passbook-balances", args)
     present = set(passbook.key_names())
-    wanted = balances.wanted_keys(present, everything=args.all, only=ids)
+    # `known ID AMOUNT` reads only that account's provider; its words are not provider ids.
+    scope = [str((balances.provider(ids[0]) or {}).get("base") or (balances.provider(ids[0]) or {}).get("id") or "")] \
+        if action == "known" and ids else ids
+    wanted = balances.wanted_keys(present, everything=args.all, only=scope)
     # Alerts (passbook_alerts.py) go out with a whole reading, through your own bot: its token is one more
     # key to open, and its read is recorded with the rest.
     import passbook_alerts as alerts
 
     alerting = alerts.settings(root)
-    bot_key = alerting["key"] if alerting["on"] and not ids and alerting["key"] in present else ""
+    bot_key = alerting["key"] if alerting["on"] and not ids and action == "list" and alerting["key"] in present else ""
     if bot_key and bot_key not in wanted:
         wanted = [*wanted, bot_key]
     got = _balance_values(who, wanted)
@@ -3192,10 +3195,51 @@ def cmd_balances(args: argparse.Namespace) -> int:
     # The keys are read every time, so a reading from the last two minutes is reused only for the same key:
     # a rotated key is asked afresh, never shown the old account's numbers.
     recent = {} if args.fresh else balances.cached(root)
+    if action == "known":
+        # `passbook balances known ID AMOUNT|clear`: the credit balance a person read in the provider's console,
+        # for a provider that reports only spend. Read now, so what today had already cost is not taken off it.
+        target, amount_text = (ids + ["", ""])[:2]
+        entry = balances.provider(target)
+        clear = amount_text.lower() in ("clear", "none")
+        try:
+            amount = None if clear else float(amount_text)
+        except ValueError:
+            amount = -1.0
+        if not entry or not entry.get("entered_balance") or (not clear and not (amount is not None and 0 <= amount < 1e12)):
+            return _fail("Say which account and its balance:  passbook balances known anthropic 247.57",
+                         "Only providers that report spend and not credit take one (OpenAI, Anthropic). Take it off with:  ... clear")
+        if clear:
+            balances.set_entered(root, target, None)
+            print(json.dumps({"entered": None}) if args.json else f"{entry['name']}: the entered balance is cleared.")
+            return 0
+        known = balances.identities(root)
+        found = next((row for row in balances.readings(values, present, only=[entry.get("base") or entry["id"]],
+                                                       salt=balances.salt_for(root), known=known)
+                      if row["providerId"] == target), None)
+        if not found or found.get("status") != "ready" or found.get("_days") is None:
+            return _fail(f"{entry['name']}'s spend could not be read just now, so the balance was not kept.",
+                         (found or {}).get("message") or "Try again in a moment.")
+        record = balances.entered_record(amount, found["_days"])
+        balances.set_entered(root, target, record)
+        # The meter measures against what was entered until a fuller figure is set or seen.
+        import passbook_insights
+
+        if target not in passbook_insights.marks(root):
+            passbook_insights.set_mark(root, target, amount)
+        (root / balances.CACHE_FILE).unlink(missing_ok=True)
+        print(json.dumps({"entered": record}) if args.json else f"{found['name']}: {amount:,.2f} USD from now on, less what is spent.")
+        return 0
     known = balances.identities(root)
     rows = balances.readings(values, present, everything=args.all, only=ids, salt=balances.salt_for(root),
-                             fresh_from=recent, known=known)
+                             fresh_from=recent, known=known, entered=balances.entered(root))
     balances.remember_identities(root, known)
+    # A cost report's own days are real spend history at once (as OpenRouter's are), and never leave the command.
+    import passbook_insights as _insights
+
+    for row in rows:
+        days = row.pop("_days", None)
+        if days and row.get("connection"):
+            _insights.remember_daily(root, row["providerId"], row["connection"], days)
     asked = [row for row in rows if row.get("status") == "ready" and row is not recent.get(row["providerId"])]
     if asked or args.fresh:
         balances.remember(root, [*rows, *[row for pid, row in recent.items() if pid not in {r["providerId"] for r in rows}]])
@@ -7841,10 +7885,11 @@ def build_parser() -> argparse.ArgumentParser:
     status.set_defaults(func=cmd_status)
 
     bal = subs.add_parser("balances", help="what each service account has left, and where to top up")
-    bal.add_argument("action", nargs="?", choices=["list", "enable", "disable", "status", "open", "icons", "full", "alerts"],
+    bal.add_argument("action", nargs="?", choices=["list", "enable", "disable", "status", "open", "icons", "full", "alerts", "known"],
                      default="list",
                      help="list (default); enable or disable the app's Balances page; open PROVIDER's billing page; "
                           "icons: each provider's logo from its own site; full PROVIDER AMOUNT: what a full account is; "
+                          "known ACCOUNT AMOUNT|clear: the credit balance of a provider that reports only spend; "
                           "alerts [on|off|test|chats]: Telegram messages through your own bot when something runs low")
     bal.add_argument("provider", nargs="*", help="provider ids, as `--all` lists them (for `full`, then the amount)")
     bal.add_argument("--all", action="store_true", help="every provider PassBook knows, not only the ones you hold a key for")

@@ -938,6 +938,25 @@ fn balances_full(id: String, amount: Option<f64>) -> Result<Value, String> {
     balances_state(Some(false))
 }
 
+/// The credit balance a person read in a provider's console, for one that reports only spend (OpenAI,
+/// Anthropic): PassBook takes off what is spent after. `None` clears it. The CLI checks the id against its
+/// catalog and reads the account once, so what today had already cost is not taken off.
+#[tauri::command(async)]
+fn balances_known(id: String, amount: Option<f64>) -> Result<Value, String> {
+    let id = id.trim();
+    let first_ok = id.chars().next().map_or(false, |c| c.is_ascii_lowercase() || c.is_ascii_digit());
+    if !first_ok || !id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '/' | '_')) {
+        return Err("Which account?".into());
+    }
+    let amount = match amount {
+        Some(amount) if amount.is_finite() && amount >= 0.0 && amount < 1e12 => format!("{amount}"),
+        Some(_) => return Err("Type the balance as a number, like 247.57.".into()),
+        None => "clear".to_string(),
+    };
+    run(&["balances", "known", id, amount.as_str(), "--app", "passbook-app"])?;
+    balances_state(Some(false))
+}
+
 /// Telegram alerts for balances, through the owner's own bot (passbook_alerts.py): where they go, whether
 /// they are on, a test message, and the chats that have written to the bot. The bot's token is a key in the
 /// store; this only ever passes its NAME.
@@ -2637,7 +2656,7 @@ fn main() {
             pending_web_link, dismiss_web_link, decide_web_link,
             github_state, github_connect_token, github_connect_gh, github_connect_device,
             github_disconnect, github_targets, github_environments, github_check, github_push,
-            balances_state, balances_enable, balances_open, balances_icons, balances_full, balances_alerts, appearance, set_appearance,
+            balances_state, balances_enable, balances_open, balances_icons, balances_full, balances_known, balances_alerts, appearance, set_appearance,
             add_pasted, sync_status, sync_now, rotate_status, rotate_start, rotate_finish, rotate_verify,
             update_state, update_install
         ])

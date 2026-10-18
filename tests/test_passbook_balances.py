@@ -28,6 +28,8 @@ sys.path.insert(0, str(SRC))
 import passbook_balances as balances  # noqa: E402
 
 KEY = "sk-test-0123456789abcdef"
+NOW_S = int(time.time())
+NOW_ISO = time.strftime("%Y-%m-%dT00:00:00Z", time.gmtime())
 
 
 def test_the_catalog_is_whole_and_every_reader_has_an_address():
@@ -436,9 +438,10 @@ def test_turning_balances_off_forgets_the_history_the_logos_and_stops_alerts(sto
     ("openrouter-key", {"data": {"limit": 100, "limit_remaining": 97.9, "usage_monthly": 2.1, "usage": 99.1,
                                  "effective_budget": {"resets_at": "2026-11-01T00:00:00.000Z"}}},
      {"usageUsd": 2.1, "allowance": {"used": 2.1, "limit": 100, "unit": "USD", "resetsAt": "2026-11-01T00:00:00Z"}}),
-    ("openai-costs", {"data": [{"results": [{"amount": {"value": 1.25, "currency": "usd"}}]}, {"results": []},
-                               {"results": [{"amount": {"value": 0.5, "currency": "usd"}}]}], "has_more": False}, {"usageUsd": 1.75}),
-    ("anthropic-costs", {"data": [{"results": [{"amount": "123.45", "currency": "USD"}]}, {"results": [{"amount": "100", "currency": "USD"}]}],
+    ("openai-costs", {"data": [{"start_time": NOW_S, "results": [{"amount": {"value": 1.25, "currency": "usd"}}]}, {"start_time": NOW_S, "results": []},
+                               {"start_time": NOW_S, "results": [{"amount": {"value": 0.5, "currency": "usd"}}]}], "has_more": False}, {"usageUsd": 1.75}),
+    ("anthropic-costs", {"data": [{"starting_at": NOW_ISO, "results": [{"amount": "123.45", "currency": "USD"}]},
+                                  {"starting_at": NOW_ISO, "results": [{"amount": "100", "currency": "USD"}]}],
                          "has_more": False}, {"usageUsd": 2.2345, "usagePeriod": "This month so far"}),
 ])
 def test_the_new_readers_read_what_each_provider_answered(adapter, payload, expected):
@@ -632,7 +635,7 @@ def test_a_balance_only_key_from_another_account_is_named_and_never_read_as_this
 
 def test_each_key_of_an_account_is_tried_until_one_can_read_its_cost():
     values = _anthropic_values()
-    answer = {"k-main-2": (200, {"data": [{"results": [{"amount": "250", "currency": "USD"}]}], "has_more": False})}
+    answer = {"k-main-2": (200, {"data": [{"starting_at": NOW_ISO, "results": [{"amount": "250", "currency": "USD"}]}], "has_more": False})}
     rows = balances.readings(values, set(values), fetch=lambda a, k: answer.get(k, (401, None)), identify=_who, known={})
     main = next(row for row in rows if row["providerId"] == "anthropic")
     assert main["status"] == "ready" and main["keyName"] == "CLAUDE_CODE_X_API_KEY" and main["usageUsd"] == 2.5
@@ -665,3 +668,89 @@ def test_an_organization_keys_refusal_says_more_than_a_workspace_keys():
     rows = balances.readings(values, set(values), fetch=lambda a, k: refusals.get(k, (401, None)), identify=_who, known={})
     main = next(row for row in rows if row["providerId"] == "anthropic")
     assert main["keyName"] == "CLAUDE_CODE_X_API_KEY" and main["issue"]["kind"] == "not-offered"
+
+
+# ── 2026-10-18, later still: a balance you enter, where the provider reports only spend ─────────────────
+#
+# Liam: "it also isnt showing the meter and how many credits i have even though newvisionary ... has 247.57
+# organization credits". Anthropic reports cost, never the credit left; he enters the figure once.
+
+def _cost(days):
+    return {"data": [{"starting_at": f"{day}T00:00:00Z", "results": [{"amount": str(cents), "currency": "USD"}]}
+                     for day, cents in days.items()], "has_more": False}
+
+
+def test_an_entered_balance_loses_only_what_is_spent_after_it_was_entered():
+    today = time.strftime("%Y-%m-%d", time.gmtime())
+    values = {"ANTHROPIC_API_KEY": "k-main"}
+    # $5 had already gone today when he entered $247.57; $2 more since.
+    record = balances.entered_record(247.57, {today: 5.0})
+    assert record["baseline"] == 5.0 and record["day"] == today
+    seen = []
+    fetch = lambda a, k, start=None: seen.append(start) or (200, _cost({today: 700}))  # noqa: E731
+    row = balances.readings(values, set(values), fetch=fetch, identify=_who, known={}, entered={"anthropic": record})[0]
+    assert seen == [today], "the report is asked for from the day it was entered"
+    assert row["balance"] == pytest.approx(245.57) and row["balanceKind"] == "entered" and row["unit"] == "USD"
+    assert row["entered"]["spentSince"] == pytest.approx(2.0) and "estimate" in row["message"].lower()
+    assert row.get("issue") is None
+    used_up = balances.readings(values, set(values), fetch=lambda a, k, start=None: (200, _cost({today: 30000})),
+                                identify=_who, known={}, entered={"anthropic": record})[0]
+    assert used_up["issue"]["kind"] == "entered-stale", "more spent than it held: a top-up was missed, so ask again"
+
+
+def test_a_spend_only_account_without_an_entry_asks_for_one_and_others_do_not():
+    today = time.strftime("%Y-%m-%d", time.gmtime())
+    values = {"ANTHROPIC_API_KEY": "k-main"}
+    row = balances.readings(values, set(values), fetch=lambda a, k: (200, _cost({today: 100})), identify=_who, known={})[0]
+    assert row["canEnterBalance"] and row["issue"]["kind"] == "enter-balance" and row["balance"] is None
+    kie = balances.readings({"KIE_API_KEY": "k"}, {"KIE_API_KEY"}, fetch=lambda a, k: (200, {"code": 200, "data": 5}))[0]
+    assert not kie.get("canEnterBalance"), "a provider that reports its balance never asks for one"
+
+
+def test_a_cost_report_longer_than_a_page_is_followed(monkeypatch):
+    pages = iter([(200, {"data": [{"starting_at": "2026-09-01T00:00:00Z", "results": []}], "has_more": True, "next_page": "p2"}),
+                  (200, {"data": [{"starting_at": "2026-09-02T00:00:00Z", "results": []}], "has_more": False})])
+    asked = []
+    monkeypatch.setattr(balances, "_get", lambda url, *a, **k: asked.append(url) or next(pages))
+    status, payload = balances.fetch_reading("anthropic-costs", KEY, start="2026-09-01")
+    assert status == 200 and len(payload["data"]) == 2 and asked[1].endswith("&page=p2")
+    assert "starting_at=2026-09-01T00:00:00Z" in asked[0]
+
+
+def test_providers_are_asked_at_once_and_rows_keep_the_catalogs_order():
+    import threading
+
+    names = {"KIE_API_KEY": "a", "BFL_API_KEY": "b", "FISH_AUDIO_API_KEY": "c", "MUAPI_API_KEY": "d"}
+    threads = set()
+    answers = {"kie": {"code": 200, "data": 1}, "bfl": {"credits": 2}, "fish": {"credit": "3"}, "muapi": {"balance": 4, "currency": "USD"}}
+
+    def fetch(adapter, key):
+        threads.add(threading.get_ident())
+        time.sleep(0.05)
+        return 200, answers[adapter]
+
+    rows = balances.readings(names, set(names), fetch=fetch)
+    catalog = [entry["id"] for entry in balances.PROVIDERS]
+    assert [row["providerId"] for row in rows] == sorted((row["providerId"] for row in rows), key=catalog.index)
+    assert len(threads) > 1
+
+
+def test_known_keeps_the_entered_balance_and_clear_takes_it_off(store, monkeypatch, capsys):
+    import passbook
+    import passbook_cli
+
+    _, home = store
+    today = time.strftime("%Y-%m-%d", time.gmtime())
+    assert store[0]("add", f"ANTHROPIC_API_KEY={KEY}").returncode == 0
+    monkeypatch.setattr(passbook, "_UNSEALER", passbook._UNSEALER)
+    monkeypatch.setattr(balances, "readings", lambda *a, **kw: _READINGS(*a, **{**kw, "fetch": lambda ad, k, start=None: (200, _cost({today: 300})),
+                                                                             "identify": lambda kind, key: (401, None)}))
+    args = argparse.Namespace(action="known", provider=["anthropic", "100"], all=False, fresh=False, json=True, app="test-app")
+    assert passbook_cli.cmd_balances(args) == 0
+    kept = balances.entered(home)["anthropic"]
+    assert kept["amount"] == 100 and kept["baseline"] == 3.0
+    capsys.readouterr()
+    args.provider = ["anthropic", "clear"]
+    assert passbook_cli.cmd_balances(args) == 0 and balances.entered(home) == {}
+    args.provider = ["kie", "5"]
+    assert passbook_cli.cmd_balances(args) != 0, "only a provider that reports spend and not credit takes one"

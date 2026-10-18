@@ -4,6 +4,25 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+### Credits for providers that report only spend, a save you can see, and a read four times faster
+
+Liam, 2026-10-18, on 1.10.17: "after i press add stronger key and put it in, it went back to show add stronger key
+and nothing changes for like 20 seconds ... it also isnt showing the meter and how many credits i have even
+though newvisionary ... has 247.57 organization credits".
+
+- **Enter a credit balance** where the provider reports spend and never the credit left (Anthropic, OpenAI; no
+  endpoint answers it, checked live). PassBook takes off what the provider reports spent after the entry, so the
+  row has a balance, a meter and days left, marked as an estimate (`balanceKind: "entered"`). More spent than
+  was entered means a top-up was missed, and the row asks for the figure again. `passbook balances known ID
+  AMOUNT|clear`; in the window, "Enter credits" on the row and in what to fix. Cost reports are read from the
+  entry's day, page by page.
+- **Daily spend from the cost reports** goes into the spend chart at once, as OpenRouter's does.
+- **Saving a balance key shows what is happening**: the form stays, "Saved. Asking Anthropic for NewVisionary's
+  figures…", until the answer is on the page. It reads as a plain refresh (the new key is new, everything else
+  answers from the last two minutes), and a read asked for while another runs now waits for it instead of being
+  dropped.
+- **Providers are asked at once**: a fresh read went from 25 s to 6 s, a plain one from 4.6 s to 1.9 s.
+
 ## [1.10.17] — 2026-10-18
 
 ### Anthropic: say which accounts can be read, and ask for the key that can read them

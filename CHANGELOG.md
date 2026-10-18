@@ -4,6 +4,8 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [1.10.18] — 2026-10-18
+
 ### Credits for providers that report only spend, a save you can see, and a read four times faster
 
 Liam, 2026-10-18, on 1.10.17: "after i press add stronger key and put it in, it went back to show add stronger key

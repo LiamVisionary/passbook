@@ -957,6 +957,95 @@ fn balances_known(id: String, amount: Option<f64>) -> Result<Value, String> {
     balances_state(Some(false))
 }
 
+/// Sign in to a provider's own web console so Balances can read the credit figure it shows (Anthropic shows
+/// credits nowhere else). A private window of its own opens on the console's sign-in page: it keeps nothing
+/// after it closes, and it is not `main`, so the capability gives it no PassBook command. When the console's
+/// sign-in cookie appears, the window's cookies go to the CLI on stdin (`balances console-save`), which keeps
+/// them sealed, for the balance readers only, and never sends them to another machine; then it closes.
+#[tauri::command]
+async fn console_signin(app: tauri::AppHandle, provider: String) -> Result<Value, String> {
+    use std::io::Write;
+    use std::process::Stdio;
+    use std::time::Duration;
+
+    let provider = provider.trim().to_string();
+    if provider.is_empty() || !provider.chars().all(|c| c.is_ascii_lowercase() || c == '-') {
+        return Err("Which console?".into());
+    }
+    let asked = provider.clone();
+    let info = tauri::async_runtime::spawn_blocking(move || run_json(&["balances", "console-login", asked.as_str()]))
+        .await
+        .map_err(|error| format!("Could not wait for {error}"))??;
+    let text = |name: &str| info.get(name).and_then(Value::as_str).unwrap_or_default().to_string();
+    let (login, cookie_url, cookie_name, title) = (text("login"), text("cookieUrl"), text("cookie"), text("name"));
+    let login: tauri::Url = login.parse().map_err(|_| "The console's address could not be read.".to_string())?;
+    let target: tauri::Url = cookie_url.parse().map_err(|_| "The console's address could not be read.".to_string())?;
+
+    let label = format!("console-{provider}");
+    if let Some(open) = app.get_webview_window(&label) {
+        let _ = open.set_focus();
+        return Err("The sign-in window is already open.".into());
+    }
+    tauri::WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::External(login))
+        .title(format!("Sign in to {title} · PassBook"))
+        .inner_size(520.0, 760.0)
+        .incognito(true)
+        .build()
+        .map_err(|error| format!("Could not open the sign-in window: {error}"))?;
+
+    // Cookie reads stay off the main thread (they deadlock there on Windows). Fifteen minutes to sign in.
+    let handle = app.clone();
+    let waiting = label.clone();
+    let header = tauri::async_runtime::spawn_blocking(move || -> Result<Zeroizing<String>, String> {
+        for _ in 0..900 {
+            std::thread::sleep(Duration::from_secs(1));
+            let Some(window) = handle.get_webview_window(&waiting) else {
+                return Err("The sign-in window was closed before signing in.".into());
+            };
+            if let Ok(cookies) = window.cookies_for_url(target.clone()) {
+                if cookies.iter().any(|cookie| cookie.name() == cookie_name && !cookie.value().is_empty()) {
+                    let header = Zeroizing::new(cookies.iter().map(|cookie| format!("{}={}", cookie.name(), cookie.value()))
+                        .collect::<Vec<_>>().join("; "));
+                    let _ = window.close();
+                    return Ok(header);
+                }
+            }
+        }
+        if let Some(window) = handle.get_webview_window(&waiting) {
+            let _ = window.close();
+        }
+        Err("Signing in took too long; nothing was kept.".into())
+    })
+    .await
+    .map_err(|error| format!("Could not wait for {error}"))??;
+
+    let saving = provider.clone();
+    let saved = tauri::async_runtime::spawn_blocking(move || -> Result<Value, String> {
+        let mut child = passbook_command()
+            .args(["balances", "console-save", saving.as_str(), "--json", "--app", "passbook-app"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|error| format!("Could not run PassBook: {error}"))?;
+        {
+            let stdin = child.stdin.as_mut().ok_or("Could not write to PassBook")?;
+            stdin.write_all(header.as_bytes()).map_err(|error| format!("Could not write to PassBook: {error}"))?;
+        }
+        let output = child.wait_with_output().map_err(|error| format!("PassBook did not finish: {error}"))?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+        }
+        serde_json::from_slice(&output.stdout).map_err(|_| "PassBook kept the sign-in but did not say so.".to_string())
+    })
+    .await
+    .map_err(|error| format!("Could not wait for {error}"))??;
+    let state = tauri::async_runtime::spawn_blocking(|| balances_state(Some(false)))
+        .await
+        .map_err(|error| format!("Could not wait for {error}"))??;
+    Ok(serde_json::json!({ "saved": saved, "state": state }))
+}
+
 /// Telegram alerts for balances, through the owner's own bot (passbook_alerts.py): where they go, whether
 /// they are on, a test message, and the chats that have written to the bot. The bot's token is a key in the
 /// store; this only ever passes its NAME.
@@ -2656,7 +2745,7 @@ fn main() {
             pending_web_link, dismiss_web_link, decide_web_link,
             github_state, github_connect_token, github_connect_gh, github_connect_device,
             github_disconnect, github_targets, github_environments, github_check, github_push,
-            balances_state, balances_enable, balances_open, balances_icons, balances_full, balances_known, balances_alerts, appearance, set_appearance,
+            balances_state, balances_enable, balances_open, balances_icons, balances_full, balances_known, console_signin, balances_alerts, appearance, set_appearance,
             add_pasted, sync_status, sync_now, rotate_status, rotate_start, rotate_finish, rotate_verify,
             update_state, update_install
         ])

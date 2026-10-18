@@ -4,6 +4,26 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+### Anthropic credits from the Console, with a sign-in PassBook keeps for Balances only
+
+Liam, 2026-10-19: "let me sign in to the Anthropic Console in PassBook so it reads the live credit balance the
+Console shows, and say clearly that it uses Anthropic's undocumented web API". Anthropic's API, SDK, CLI and MCP
+servers report spend, never the credit left (checked: 67 organization endpoints, 75 in the SDK, 404 to guesses).
+
+- **Sign in to the Anthropic Console** from the Balances row or what to fix. A private window opens on the
+  Console's sign-in page; it has no access to PassBook's commands and keeps nothing once closed. When the sign-in
+  cookie appears, its cookies go to `passbook balances console-save` on stdin and the window closes.
+- **The sign-in is kept as `ANTHROPIC_CONSOLE_SESSION_<login>`**: sealed, limited to the balance readers, and
+  never sent to another machine (`passbook_sync.LOCAL_ONLY_PREFIXES`). The window says what it is: a whole
+  Console login, used through Anthropic's undocumented web API, which can change without notice.
+- **Each organization that sign-in can see is read** at `platform.claude.com/api/organizations/{id}/prepaid/credits`
+  (`{"amount": cents}`, anthropics/anthropic-sdk-python#505). The figure is exact (`balanceKind: "console"`) and
+  beats an entered one; spend still comes from the cost report. An ended sign-in asks for a new one; a page that
+  is not JSON is "refused", never a figure.
+- Checked: the host answers API JSON to a client outside a browser (no Cloudflare challenge), the credits path
+  exists (403 "account_session_invalid" where a wrong path is 404), and the window opens and cancels cleanly in a
+  real build. Not yet seen: a signed-in answer, which needs Liam's own sign-in.
+
 ### Anthropic's individual organizations name the button that fixes them
 
 Liam, 2026-10-19: "THEY ARE ALL ORGANIZATIONS MAN", with the Console's Organization page for "Liam's Individual

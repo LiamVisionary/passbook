@@ -3160,6 +3160,41 @@ def cmd_balances(args: argparse.Namespace) -> int:
         print(json.dumps({"full": kept}) if args.json
               else (f"{entry['name']} is full at {amount:,.2f}." if amount else f"{entry['name']} has no set mark."))
         return 0
+    if action == "console-login":
+        # Where the window opens to sign in, and the cookie that says it is done (passbook_balances.CONSOLE).
+        spec = balances.CONSOLE.get(ids[0] if ids else "")
+        if not spec:
+            return _fail("Which console?  passbook balances console-login anthropic")
+        print(json.dumps({"provider": ids[0], "name": spec["name"], "login": spec["login"], "cookieUrl": spec["base"] + "/",
+                          "cookie": spec["cookie"]}))
+        return 0
+    if action == "console-save":
+        # The window's cookies after a console sign-in, on stdin: kept as one key per login, sealed, for the
+        # balance readers only, and never sent to another machine.
+        spec = balances.CONSOLE.get(ids[0] if ids else "")
+        cookie = sys.stdin.read().strip() if not sys.stdin.isatty() else ""
+        if not spec or f"{spec['cookie']}=" not in cookie:
+            return _fail("Nothing to keep: the console's sign-in cookie was not given.",
+                         "PassBook's window passes it after you sign in; it is never typed.")
+        found = balances.console_login_name(ids[0], cookie)
+        who = caller("passbook-balances", args)
+        name = found["key"]
+        if not _confirm_change("add", [name], reason=f"keep a {spec['name']} sign-in for balances", app=who):
+            return 1
+        try:
+            if _write_values({name: cookie}, overwrite=True, app=who, interactive=False) is None:
+                return 1
+        except (passbook.ContainerisedHomeError, ValueError) as error:
+            return _fail(str(error))
+        import passbook_access as access
+
+        policy = access.read_policy()
+        access.set_audience(name, "include", list(balances.BALANCE_KEY_READERS), policy)
+        access.write_policy(policy)
+        print(json.dumps({"saved": name, "account": found.get("account"), "organizations": found["orgs"],
+                          "read": found["ok"], "status": found["status"]}) if args.json
+              else f"Kept {name} for {spec['name']}: {', '.join(o['name'] or o['id'] for o in found['orgs']) or 'no organization read yet'}.")
+        return 0
     if action == "open":
         entry = balances.provider(ids[0]) if len(ids) == 1 else None
         # `--keys`: where to make a key (a balance-only one), from the catalog, never from the caller.
@@ -7885,11 +7920,13 @@ def build_parser() -> argparse.ArgumentParser:
     status.set_defaults(func=cmd_status)
 
     bal = subs.add_parser("balances", help="what each service account has left, and where to top up")
-    bal.add_argument("action", nargs="?", choices=["list", "enable", "disable", "status", "open", "icons", "full", "alerts", "known"],
+    bal.add_argument("action", nargs="?", choices=["list", "enable", "disable", "status", "open", "icons", "full", "alerts", "known",
+                                                  "console-login", "console-save"],
                      default="list",
                      help="list (default); enable or disable the app's Balances page; open PROVIDER's billing page; "
                           "icons: each provider's logo from its own site; full PROVIDER AMOUNT: what a full account is; "
                           "known ACCOUNT AMOUNT|clear: the credit balance of a provider that reports only spend; "
+                          "console-login/console-save PROVIDER: the window's sign-in to a provider's own console; "
                           "alerts [on|off|test|chats]: Telegram messages through your own bot when something runs low")
     bal.add_argument("provider", nargs="*", help="provider ids, as `--all` lists them (for `full`, then the amount)")
     bal.add_argument("--all", action="store_true", help="every provider PassBook knows, not only the ones you hold a key for")

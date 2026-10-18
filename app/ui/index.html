@@ -3333,7 +3333,8 @@ passbook oauth connect google:work</pre>
   const ISSUE_TAG = { "key-rejected": ["off", "Key rejected"], "wrong-account": ["off", "Wrong account"], "needs-balance-key": ["mid", "Needs a stronger key"],
                       "missing-key": ["mid", "Missing a key"], locked: ["", "Locked"], unreachable: ["", "Didn't answer"],
                       "not-offered": ["", "Not offered"], "enter-balance": ["info", "Credits not reported"],
-                      "entered-stale": ["mid", "Enter credits again"] };
+                      "entered-stale": ["mid", "Enter credits again"], "console-signin": ["info", "Credits in the Console"],
+                      "console-expired": ["mid", "Sign in again"], "console-blocked": ["off", "Console refused"] };
   const BALANCE_SPANS = [["today", "Today"], ["week", "7 days"], ["month", "30 days"]];
   const SPAN_WORDS = { today: "today", week: "last 7 days", month: "last 30 days" };
 
@@ -3450,7 +3451,7 @@ passbook oauth connect google:work</pre>
     // A quota that refills before it would run out is not counting down to anything.
     const refills = m?.kind === "quota" && m.resetsAt ? (Date.parse(m.resetsAt) - Date.now()) / 86400000 : null;
     const hasRunway = i.runwayDays !== null && i.runwayDays !== undefined;
-    const estimate = r.balanceKind === "entered" ? "estimate · " : "";
+    const estimate = r.balanceKind === "entered" ? "estimate · " : r.balanceKind === "console" ? "from the Console · " : "";
     const leftSub = estimate + (hasRunway && refills !== null && i.runwayDays >= refills ? "enough until it resets"
       : hasRunway ? runwayWords(i.runwayDays)
       : m?.kind === "quota" ? "left on the plan" : r.usagePeriod ? r.usagePeriod.toLowerCase()
@@ -3500,7 +3501,11 @@ passbook oauth connect google:work</pre>
            <button class="act" data-bal-mark="">Cancel</button>`
         : `<span class="note flat">The meter measures against ${m.basis === "set" ? "the amount you set" : m.basis === "top-up" ? "the balance after your last top-up" : "the most this account has held while PassBook watched"}.</span>
            <button class="act" data-bal-mark="${esc(r.providerId)}">Set what full is</button>`}</div>` : ""}
-      ${r.canEnterBalance ? (balancesView.entering === r.providerId ? balanceEnteredForm(r)
+      ${r.consoleSignIn ? `<div class="bmark"><span class="note flat">${r.balanceKind === "console"
+          ? `Credits read from the ${esc(r.consoleSignIn.name)} with ${esc(r.consoleKey || "your sign-in")}, through Anthropic's undocumented web API.`
+          : `Credits can be read from the ${esc(r.consoleSignIn.name)} with a sign-in PassBook keeps on this Mac, through Anthropic's undocumented web API.`}</span>
+          <button class="act${r.balanceKind === "console" ? "" : " primary"}" data-cs-open="${esc(r.consoleSignIn.provider)}" ${balancesView.signingIn ? "disabled" : ""}>${r.balanceKind === "console" ? "Sign in again" : `Sign in to the ${esc(r.consoleSignIn.name)}`}</button></div>` : ""}
+      ${r.canEnterBalance && r.balanceKind !== "console" ? (balancesView.entering === r.providerId ? balanceEnteredForm(r)
         : `<div class="bmark"><span class="note flat">${r.entered
             ? `Credits entered by you on ${esc(shortDay(String(r.entered.at).slice(0, 10)))}.`
             : `${esc(r.name.split(" · ")[0])} reports what is spent, not the credit left. Enter the balance its console shows to see what is left.`}</span>
@@ -3565,12 +3570,15 @@ passbook oauth connect google:work</pre>
       const acts = x.action === "add-key" && r.balanceKey
           ? (open ? "" : `<button class="act primary" data-bk-open="${esc(x.providerId)}">${x.kind === "key-rejected" ? "Paste a new key" : "Add the key"}</button>`)
         : x.action === "enter-balance" ? (v.entering === x.providerId ? "" : `<button class="act primary" data-eb-open="${esc(x.providerId)}">Enter credits</button>`)
+        : x.action === "console-signin" ? `<button class="act primary" data-cs-open="${esc(r.consoleSignIn?.provider || r.provider)}" ${v.signingIn ? "disabled" : ""}>${v.signingIn ? "Signing in…" : `Sign in to ${esc(r.consoleSignIn?.name || "the Console")}`}</button>
+            ${r.canEnterBalance && v.entering !== x.providerId ? `<button class="act" data-eb-open="${esc(x.providerId)}">Type it instead</button>` : ""}`
         : x.action === "unlock" ? `<button class="act primary" data-goto="vault">Unlock</button>`
         : x.action === "retry" ? `<button class="act" data-balances-refresh="1" ${v.busy ? "disabled" : ""}>Try again</button>`
         // Not offered today can change on the provider's side (Anthropic: Convert to team), so it can be asked
         // again at once, and a key can still be added for it.
         : x.kind === "not-offered" ? `<button class="act primary" data-balances-refresh="1" ${v.busy ? "disabled" : ""}>${v.busy ? "Checking…" : "Check again"}</button>
             ${r.balanceKey && !open ? `<button class="act" data-bk-open="${esc(x.providerId)}">Add the key</button>` : ""}
+            ${r.consoleSignIn ? `<button class="act" data-cs-open="${esc(r.consoleSignIn.provider)}" ${v.signingIn ? "disabled" : ""}>Credits from the Console</button>` : ""}
             ${r.topUpUrl ? `<button class="act" data-topup="${esc(r.provider || r.providerId)}">Open ${esc(shortName(r))}</button>` : ""}`
         : r.topUpUrl ? `<button class="act" data-topup="${esc(r.provider || r.providerId)}">Open ${esc(shortName(r))}</button>` : "";
       return `<div class="fixrow">
@@ -3725,6 +3733,11 @@ passbook oauth connect google:work</pre>
       </div>
       ${v.alertsShown ? balanceAlerts(d) : ""}
       ${v.keyDone ? `<p class="note baldone">${esc(v.keyDone)}</p>` : ""}
+      ${v.signingIn ? `<div class="group"><div class="row"><span class="statustile plain">${icon("person")}</span><div class="grow">
+        <strong>Sign in to the Anthropic Console in the window that opened</strong>
+        <div class="note">PassBook keeps that sign-in on this Mac only, for Balances only, and reads each organization's credits
+        through Anthropic's undocumented web API, which can change without notice. The sign-in can do anything the Console can.
+        The window closes by itself once you are in.</div></div></div></div>` : ""}
       ${showLook ? balanceFixes(d) : ""}
       ${isLook ? "" : balanceStats(d, span)}
       ${!isLook && usdDays.some((p) => p.v > 0) ? `<div class="group chart"><h3>Dollars spent per day</h3>${dayBars(usdDays, "USD", span)}</div>` : ""}
@@ -6111,6 +6124,19 @@ passbook oauth connect google:work</pre>
     main.querySelectorAll("[data-eb-open]").forEach((b) => b.onclick = () => {
       Object.assign(balancesView, { entering: b.dataset.ebOpen, ebNote: "", keyDone: "" }); paint();
       document.getElementById("ebvalue")?.focus();
+    });
+    main.querySelectorAll("[data-cs-open]").forEach((b) => b.onclick = async () => {
+      const v = balancesView, provider = b.dataset.csOpen;
+      Object.assign(v, { signingIn: provider, keyDone: "", error: "" }); paint();
+      try {
+        const answer = await invoke("console_signin", { provider });
+        v.data = answer?.state || v.data;
+        const saved = answer?.saved || {}, orgs = (saved.organizations || []).map((o) => o.name || o.id);
+        v.keyDone = saved.read
+          ? `Signed in to the Anthropic Console${saved.account ? ` as ${saved.account}` : ""}. Credits are read for ${orgs.length ? orgs.join(", ") : "its organizations"}.`
+          : `The sign-in was kept, but the Console did not list its organizations (answered ${saved.status}). Try Refresh in a moment.`;
+      } catch (e) { v.error = balanceError(e); }
+      finally { v.signingIn = ""; paint(); }
     });
     main.querySelectorAll("[data-eb-cancel]").forEach((b) => b.onclick = () => { Object.assign(balancesView, { entering: "", ebNote: "" }); paint(); });
     const saveEntered = async (id, value) => {

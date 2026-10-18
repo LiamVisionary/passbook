@@ -17,6 +17,7 @@ import os
 import subprocess
 import sys
 import threading
+import urllib.request
 import time
 from pathlib import Path
 
@@ -702,7 +703,9 @@ def test_a_spend_only_account_without_an_entry_asks_for_one_and_others_do_not():
     today = time.strftime("%Y-%m-%d", time.gmtime())
     values = {"ANTHROPIC_API_KEY": "k-main"}
     row = balances.readings(values, set(values), fetch=lambda a, k: (200, _cost({today: 100})), identify=_who, known={})[0]
-    assert row["canEnterBalance"] and row["issue"]["kind"] == "enter-balance" and row["balance"] is None
+    # Anthropic can also be read from its Console, so that is what is asked for first; typing it stays possible.
+    assert row["canEnterBalance"] and row["issue"]["kind"] == "console-signin" and row["balance"] is None
+    assert row["consoleSignIn"]["provider"] == "anthropic" and "undocumented" in row["issue"]["fix"]
     kie = balances.readings({"KIE_API_KEY": "k"}, {"KIE_API_KEY"}, fetch=lambda a, k: (200, {"code": 200, "data": 5}))[0]
     assert not kie.get("canEnterBalance"), "a provider that reports its balance never asks for one"
 
@@ -764,3 +767,69 @@ def test_a_remembered_reading_keeps_what_it_asks_for():
     again = balances.read_provider(_entry("openrouter"), {"OPENROUTER_MANAGEMENT_KEY": KEY}, {"OPENROUTER_MANAGEMENT_KEY"},
                                    fetch=lambda *a: pytest.fail("answered from memory"), salt=salt, fresh_from=kept)
     assert again["issue"] == {"kind": "enter-balance"}
+
+
+
+# ── 2026-10-19: Anthropic's credits from its own Console, signed in once ───────────────────────────────
+#
+# Liam: "let me sign in to the Anthropic Console in PassBook so it reads the live credit balance the Console
+# shows, and say clearly that it uses Anthropic's undocumented web API".
+
+def _console(orgs, credits):
+    def fetch(url, cookie, **kw):
+        assert cookie.startswith("sessionKey="), "the saved cookies are sent as they are"
+        if url.endswith("/api/organizations"):
+            return orgs
+        org = url.split("/api/organizations/")[1].split("/")[0]
+        return credits.get(org, (404, None))
+    return fetch
+
+
+def test_the_console_credit_figure_is_read_for_every_organization_the_sign_in_sees():
+    today = time.strftime("%Y-%m-%d", time.gmtime())
+    values = {**_anthropic_values(), "ANTHROPIC_CONSOLE_SESSION_LIAM": "sessionKey=abc; cf=1"}
+    console = _console((200, [{"uuid": "org_main", "name": "NewVisionary"}, {"uuid": "org_ami", "name": "Ami"}]),
+                       {"org_main": (200, {"amount": 24757}), "org_ami": (200, {"amount": 20000})})
+    rows = balances.readings(values, set(values), fetch=lambda a, k, start=None: (200, _cost({today: 100})), identify=_who,
+                             known={}, console=console, entered={"anthropic": balances.entered_record(500, {})})
+    main, ami = rows[0], rows[1]
+    assert main["balance"] == 247.57 and main["balanceKind"] == "console", "the Console's own figure beats an entered one"
+    assert ami["balance"] == 200.0 and ami["status"] == "ready" and ami["issue"] is None
+    assert main["usageUsd"] == 1.0, "spend still comes from the cost report"
+    assert "undocumented" in main["message"] and "anything the Console can" in main["message"]
+    assert "ANTHROPIC_CONSOLE_SESSION_LIAM" in balances.wanted_keys(set(values))
+
+
+def test_an_ended_or_refused_console_sign_in_is_named_and_never_a_figure():
+    values = {"ANTHROPIC_API_KEY": "k-main", "ANTHROPIC_CONSOLE_SESSION_LIAM": "sessionKey=old"}
+    gone = balances.readings(values, set(values), fetch=lambda a, k: (401, None), identify=_who, known={},
+                             console=_console((401, None), {}))[0]
+    assert gone["issue"]["kind"] == "console-expired" and gone["issue"]["action"] == "console-signin"
+    blocked = balances.readings(values, set(values), fetch=lambda a, k: (401, None), identify=_who, known={},
+                                console=_console((balances.BLOCKED, None), {}))[0]
+    assert blocked["issue"]["kind"] == "console-blocked" and blocked.get("balance") is None
+
+
+def test_a_console_page_that_is_not_json_is_blocked_not_a_balance(monkeypatch):
+    class Page:
+        status = 200
+        def read(self, n): return b"<html>Just a moment...</html>"
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open", lambda self, req, timeout=0: Page())
+    assert balances.fetch_console("https://platform.claude.com/api/organizations", "sessionKey=x") == (balances.BLOCKED, None)
+    assert balances.parse_console_credits({"amount": "lots"}) is None and balances.parse_console_credits({"amount": 456}) == 4.56
+
+
+def test_a_console_sign_in_never_leaves_this_machine():
+    import passbook_sync
+
+    assert not passbook_sync.may_leave_machine("ANTHROPIC_CONSOLE_SESSION_LIAM")["allowed"]
+
+
+def test_a_new_sign_in_is_named_after_its_login():
+    def fetch(url, cookie, **kw):
+        return (200, [{"uuid": "o1", "name": "NewVisionary"}]) if url.endswith("/organizations") else (200, {"email_address": "liam@example.com"})
+    found = balances.console_login_name("anthropic", "sessionKey=x", fetch=fetch)
+    assert found["key"] == "ANTHROPIC_CONSOLE_SESSION_LIAM_EXAMPLE_COM" and found["orgs"][0]["id"] == "o1"
+    assert balances.console_login_name("anthropic", "sessionKey=x", fetch=lambda u, c, **k: (401, None))["ok"] is False

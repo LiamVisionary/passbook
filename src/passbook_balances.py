@@ -736,7 +736,8 @@ def _base(entry: Mapping[str, Any], present: set[str], checked_at: str) -> dict:
 # What needs doing, said once for every surface: which row, what is wrong in a few words, what fixes it,
 # and the one action that does. Worst first by `rank`. A ready row has none.
 ISSUE_RANK = {"key-rejected": 1, "wrong-account": 1, "needs-balance-key": 2, "missing-key": 2, "locked": 3, "unreachable": 4,
-              "not-offered": 5, "entered-stale": 3, "enter-balance": 6, "no-api": 9}
+              "not-offered": 5, "entered-stale": 3, "enter-balance": 6, "console-expired": 2, "console-blocked": 4,
+              "console-signin": 6, "no-api": 9}
 
 
 def _a(words: str) -> str:
@@ -919,6 +920,7 @@ def wanted_keys(present: Iterable[str], *, everything: bool = False, only: Itera
         if not entry.get("adapter"):
             continue
         mine = set(held_names(entry, held)) | {item["key"] for item in entry.get("accounts", ())} | set(_reading_names(entry))
+        mine |= set(console_sessions(entry["id"], held))
         names |= mine | {pair for name, pair in (entry.get("pairs") or {}).items() if name in mine}
     return sorted(name for name in names if name in held)
 
@@ -1005,6 +1007,158 @@ def _apply_entered(row: dict, record: Mapping[str, Any] | None, provider_name: s
                                "top-up. Enter the balance its console shows now."}
 
 
+# ── a provider's own web console, signed in once ──────────────────────────────
+#
+# Anthropic shows an organization's credit balance only in its Console; no API key, SDK or MCP server reads it
+# (checked 2026-10-19). Liam: "let me sign in to the Anthropic Console in PassBook so it reads the live credit
+# balance the Console shows, and say clearly that it uses Anthropic's undocumented web API". The Console answers
+# its own page from `/api/organizations/{id}/prepaid/credits` with `{"amount": cents}` to a signed-in browser
+# (anthropics/anthropic-sdk-python#505). PassBook's window keeps that sign-in's cookies under
+# `ANTHROPIC_CONSOLE_SESSION_*`: sealed, for the balance readers only, and never sent to another machine
+# (passbook_sync.LOCAL_ONLY_PREFIXES). It is a whole Console login, and every message about it says so.
+CONSOLE: dict[str, dict] = {
+    "anthropic": {"name": "Anthropic Console", "base": "https://platform.claude.com", "login": "https://platform.claude.com/login",
+                  "cookie": "sessionKey", "orgs": "/api/organizations", "credits": "/api/organizations/{org}/prepaid/credits",
+                  "account": "/api/account", "prefix": "ANTHROPIC_CONSOLE_SESSION"},
+}
+CONSOLE_NOTE = ("Read from the {name} with your sign-in, through {provider}'s undocumented web API: it can change without "
+                "notice. The sign-in PassBook keeps for this can do anything the Console can.")
+# A browser's, so the Console answers as it does to one. The cookies came from a WebKit window.
+CONSOLE_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15"
+BLOCKED = -1
+
+
+def console_sessions(provider_id: str, held: Iterable[str]) -> list[str]:
+    prefix = CONSOLE.get(provider_id, {}).get("prefix")
+    return sorted(name for name in held if prefix and (name == prefix or name.startswith(prefix + "_")))
+
+
+def fetch_console(url: str, cookie: str, *, timeout: float = 12.0) -> tuple[int, Any]:
+    """(status, JSON) from a console's web API. A page that is not JSON (a sign-in page, a bot check) is
+    BLOCKED or, after a redirect to sign in, 401: never read as a figure. A redirect is never followed."""
+    request = urllib.request.Request(url, headers={"Cookie": cookie, "User-Agent": CONSOLE_AGENT, "Accept": "application/json",
+                                                   "Referer": url.split("/api/")[0] + "/"})
+    try:
+        with urllib.request.build_opener(_NoRedirect).open(request, timeout=timeout) as response:
+            body = response.read(2_000_000)
+    except urllib.error.HTTPError as error:
+        mitigated = error.headers.get("cf-mitigated") if error.headers else None
+        status = error.code
+        error.close()
+        if 300 <= status < 400:
+            return 401, None  # sent to sign in: the session is over
+        return (BLOCKED if mitigated else status), None
+    try:
+        return 200, json.loads(body.decode("utf-8"))
+    except ValueError:
+        return BLOCKED, None
+
+
+def parse_console_orgs(payload: Any) -> list[dict]:
+    """The organizations a console sign-in can see: [{"id", "name"}]. Tolerant of a list or a wrapped list."""
+    items = payload if isinstance(payload, list) else _record(payload).get("organizations") or _record(payload).get("data") or []
+    found = []
+    for item in map(_record, items if isinstance(items, list) else []):
+        org = _text(item.get("uuid")) or _text(item.get("id"))
+        if org:
+            found.append({"id": org, "name": _text(item.get("name"))})
+    return found
+
+
+def parse_console_credits(payload: Any) -> float | None:
+    """Dollars from `{"amount": cents}`; None when the answer is anything else."""
+    cents = _number(_record(payload).get("amount"))
+    return None if cents is None or abs(cents) > 1e13 else round(cents / 100, 2)
+
+
+def _apply_console(entry: Mapping[str, Any], rows: list[dict], values: Mapping[str, str], held: set[str], *,
+                   fetch: Callable[..., tuple[int, Any]]) -> None:
+    """Each account row whose organization a console sign-in can see gets the console's own credit figure."""
+    spec = CONSOLE[entry["id"]]
+    provider_name = entry["name"].removesuffix(" API")
+    sessions = [name for name in console_sessions(entry["id"], held) if _open(values, name)]
+    covers: dict[str, str] = {}
+    trouble: dict[str, int] = {}
+    for name in sessions:
+        try:
+            status, payload = fetch(spec["base"] + spec["orgs"], _open(values, name))
+        except Exception:  # noqa: BLE001 — offline: nothing is assumed
+            status, payload = 0, None
+        if status == 200:
+            for org in parse_console_orgs(payload):
+                covers.setdefault(org["id"], name)
+        else:
+            trouble[name] = status
+    for row in rows:
+        org = row.get("accountId")
+        if not org:
+            continue
+        row["consoleSignIn"] = {"provider": entry["id"], "name": spec["name"]}
+        session = covers.get(org)
+        if not session:
+            if trouble and not covers:
+                # Every sign-in held failed: say so on the row rather than asking for a new one blindly.
+                status = next(iter(trouble.values()))
+                row["issue"] = ({"kind": "console-blocked", "rank": ISSUE_RANK["console-blocked"], "action": "retry",
+                                 "title": f"{spec['name']} refused PassBook's request",
+                                 "fix": f"{provider_name}'s site stopped a request that did not come from a browser. The credit "
+                                        "balance can't be read this way right now; no figure is assumed."}
+                                if status == BLOCKED else
+                                {"kind": "console-expired", "rank": ISSUE_RANK["console-expired"], "action": "console-signin",
+                                 "title": f"Your {spec['name']} sign-in has ended",
+                                 "fix": f"Sign in again to read {row.get('accountLabel') or row['name']}'s credits; PassBook replaces the saved sign-in."})
+            elif row.get("issue") and row["issue"]["kind"] == "enter-balance" and row.get("balanceKind") != "entered":
+                row["issue"] = {**row["issue"], "kind": "console-signin", "rank": ISSUE_RANK["console-signin"], "action": "console-signin",
+                                "title": f"Sign in to the {spec['name']} to see {row.get('accountLabel') or row['name']}'s credits",
+                                "fix": f"{provider_name} shows credits only in its Console. Sign in once in PassBook's window and it "
+                                       "reads the figure the Console shows, through Anthropic's undocumented web API. Or type the figure."}
+            continue
+        try:
+            status, payload = fetch(spec["base"] + spec["credits"].format(org=urllib.parse.quote(org)), _open(values, session))
+        except Exception:  # noqa: BLE001
+            status, payload = 0, None
+        dollars = parse_console_credits(payload) if status == 200 else None
+        if dollars is not None:
+            row.update(status="ready", balance=dollars, unit="USD", balanceKind="console", consoleKey=session, providerError=None,
+                       observedAt=row.get("checkedAt"), entered=None, issue=None,
+                       message=CONSOLE_NOTE.format(name=spec["name"], provider=provider_name))
+            row["details"] = [{"label": "Credits (from the Console)", "value": f"{dollars:g} USD"},
+                              *[item for item in row.get("details", []) if item.get("label") not in ("Credits you entered", "Spent since")]]
+            continue
+        row["issue"] = ({"kind": "console-blocked", "rank": ISSUE_RANK["console-blocked"], "action": "retry",
+                         "title": f"{spec['name']} refused PassBook's request",
+                         "fix": f"{provider_name}'s site stopped a request that did not come from a browser. No figure is assumed."}
+                        if status == BLOCKED else
+                        {"kind": "console-expired", "rank": ISSUE_RANK["console-expired"], "action": "console-signin",
+                         "title": f"Your {spec['name']} sign-in has ended",
+                         "fix": f"Sign in again to read {row.get('accountLabel') or row['name']}'s credits."}
+                        if status in (401, 403) else
+                        {"kind": "unreachable", "rank": ISSUE_RANK["unreachable"], "action": "retry", "title": "Didn't answer",
+                         "fix": f"{spec['name']} did not give a credit figure. Try again; no figure is assumed."})
+
+
+def console_login_name(provider_id: str, cookie: str, *, fetch: Callable[..., tuple[int, Any]] = fetch_console) -> dict:
+    """What a fresh console sign-in can see, and the key name it is kept under (one per login): the
+    account's email when the console says it, else its first organization."""
+    import re
+
+    spec = CONSOLE[provider_id]
+    status, payload = fetch(spec["base"] + spec["orgs"], cookie)
+    if status != 200:
+        return {"ok": False, "status": status, "orgs": [], "key": spec["prefix"]}
+    orgs = parse_console_orgs(payload)
+    who = ""
+    try:
+        account_status, account = fetch(spec["base"] + spec["account"], cookie)
+        record = _record(account) if account_status == 200 else {}
+        who = _text(record.get("email_address")) or _text(record.get("email")) or ""
+    except Exception:  # noqa: BLE001
+        who = ""
+    slug = re.sub(r"[^A-Z0-9]+", "_", (who or (orgs[0]["name"] if orgs and orgs[0].get("name") else "")).upper()).strip("_")
+    return {"ok": True, "status": status, "orgs": orgs, "account": who or None,
+            "key": f"{spec['prefix']}_{slug}"[:120] if slug else spec["prefix"]}
+
+
 def identities(root: Path) -> dict[str, dict]:
     """Which account each key belongs to, by key fingerprint: kept so a row keeps its id while offline."""
     try:
@@ -1068,7 +1222,7 @@ def readings(values: Mapping[str, str], present: Iterable[str], *, everything: b
              fetch: Callable[[str, str], tuple[int, Any]] = fetch_reading, now: Callable[[], float] = time.time,
              salt: bytes = b"", fresh_from: Mapping[str, dict] | None = None,
              identify: Callable[[str, str], tuple[int, Any]] = fetch_identity, known: dict[str, dict] | None = None,
-             entered: Mapping[str, dict] | None = None) -> list[dict]:
+             entered: Mapping[str, dict] | None = None, console: Callable[..., tuple[int, Any]] | None = None) -> list[dict]:
     """A reading per account you hold a key for (every provider with `everything`, or the ones named).
 
     A person can hold several keys for one provider (six for Anthropic, in four organizations). Each account
@@ -1079,8 +1233,11 @@ def readings(values: Mapping[str, str], present: Iterable[str], *, everything: b
     who = {"identify": identify, "known": known, "salt": salt, "now": now}
 
     def one(entry: Mapping[str, Any]) -> list[dict]:
-        return _provider_rows(entry, values, held, fetch=fetch, now=now, salt=salt, fresh_from=fresh_from, who=who,
+        rows = _provider_rows(entry, values, held, fetch=fetch, now=now, salt=salt, fresh_from=fresh_from, who=who,
                               entered=entered or {})
+        if entry["id"] in CONSOLE:
+            _apply_console(entry, rows, values, held, fetch=console or fetch_console)
+        return rows
 
     # Providers are asked at once, each on its own (a fresh read of ~45 accounts took 25 s one after another);
     # within a provider its accounts stay in order. The rows come back in catalog order either way.

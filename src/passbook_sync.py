@@ -82,7 +82,9 @@ LOCAL_ONLY = frozenset({
 # `USEPOD_HOST_`: each machine that hosts for UsePod has its own token and payout wallet. HivemindOS
 # never replicates them (hive-env-add's LOCAL_ONLY_PREFIXES), so a collector drops them on arrival;
 # until this list said the same, every plan offered to send them and reported them "sent" for ever.
-LOCAL_ONLY_PREFIXES = ("HIVE_ENV_TAILNET_", "HIVE_LINK_", "USEPOD_HOST_")
+# A provider console's own sign-in (Balances reads credits through it) is a whole web login: it never leaves
+# the machine it was made on.
+LOCAL_ONLY_PREFIXES = ("HIVE_ENV_TAILNET_", "HIVE_LINK_", "USEPOD_HOST_", "ANTHROPIC_CONSOLE_SESSION")
 
 
 def _looks_sealed(value: str) -> bool:

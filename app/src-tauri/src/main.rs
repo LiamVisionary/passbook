@@ -965,12 +965,17 @@ fn balances_alerts(action: String, key: Option<String>, chat: Option<String>) ->
 /// Open a provider's own billing page to top up. Only a provider id goes to the CLI, which looks the address
 /// up in its catalog: the window never hands it a URL to open.
 #[tauri::command(async)]
-fn balances_open(id: String) -> Result<(), String> {
+fn balances_open(id: String, keys: Option<bool>) -> Result<(), String> {
     let id = id.trim();
     if id.is_empty() || !id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
         return Err("Which provider?".into());
     }
-    run(&["balances", "open", id])?;
+    // `keys`: the provider's page for making a key (the one a balance-only key is made on), not billing.
+    if keys.unwrap_or(false) {
+        run(&["balances", "open", id, "--keys"])?;
+    } else {
+        run(&["balances", "open", id])?;
+    }
     Ok(())
 }
 

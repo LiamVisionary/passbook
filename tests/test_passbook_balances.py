@@ -32,10 +32,11 @@ KEY = "sk-test-0123456789abcdef"
 
 def test_the_catalog_is_whole_and_every_reader_has_an_address():
     ids = [entry["id"] for entry in balances.PROVIDERS]
-    assert len(ids) == len(set(ids)) == 57
+    assert len(ids) == len(set(ids)) == 65
     readers = {entry["adapter"] for entry in balances.PROVIDERS if entry.get("adapter")}
-    assert readers == set(balances.REQUESTS) and len(readers) == 13
-    for url, _ in balances.REQUESTS.values():
+    readers |= {item["adapter"] for entry in balances.PROVIDERS for item in entry.get("accounts", ()) if item.get("adapter")}
+    assert readers == set(balances.REQUESTS) and len(readers) == 27
+    for url, *_ in balances.REQUESTS.values():
         assert url.startswith("https://")
     for entry in balances.PROVIDERS:
         assert entry.get("keys") or entry.get("reading_keys") or not entry.get("adapter"), entry["id"]
@@ -115,8 +116,12 @@ def test_the_states_a_provider_can_be_in():
     assert balances.read_provider(_entry("meshy"), {}, set(), fetch=never)["status"] == "missing"
     held = balances.read_provider(_entry("meshy"), {"MESHY_API_KEY": "hive-sealed:x"}, {"MESHY_API_KEY"}, fetch=never)
     assert held["status"] == "locked", "held but not openable here is not missing"
-    manual = balances.read_provider(_entry("openai-api"), {"OPENAI_API_KEY": KEY}, {"OPENAI_API_KEY"}, fetch=never)
-    assert manual["status"] == "manual" and manual["topUpUrl"].startswith("https://platform.openai.com")
+    manual = balances.read_provider(_entry("groq"), {"GROQ_API_KEY": KEY}, {"GROQ_API_KEY"}, fetch=never)
+    assert manual["status"] == "manual" and manual["issue"]["kind"] == "no-api"
+    # OpenAI reports spend only to an Admin key: an inference key is never tried, and the fix is named.
+    openai = balances.read_provider(_entry("openai-api"), {"OPENAI_API_KEY": KEY}, {"OPENAI_API_KEY"}, fetch=never)
+    assert openai["status"] == "missing" and openai["topUpUrl"].startswith("https://platform.openai.com")
+    assert openai["issue"]["kind"] == "needs-balance-key" and openai["issue"]["key"] == "OPENAI_BALANCE_KEY"
     # An inference key is never taken for a billing key.
     quiver = balances.read_provider(_entry("quiver"), {"QUIVER_API_KEY": KEY}, {"QUIVER_API_KEY"}, fetch=never)
     assert quiver["status"] == "missing" and "QUIVER_BILLING_ADMIN_KEY" in quiver["message"]
@@ -168,8 +173,9 @@ def test_a_recent_reading_is_reused_only_for_the_same_key():
     kept = {"openrouter": {"providerId": "openrouter", "status": "ready", "balance": 6,
                            "connection": balances.fingerprint(salt, "openrouter", KEY)}}
     held = {"OPENROUTER_MANAGEMENT_KEY"}
-    assert balances.read_provider(_entry("openrouter"), {"OPENROUTER_MANAGEMENT_KEY": KEY}, held, fetch=never,
-                                  salt=salt, fresh_from=kept) is kept["openrouter"]
+    again = balances.read_provider(_entry("openrouter"), {"OPENROUTER_MANAGEMENT_KEY": KEY}, held, fetch=never,
+                                   salt=salt, fresh_from=kept)
+    assert again is kept["openrouter"] and again["balance"] == 6
     asked = []
     rotated = balances.read_provider(_entry("openrouter"), {"OPENROUTER_MANAGEMENT_KEY": "new-" + KEY}, held,
                                      fetch=lambda a, k: asked.append(a) or (200, {"data": {"total_credits": 1, "total_usage": 0}}),
@@ -288,7 +294,7 @@ def test_listing_reads_the_providers_you_hold_keys_for_and_remembers_only_number
     shown, calls = _balances(monkeypatch, capsys)
     by_id = {row["providerId"]: row for row in shown["providers"]}
     assert set(by_id) == {"openrouter", "openai-api"}, "only providers a held key belongs to"
-    assert by_id["openrouter"]["balance"] == 15 and by_id["openai-api"]["status"] == "manual"
+    assert by_id["openrouter"]["balance"] == 15 and by_id["openai-api"]["status"] == "missing"
     assert calls == ["openrouter"]
     assert KEY not in json.dumps(shown)
     assert by_id["openrouter"]["keyName"] == "OPENROUTER_MANAGEMENT_KEY" and by_id["openrouter"]["connection"]
@@ -407,3 +413,133 @@ def test_turning_balances_off_forgets_the_history_the_logos_and_stops_alerts(sto
     for name in (insights.HISTORY_FILE, insights.MARKS_FILE, logos.ICONS_FILE, balances.CACHE_FILE):
         assert not (home / name).exists(), name
     assert alerts.settings(home) == {"on": False, "key": alerts.DEFAULT_KEY, "chat": "42"}, "where they went is kept for next time"
+
+
+# ── 2026-10-18: every balance a held key can read, and a key of its own for the ones it cannot ─────────
+#
+# Liam: "passbook is missing LOTS of balances ... add a way in the balances view to add those higher permission
+# keys specifically for that, so the rest of the keys keep their current permissions". The shapes below are
+# what each provider answered to his own keys that day (numbers changed), read through a probe that printed
+# only shapes.
+
+
+@pytest.mark.parametrize("adapter, payload, expected", [
+    ("venice", {"data": {"balances": {"USD": 5.95, "DIEM": 0, "BUNDLED_CREDITS": 0}, "accessPermitted": True}}, {"balance": 5.95, "unit": "USD"}),
+    ("runpod", {"data": {"myself": {"clientBalance": 25.07, "currentSpendPerHr": 0.005, "spendLimit": 80}}}, {"balance": 25.07, "unit": "USD"}),
+    ("kie", {"code": 200, "msg": "success", "data": 1050.0}, {"balance": 1050.0, "unit": "credits"}),
+    ("tripo", {"code": 0, "data": {"balance": 12, "frozen": 2}}, {"balance": 12, "unit": "credits"}),
+    ("bfl", {"credits": 5388.8}, {"balance": 5388.8, "unit": "credits"}),
+    ("runware", {"data": [{"balance": 18.32, "organizationName": "Liam", "apiKeys": [{"apiKey": "rw-secret"}]}]}, {"balance": 18.32, "unit": "USD", "accountLabel": "Liam"}),
+    ("muapi", {"balance": 18.3, "currency": "USD", "email": "x@y.z"}, {"balance": 18.3, "unit": "USD"}),
+    ("fish", {"credit": "100.688820", "cumulative_top_up": "105.00"}, {"balance": 100.68882, "unit": "USD"}),
+    ("browser-use", {"totalCreditsBalanceUsd": 50.04, "monthlyCreditsBalanceUsd": 0.0, "additionalCreditsBalanceUsd": 50.04}, {"balance": 50.04, "unit": "USD"}),
+    ("openrouter-key", {"data": {"limit": 100, "limit_remaining": 97.9, "usage_monthly": 2.1, "usage": 99.1,
+                                 "effective_budget": {"resets_at": "2026-11-01T00:00:00.000Z"}}},
+     {"usageUsd": 2.1, "allowance": {"used": 2.1, "limit": 100, "unit": "USD", "resetsAt": "2026-11-01T00:00:00Z"}}),
+    ("openai-costs", {"data": [{"results": [{"amount": {"value": 1.25, "currency": "usd"}}]}, {"results": []},
+                               {"results": [{"amount": {"value": 0.5, "currency": "usd"}}]}], "has_more": False}, {"usageUsd": 1.75}),
+    ("anthropic-costs", {"data": [{"results": [{"amount": "123.45", "currency": "USD"}]}, {"results": [{"amount": "100", "currency": "USD"}]}],
+                         "has_more": False}, {"usageUsd": 2.2345, "usagePeriod": "This month so far"}),
+])
+def test_the_new_readers_read_what_each_provider_answered(adapter, payload, expected):
+    reading = balances.parse_reading(adapter, payload)
+    for key, value in expected.items():
+        assert (reading[key] == pytest.approx(value)) if isinstance(value, float) else reading[key] == value, (adapter, key)
+
+
+def test_money_held_or_invested_is_shown_as_reported_and_never_as_a_balance_to_spend():
+    stripe = balances.parse_reading("stripe", {"available": [{"amount": 0, "currency": "usd"}],
+                                               "pending": [{"amount": 2520, "currency": "usd"}], "livemode": True})
+    alpaca = balances.parse_reading("alpaca", {"cash": "17.55", "equity": "20.47", "buying_power": "17.55", "currency": "USD",
+                                               "account_number": "291555379", "status": "ACTIVE"})
+    for reading in (stripe, alpaca):
+        assert "balance" not in reading, "a sale or a market move must never read as a top-up or as spend"
+    assert {"label": "Pending", "value": "25.2 USD"} in stripe["details"]
+    assert alpaca["details"][0] == {"label": "Account value", "value": "20.47 USD"}
+    assert "291555379" not in json.dumps(alpaca), "the brokerage account number is not kept"
+    wallet = balances.parse_reading("bankr-wallet", {"success": True, "evmAddress": "0xabc", "balances": {
+        "base": {"total": "176.27"}, "mainnet": {"total": "2.41"}, "solana": {"total": "0"}}})
+    assert "balance" not in wallet and wallet["details"][0] == {"label": "Wallet value", "value": "178.68 USD"}
+    assert "0xabc" not in json.dumps(wallet) and not any("solana" in d["label"] for d in wallet["details"]), "empty chains are not listed"
+    runware = balances.parse_reading("runware", {"data": [{"balance": 1, "apiKeys": [{"apiKey": "rw-secret"}]}]})
+    assert "rw-secret" not in json.dumps(runware), "Runware lists the account's keys in the same answer; none is kept"
+
+
+def test_cost_readers_refuse_what_they_cannot_add_up():
+    for odd in (("openai-costs", {"data": [{"results": [{"amount": {"value": 1, "currency": "eur"}}]}]}),
+                ("anthropic-costs", {"data": [{"results": [{"amount": "1", "currency": "USD"}]}], "has_more": True}),
+                ("kie", {"code": 401, "data": 5}), ("tripo", {"code": 2000, "data": {"balance": 1}}),
+                ("stripe", {"available": [], "pending": []}), ("alpaca", {"cash": "x", "equity": "1", "currency": "USD"})):
+        with pytest.raises(balances.Unreadable):
+            balances.parse_reading(*odd)
+
+
+def test_a_balance_only_key_is_tried_before_every_other_key():
+    seen = []
+    fetch = lambda adapter, key: seen.append(key) or (200, {"credits": {"current_balance": 3, "currency": "USD"}})  # noqa: E731
+    values = {"FAL_KEY": "inference", "FAL_BALANCE_KEY": "admin"}
+    row = balances.read_provider(_entry("fal"), values, set(values), fetch=fetch)
+    assert seen == ["admin"] and row["keyName"] == "FAL_BALANCE_KEY" and row["balanceKey"]["held"]
+
+
+def test_each_problem_says_what_is_wrong_and_the_one_thing_that_fixes_it():
+    held = {"FAL_KEY", "VULTR_API_KEY", "OPENAI_API_KEY"}
+    values = {name: KEY for name in held}
+    refused = {"fal": 403, "vultr": 401}
+    rows = balances.readings(values, held, fetch=lambda adapter, key: (refused[adapter], None))
+    found = {item["providerId"]: item for item in balances.issues(rows)}
+    assert [item["kind"] for item in balances.issues(rows)] == ["key-rejected", "needs-balance-key", "needs-balance-key"], "worst first"
+    assert found["vultr"]["action"] == "add-key" and found["vultr"]["key"] == "VULTR_BALANCE_KEY"
+    assert "allowed list" in found["vultr"]["fix"], "a Vultr 401 is often the key's address list, so it says so"
+    assert found["fal"]["title"] == "FAL_KEY can't see billing" and found["fal"]["key"] == "FAL_BALANCE_KEY"
+    assert found["fal"]["createUrl"].startswith("https://fal.ai/")
+    assert found["openai-api"]["title"] == "Needs an OpenAI admin key", "an inference key is never tried for OpenAI's costs"
+    assert KEY not in json.dumps(rows)
+
+
+def test_a_second_account_is_its_own_row_and_the_same_account_is_shown_once():
+    answers = {"main": 10, "backup": 4}
+    fetch = lambda adapter, key: (200, {"credits": {"current_balance": answers[key], "currency": "USD"}})  # noqa: E731
+    values = {"FAL_BALANCE_KEY": "main", "FAL_KEY_BACKUP": "backup"}
+    rows = balances.readings(values, set(values), fetch=fetch)
+    assert [(r["providerId"], r["provider"], r["balance"]) for r in rows] == [("fal", "fal", 10), ("fal/FAL_KEY_BACKUP", "fal", 4)]
+    assert rows[1]["name"] == "fal · backup key" and rows[1]["balanceKey"] is None
+    assert balances.provider("fal/FAL_KEY_BACKUP")["id"] == "fal/FAL_KEY_BACKUP", "full marks and top-ups find it"
+    answers["backup"] = 10
+    assert len(balances.readings(values, set(values), fetch=fetch)) == 1, "two keys on one account are one row"
+    assert set(balances.wanted_keys(set(values))) == {"FAL_BALANCE_KEY", "FAL_KEY_BACKUP"}
+
+
+def test_a_key_that_signs_in_as_a_pair_needs_both_halves():
+    never = lambda *a: pytest.fail("half a pair is never sent")  # noqa: E731
+    half = balances.read_provider(_entry("alpaca"), {"ALPACA_API_SECRET_KEY": "secret"}, {"ALPACA_API_SECRET_KEY"}, fetch=never)
+    assert half["status"] == "missing" and half["issue"]["title"] == "Needs ALPACA_API_KEY_ID"
+    sent = []
+    values = {"ALPACA_API_SECRET_KEY": "secret", "ALPACA_API_KEY_ID": "id"}
+    balances.read_provider(_entry("alpaca"), values, set(values),
+                           fetch=lambda a, k: sent.append(k) or (200, {"cash": "1", "equity": "1", "currency": "USD"}))
+    assert sent == ["id\nsecret"] and balances._headers("alpaca", sent[0], "")["APCA-API-KEY-ID"] == "id"
+    assert set(balances.wanted_keys(set(values))) == set(values)
+
+
+def test_balance_only_keys_are_opened_for_the_balance_readers_alone():
+    # The callers that run the readers: this CLI, PassBook's window and HivemindOS (readings.ts says --app hivemindos).
+    assert balances.BALANCE_KEY_READERS == ("passbook-balances", "passbook-app", "hivemindos")
+    for entry in balances.PROVIDERS:
+        slot = balances.balance_key(entry)
+        if slot:
+            assert slot["key"] not in entry.get("keys", ()), f"{entry['id']}: a balance-only key is never a key other apps use"
+            assert slot["createUrl"].startswith("https://"), entry["id"]
+
+
+def test_open_keys_goes_to_the_page_for_making_a_key(store, monkeypatch, capsys):
+    import passbook_cli
+    import webbrowser
+
+    opened = []
+    monkeypatch.setattr(webbrowser, "open", lambda url: opened.append(url))
+    args = argparse.Namespace(action="open", provider=["fal"], all=False, fresh=False, json=True, app="", keys=True)
+    assert passbook_cli.cmd_balances(args) == 0 and opened == ["https://fal.ai/dashboard/keys"]
+    args.provider = ["fal/FAL_KEY_BACKUP"]
+    args.keys = False
+    assert passbook_cli.cmd_balances(args) == 0 and opened[-1] == "https://fal.ai/dashboard/usage-billing/billing"

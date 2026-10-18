@@ -2518,7 +2518,7 @@ def _run_and_wait(command: list[str], environment: dict[str, str]) -> int:
     return 128 - code if code < 0 else code
 
 
-def _rerun_under_grant(app: str, reason: str, keys: Iterable[str] | None = None) -> int | None:
+def _rerun_under_grant(app: str, reason: str, keys: Iterable[str] | None = None, *, guarded: bool = False) -> int | None:
     """Re-run this exact command as a child the broker started, holding values.
 
     Replication is the one job that genuinely needs plaintext: copying a key to
@@ -2538,7 +2538,8 @@ def _rerun_under_grant(app: str, reason: str, keys: Iterable[str] | None = None)
         import passbook_broker
     except ImportError:
         return None
-    if passbook_broker.reads_mode(access.read_policy()) != "sealed":
+    # `guarded`: a guarded key is handed only to a process the broker started, whatever the reads mode.
+    if not guarded and passbook_broker.reads_mode(access.read_policy()) != "sealed":
         return None
     if not passbook_broker.running():
         return _fail(f"{app} needs the broker to open encrypted values, and none is running.",
@@ -3011,8 +3012,20 @@ def _balance_values(app: str, wanted: list[str], reason: str = BALANCES_REASON) 
     values: dict[str, str] = {}
     for path in passbook._scoped_paths():
         values.update({name: value for name, value in passbook._read(path).items() if name in wanted})
-    if any(str(values.get(name, "")).startswith("hive-sealed:") for name in wanted):
-        again = _rerun_under_grant(app, reason, wanted)
+    # Sealed, or not handed over at all (a guarded key is left out of a plain read).
+    shut = [name for name in wanted if not values.get(name) or str(values[name]).startswith("hive-sealed:")]
+    if shut:
+        # A guarded key (Stripe's, here) is opened only inside a process the broker starts, even on a
+        # machine whose reads are open: run this reading again as that process, as `run` would.
+        try:
+            import passbook_access as access
+            import passbook_broker
+            import passbook_grant
+
+            guarded = bool(set(passbook_grant.guarded(access.read_policy())).intersection(shut)) and passbook_broker.running()
+        except ImportError:
+            guarded = False
+        again = _rerun_under_grant(app, reason, wanted, guarded=guarded)
         if again is not None:
             return again
     return values, brokered
@@ -3037,6 +3050,9 @@ def _balance_line(row: dict) -> str:
         parts.append(f"{spend['week']:,.2f} {spend['unit']} in the last 7 days")
     if insight.get("runwayDays") is not None:
         parts.append(f"about {insight['runwayDays']:,.0f} days left at this rate")
+    if not parts and row.get("details"):
+        # Figures shown as reported (a brokerage, money held for you): the first few, as the provider named them.
+        parts = [f"{item['label']} {item['value']}" for item in row["details"][:3]]
     return f"{'LOW  ' if insight.get('low') else ''}{row['name']}: {'; '.join(parts) or row['message']}"
 
 
@@ -3146,7 +3162,9 @@ def cmd_balances(args: argparse.Namespace) -> int:
         return 0
     if action == "open":
         entry = balances.provider(ids[0]) if len(ids) == 1 else None
-        url = balances.top_up_url(entry) if entry else ""
+        # `--keys`: where to make a key (a balance-only one), from the catalog, never from the caller.
+        url = ((balances.balance_key(entry) or {}).get("createUrl", "") if getattr(args, "keys", False)
+               else balances.top_up_url(entry)) if entry else ""
         if not url:
             return _fail("Name one provider to open, as `passbook balances --all` lists them.")
         import webbrowser
@@ -3191,11 +3209,22 @@ def cmd_balances(args: argparse.Namespace) -> int:
         "error": f"The bot token ({alerting['key']}) is not in this store." if alerting["on"] and not ids else ""}
     if args.json:
         print(json.dumps({"enabled": balances.settings(root)["enabled"], "cached": from_cache, "providers": rows,
-                          "summary": summary, "alerts": {**alerting, **told}}))
+                          "summary": summary, "issues": balances.issues(rows), "alerts": {**alerting, **told},
+                          "balanceKeyReaders": list(balances.BALANCE_KEY_READERS)}))
         return 0
     if not rows:
         print("No key here belongs to a provider PassBook can read a balance for. See them all:  passbook balances --all")
         return 0
+    # What needs doing first, worst first, with the fix; then the readings.
+    todo = [item for item in balances.issues(rows) if item["kind"] != "no-api"]
+    if todo:
+        print(f"Needs a look ({len(todo)}):")
+        for item in todo:
+            print(f"  {item['name']}: {item['title']}. {item['fix']}")
+            if item.get("action") == "add-key":
+                print(f"      add it:  passbook add {item['key']}   then:  passbook agents set {item['key']} --only "
+                      + " ".join(balances.BALANCE_KEY_READERS) + (f"\n      make one: {item['createUrl']}" if item.get("createUrl") else ""))
+        print()
     for row in rows:
         print(_balance_line(row))
         if row.get("topUpUrl") and row.get("status") != "missing":
@@ -7820,6 +7849,7 @@ def build_parser() -> argparse.ArgumentParser:
     bal.add_argument("--app", default="", help="who is asking; recorded")
     bal.add_argument("--key", default="", help="alerts: the key that holds your Telegram bot's token")
     bal.add_argument("--chat", default="", help="alerts: the chat to message (a number, or a channel's @name)")
+    bal.add_argument("--keys", action="store_true", help="open: the provider's page for making a key, not its billing page")
     bal.set_defaults(func=cmd_balances)
 
     access = subs.add_parser("access", help="the tamper-evident record of credential reads")

@@ -303,10 +303,33 @@
   .morelink { font: inherit; font-size: 12px; color: var(--ink2); background: none; border: 0; cursor: pointer;
     display: inline-flex; align-items: center; gap: 4px; margin: 14px 2px 0; padding: 4px 6px; border-radius: 6px; }
   .morelink:hover { background: var(--sel); color: var(--ink1); }
+  /* What needs fixing: one line per service, the fix under it, the one button that does it. */
+  .tag.mid { font-weight: 600; border-radius: 99px; padding: 2px 9px; color: var(--mid); background: var(--mid-soft); }
+  .balfix { padding: 0; }
+  .balfix > h3 { display: flex; align-items: center; gap: 8px; }
+  .fixrow { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; align-items: start; gap: 4px 14px; padding: 12px 14px; }
+  .fixrow + .fixrow { border-top: 1px solid var(--line); }
+  .fixrow .fixtext { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+  .fixrow .fixtitle { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .fixrow .fixtitle strong { font-size: 13.5px; font-weight: 600; }
+  .fixrow .fixwhy { font-size: 12px; color: var(--ink2); overflow-wrap: anywhere; }
+  .fixrow .fixacts { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+  .fixrow .bkform, .bdetail .bkform { grid-column: 2 / -1; }
+  .bkform { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; padding: 10px 12px; border-radius: var(--radius);
+    background: var(--chip); }
+  .bkform .alform { margin-top: 0; }
+  .bkform input { flex: 1; min-width: 200px; font: inherit; font-size: 12.5px; }
+  .bkform code { font-size: 11.5px; }
+  .baldone { margin: 0 0 12px; }
+  .warntext { color: var(--warn); }
   @media (max-width: 980px) {
     .stats4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .bmain { grid-template-columns: 34px minmax(110px, 1fr) minmax(120px, 1.3fr) minmax(90px, .8fr); }
     .bmain .bfig.spend { display: none; }
+  }
+  /* Narrower still: the figure takes the width it needs, so it never runs into the row's button. */
+  @media (max-width: 860px) {
+    .bmain { grid-template-columns: 34px minmax(96px, 1fr) minmax(90px, 1fr) auto; }
   }
   /* ── end of balances ── */
 
@@ -3295,7 +3318,10 @@ passbook oauth connect google:work</pre>
   // by the command line (passbook_insights.py), so the terminal and HivemindOS can say the same.
 
   const BALANCE_TAG = { ready: ["on", "Live"], error: ["off", "Needs a look"], locked: ["", "Locked"],
-                        missing: ["", "Needs a billing key"], manual: ["", "On their site"] };
+                        missing: ["", "Needs a stronger key"], manual: ["", "On their site"] };
+  // What each kind of problem is called, worst first (passbook_balances.issue_for says what and why).
+  const ISSUE_TAG = { "key-rejected": ["off", "Key rejected"], "needs-balance-key": ["mid", "Needs a stronger key"],
+                      "missing-key": ["mid", "Missing a key"], locked: ["", "Locked"], unreachable: ["", "Didn't answer"] };
   const BALANCE_SPANS = [["today", "Today"], ["week", "7 days"], ["month", "30 days"]];
   const SPAN_WORDS = { today: "today", week: "last 7 days", month: "last 30 days" };
 
@@ -3337,7 +3363,7 @@ passbook oauth connect google:work</pre>
 
   /** A provider's own logo when its site gave one, else the letter this app has always drawn. */
   function logo(r) {
-    const src = balancesView.icons[r.providerId];
+    const src = balancesView.icons[r.provider || r.providerId];
     return src ? `<img class="logo" src="${esc(src)}" alt="" />` : `<span class="logo letter">${avatar(r.name)}</span>`;
   }
 
@@ -3354,7 +3380,7 @@ passbook oauth connect google:work</pre>
     const pct = Math.max(0, Math.min(100, Math.round(m.fraction * 100)));
     const tone = m.fraction < 0.2 ? "low" : m.fraction < 0.5 ? "mid" : "ok";
     const against = m.kind === "quota"
-      ? `${Number(m.used).toLocaleString()} of ${Number(m.full).toLocaleString()} ${esc(m.unit || "")} used${m.resetsAt ? ` · resets ${esc(shortDay(m.resetsAt.slice(0, 10)))}` : ""}`
+      ? `${m.unit === "USD" ? `${esc(amount(m.used, "USD"))} of ${esc(amount(m.full, "USD"))}` : `${Number(m.used).toLocaleString()} of ${Number(m.full).toLocaleString()} ${esc(m.unit || "")}`} used${m.resetsAt ? ` · resets ${esc(shortDay(m.resetsAt.slice(0, 10)))}` : ""}`
       : m.basis === "highest" && m.fraction >= 0.999 ? "no top-up seen yet"
       : `of ${esc(amount(m.full, m.unit))}${m.basis === "top-up" ? " at last top-up" : m.basis === "set" ? " when full" : " at its highest"}`;
     return `<div class="bmeter"><div class="meter" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}">
@@ -3402,15 +3428,20 @@ passbook oauth connect google:work</pre>
   function balanceRow(r, span) {
     const i = r.insights || {}, m = i.meter, open = balancesView.open === r.providerId;
     const spend = spanSpend(i.spend, span);
+    // Figures shown only as reported (Stripe, a brokerage, Vultr): the first one, named, and the next beside it.
+    const figure = (text) => { const n = /^(-?[\d.]+) USD$/.exec(text || ""); return n ? amount(Number(n[1]), "USD") : text; };
+    const [d0, d1] = r.details || [];
+    const asReported = (r.balance === null || r.balance === undefined) && !m && (r.usageUsd === null || r.usageUsd === undefined) && d0;
     const left = r.balance !== null && r.balance !== undefined ? amount(r.balance, r.unit)
-      : m?.kind === "quota" ? `${Number(m.left).toLocaleString()} ${m.unit || ""}`.trim()
-      : r.usageUsd !== null && r.usageUsd !== undefined ? `${amount(r.usageUsd, "USD")} used` : r.details?.length ? r.details[0].value : "—";
+      : m?.kind === "quota" ? (m.unit === "USD" ? amount(m.left, "USD") : `${Number(m.left).toLocaleString()} ${m.unit || ""}`.trim())
+      : r.usageUsd !== null && r.usageUsd !== undefined ? `${amount(r.usageUsd, "USD")} used` : d0 ? figure(d0.value) : "—";
     // A quota that refills before it would run out is not counting down to anything.
     const refills = m?.kind === "quota" && m.resetsAt ? (Date.parse(m.resetsAt) - Date.now()) / 86400000 : null;
     const hasRunway = i.runwayDays !== null && i.runwayDays !== undefined;
     const leftSub = hasRunway && refills !== null && i.runwayDays >= refills ? "enough until it resets"
       : hasRunway ? runwayWords(i.runwayDays)
       : m?.kind === "quota" ? "left on the plan" : r.usagePeriod ? r.usagePeriod.toLowerCase()
+      : asReported ? `${d0.label.toLowerCase()}${d1 ? ` · ${d1.label.toLowerCase()} ${figure(d1.value)}` : ""}`
       : "";
     // Whether there is anything here whose movement could be spend at all.
     const trackable = m || (r.usageUsd !== null && r.usageUsd !== undefined);
@@ -3424,7 +3455,7 @@ passbook oauth connect google:work</pre>
         <span class="bfig spend">${spend ? `<strong>${esc(amount(spend.value, i.spend.unit))}</strong> ${trend(spend.change)}<span class="sub">${esc(spend.sub)}</span>`
           : `${trackable ? `<strong class="dim">—</strong><span class="sub">${m?.kind === "quota" ? "no use seen yet" : "no spend seen yet"}</span>` : ""}`}</span>
       </button>
-      ${r.topUpUrl ? `<button class="act" data-topup="${esc(r.providerId)}" title="Open ${esc(r.name)}'s billing page">Top up</button>` : ""}
+      ${r.topUpUrl ? `<button class="act" data-topup="${esc(r.provider || r.providerId)}" title="Open ${esc(r.name)}'s billing page">${r.category === "Money" ? "Open" : "Top up"}</button>` : ""}
       ${open ? balanceDetail(r) : ""}
     </div>`;
   }
@@ -3441,7 +3472,7 @@ passbook oauth connect google:work</pre>
       ["Paid as", r.billing],
       ...(r.details || []).map((x) => [x.label, x.value]),
       ...(i.since ? [["Tracked since", shortDay(i.since)]] : []),
-      ...(r.keyName ? [["Read with", r.keyName]] : []),
+      ...(r.keyName ? [["Read with", r.keyName + (r.balanceKey && r.keyName === r.balanceKey.key ? " (balance only)" : "")]] : []),
     ];
     const marking = balancesView.marking === r.providerId;
     return `<div class="bdetail">
@@ -3455,6 +3486,58 @@ passbook oauth connect google:work</pre>
            <button class="act" data-bal-mark="">Cancel</button>`
         : `<span class="note flat">The meter measures against ${m.basis === "set" ? "the amount you set" : m.basis === "top-up" ? "the balance after your last top-up" : "the most this account has held while PassBook watched"}.</span>
            <button class="act" data-bal-mark="${esc(r.providerId)}">Set what full is</button>`}</div>` : ""}
+      ${r.balanceKey && balancesView.adding === r.providerId ? balanceKeyForm(r)
+        : r.balanceKey && r.keyName !== r.balanceKey.key ? `<div class="bmark"><span class="note flat">Read with ${esc(r.keyName)}, a key other apps use too.
+             You can give Balances a key of its own instead.</span><button class="act" data-bk-open="${esc(r.providerId)}">Use a balance-only key</button></div>` : ""}
+    </div>`;
+  }
+
+  /** Paste a key that only the balance reader may use. It is stored under its own name, so the key other apps
+   *  run with keeps exactly the permissions it has; PassBook limits the new one to the balance readers. */
+  function balanceKeyForm(r) {
+    const k = r.balanceKey, v = balancesView, busy = v.keyBusy === r.providerId;
+    const detail = r.issue?.detail || `What to make: ${k.permission}`;
+    return `<div class="bkform">
+      <div class="note flat">${esc(detail)}</div>
+      <div class="alform">
+        <input id="bkvalue" type="password" autocomplete="off" spellcheck="false" placeholder="Paste the ${esc(k.label)}" ${busy ? "disabled" : ""} />
+        <button class="act primary" data-bk-save="${esc(r.providerId)}" ${busy ? "disabled" : ""}>${busy ? "Saving…" : "Save and read"}</button>
+        ${k.createUrl ? `<button class="act" data-bk-make="${esc(r.provider || r.providerId)}" title="Open ${esc(r.name)}'s page for making keys">Make one ${icon("chevron", "tinyicon")}</button>` : ""}
+        <button class="act" data-bk-cancel="1" ${busy ? "disabled" : ""}>Cancel</button>
+      </div>
+      <div class="note flat">Saved as <code>${esc(k.key)}</code> and limited to Balances: other apps and agents are refused it,
+        and your other keys keep their permissions. PassBook never pays with it; top-ups stay on ${esc(r.name)}'s own page.</div>
+      ${v.keyNote && v.keyNoteFor === r.providerId ? `<div class="note flat warntext">${esc(v.keyNote)}</div>` : ""}
+    </div>`;
+  }
+
+  /** Everything that keeps a balance from showing, worst first, each with its fix and the button that does it. */
+  function balanceFixes(d) {
+    const v = balancesView, rows = d.providers || [];
+    const list = (d.issues || []).filter((x) => x.kind !== "no-api" && (!v.category || x.category === v.category));
+    if (!list.length) return "";
+    const byId = Object.fromEntries(rows.map((r) => [r.providerId, r]));
+    const shown = v.allFixes ? list : list.slice(0, 5);
+    const item = (x) => {
+      const r = byId[x.providerId] || { name: x.name, providerId: x.providerId, provider: x.provider };
+      const [tone, label] = ISSUE_TAG[x.kind] || ["", x.title];
+      const open = v.adding === x.providerId && r.balanceKey;
+      const acts = x.action === "add-key" && r.balanceKey
+          ? (open ? "" : `<button class="act primary" data-bk-open="${esc(x.providerId)}">${x.kind === "key-rejected" ? "Paste a new key" : "Add the key"}</button>`)
+        : x.action === "unlock" ? `<button class="act primary" data-goto="vault">Unlock</button>`
+        : x.action === "retry" ? `<button class="act" data-balances-refresh="1" ${v.busy ? "disabled" : ""}>Try again</button>`
+        : r.topUpUrl ? `<button class="act" data-topup="${esc(r.provider || r.providerId)}">Open ${esc(r.name)}</button>` : "";
+      return `<div class="fixrow">
+        ${logo(r)}
+        <div class="fixtext"><span class="fixtitle"><strong>${esc(x.name)}</strong><span class="tag ${tone}">${esc(label)}</span></span>
+          <span class="fixwhy"><b>${esc(x.title)}.</b> ${esc(x.fix)}</span></div>
+        <div class="fixacts">${acts}</div>
+        ${open ? balanceKeyForm(r) : ""}
+      </div>`;
+    };
+    return `<div class="group balfix"><h3>${list.length} thing${list.length === 1 ? "" : "s"} to fix to see every balance</h3>
+      ${shown.map(item).join("")}
+      ${list.length > shown.length ? `<button class="morelink" data-bal-fixes="1">${list.length - shown.length} more ${icon("chevron", "tinyicon")}</button>` : ""}
     </div>`;
   }
 
@@ -3465,7 +3548,7 @@ passbook oauth connect google:work</pre>
         ${logo(r)}
         <span class="bname wide"><strong>${esc(r.name)}</strong><span class="sub">${esc(r.message)}</span></span>
         <span class="tag ${tone}">${esc(label)}</span></div>
-      ${r.topUpUrl ? `<button class="act" data-topup="${esc(r.providerId)}" title="Open ${esc(r.name)}'s billing page">${r.status === "manual" ? "Open" : "Billing"}</button>` : ""}
+      ${r.topUpUrl ? `<button class="act" data-topup="${esc(r.provider || r.providerId)}" title="Open ${esc(r.name)}'s billing page">${r.status === "manual" ? "Open" : "Billing"}</button>` : ""}
     </div>`;
   }
 
@@ -3544,7 +3627,7 @@ passbook oauth connect google:work</pre>
             <div class="grow">
               <strong>Read balances with the keys already here</strong>
               <div class="note">PassBook asks each provider you hold a key for, straight from this
-              computer: OpenRouter, fal, ElevenLabs and ten more report a balance; the rest get a link to
+              computer: OpenRouter, fal, RunPod, Stripe and twenty more report a balance; the rest get a link to
               their billing page. Nothing goes anywhere else.</div>
             </div>
           </div>
@@ -3560,8 +3643,9 @@ passbook oauth connect google:work</pre>
     }
     const rows = d.providers || [], span = v.span;
     const live = rows.filter((r) => r.status === "ready");
-    const look = rows.filter((r) => r.status === "error" || r.status === "locked");
-    const rest = rows.filter((r) => r.status === "missing" || r.status === "manual");
+    const fixes = (d.issues || []).filter((x) => x.kind !== "no-api");
+    // What cannot be fixed from here (no API reports it): a quiet list at the bottom.
+    const rest = rows.filter((r) => r.status === "manual" || (r.status === "missing" && r.issue?.kind === "missing-key" && !r.needsKey));
     const low = live.filter((r) => r.insights?.low);
     const categories = [...new Set(rows.map((r) => r.category))].sort();
     const inCategory = (r) => !v.category || r.category === v.category;
@@ -3574,6 +3658,7 @@ passbook oauth connect google:work</pre>
     const shownLive = (v.filter === "low" ? low : live).filter(inCategory).sort(order);
     const showLive = v.filter === "all" || v.filter === "low" || v.filter === "live";
     const showLook = v.filter === "all" || v.filter === "look";
+    const isLook = v.filter === "look";
     const showRest = v.filter === "rest" || (v.filter === "all" && v.rest);
     const chip = (id, label, n) => `<button class="fchip" data-bal-filter="${id}" aria-pressed="${v.filter === id}">${label}<span>${n}</span></button>`;
     const usdDays = d.summary?.usd?.days || [];
@@ -3590,10 +3675,12 @@ passbook oauth connect google:work</pre>
         </div>
       </div>
       ${v.alertsShown ? balanceAlerts(d) : ""}
-      ${balanceStats(d, span)}
-      ${usdDays.some((p) => p.v > 0) ? `<div class="group chart"><h3>Dollars spent per day</h3>${dayBars(usdDays, "USD", span)}</div>` : ""}
+      ${v.keyDone ? `<p class="note baldone">${esc(v.keyDone)}</p>` : ""}
+      ${showLook ? balanceFixes(d) : ""}
+      ${isLook ? "" : balanceStats(d, span)}
+      ${!isLook && usdDays.some((p) => p.v > 0) ? `<div class="group chart"><h3>Dollars spent per day</h3>${dayBars(usdDays, "USD", span)}</div>` : ""}
       <div class="balfilters">
-        <div class="fchips">${chip("all", "All", rows.length)}${chip("low", "Low", low.length)}${chip("live", "Live", live.length)}${chip("look", "Needs a look", look.length)}${chip("rest", "No live figure", rest.length)}</div>
+        <div class="fchips">${chip("all", "All", rows.length)}${chip("low", "Low", low.length)}${chip("live", "Live", live.length)}${chip("look", "To fix", fixes.length)}${chip("rest", "No live figure", rest.length)}</div>
         <div class="fsel">
           ${categories.length > 1 ? `<select data-bal-category aria-label="Kind of service"><option value="">Every kind</option>${categories.map((c) =>
             `<option value="${esc(c)}" ${v.category === c ? "selected" : ""}>${esc(c)}</option>`).join("")}</select>` : ""}
@@ -3602,9 +3689,9 @@ passbook oauth connect google:work</pre>
             <option value="name" ${v.sort === "name" ? "selected" : ""}>By name</option></select>
         </div>
       </div>
+      ${isLook && !fixes.length ? `<div class="group"><div class="empty">Nothing to fix: every balance that can be read is showing.</div></div>` : ""}
       ${showLive ? `<div class="group ballist">${shownLive.length ? shownLive.map((r) => balanceRow(r, span)).join("")
         : `<div class="empty">${v.filter === "low" ? "Nothing is running low." : "No service here is reporting a live figure."}</div>`}</div>` : ""}
-      ${showLook && look.filter(inCategory).length ? `<div class="group ballist"><h3>Needs a look</h3>${look.filter(inCategory).map(balanceQuietRow).join("")}</div>` : ""}
       ${showRest && rest.filter(inCategory).length ? `<div class="group ballist"><h3>No live figure</h3>${rest.filter(inCategory).map(balanceQuietRow).join("")}</div>` : ""}
       ${v.filter === "all" && !v.rest && rest.filter(inCategory).length ? `<button class="morelink" data-bal-rest="1">${rest.filter(inCategory).length} more service${rest.filter(inCategory).length === 1 ? "" : "s"} without a live figure ${icon("chevron", "tinyicon")}</button>` : ""}
       ${v.error ? `<p class="note">${esc(v.error)}</p>` : ""}
@@ -5936,6 +6023,39 @@ passbook oauth connect google:work</pre>
       try { await invoke("balances_open", { id: b.dataset.topup }); }
       catch (e) { balancesView.error = balanceError(e); paint(); }
     });
+    // A balance-only key: open the form, open the provider's page for making one, save it.
+    main.querySelectorAll("[data-bk-open]").forEach((b) => b.onclick = () => {
+      Object.assign(balancesView, { adding: b.dataset.bkOpen, keyNote: "", keyDone: "" }); paint();
+      document.getElementById("bkvalue")?.focus();
+    });
+    main.querySelectorAll("[data-bk-cancel]").forEach((b) => b.onclick = () => {
+      Object.assign(balancesView, { adding: "", keyNote: "" }); paint();
+    });
+    main.querySelectorAll("[data-bk-make]").forEach((b) => b.onclick = async () => {
+      try { await invoke("balances_open", { id: b.dataset.bkMake, keys: true }); }
+      catch (e) { Object.assign(balancesView, { keyNote: balanceError(e), keyNoteFor: balancesView.adding }); paint(); }
+    });
+    main.querySelectorAll("[data-bk-save]").forEach((b) => b.onclick = async () => {
+      const v = balancesView, id = b.dataset.bkSave, row = (v.data?.providers || []).find((r) => r.providerId === id);
+      const value = String(document.getElementById("bkvalue")?.value || "").trim();
+      if (!row?.balanceKey) return;
+      if (value.length < 8 || /\s/.test(value)) { Object.assign(v, { keyNote: "Paste the whole key: it is one line with no spaces.", keyNoteFor: id }); paint(); return; }
+      const name = row.balanceKey.key, readers = v.data?.balanceKeyReaders || [];
+      Object.assign(v, { keyBusy: id, keyNote: "", keyNoteFor: id }); paint();
+      try {
+        state = await invoke("add_key", { name, value, replace: true });
+        // Only the balance readers may open it: other apps and agents are refused it, and keep their own keys.
+        if (readers.length) state = await invoke("set_key_audience", { name, mode: "include", agents: readers });
+        v.adding = "";
+        v.keyBusy = "";
+        await loadBalances(true);
+        const now = (v.data?.providers || []).find((r) => r.providerId === id);
+        v.keyDone = now?.status === "ready" ? `${row.name} now reads with ${name}, a key only Balances uses.`
+          : `${name} is saved for ${row.name}, but ${now?.issue ? now.issue.title.toLowerCase() : "no balance came back"}. ${now?.issue?.fix || ""}`;
+      } catch (e) { Object.assign(v, { keyNote: balanceError(e), keyNoteFor: id }); }
+      finally { v.keyBusy = ""; paint(); }
+    });
+    main.querySelectorAll("[data-bal-fixes]").forEach((b) => b.onclick = () => { balancesView.allFixes = true; paint(); });
     main.querySelectorAll("[data-noticeclear]").forEach((b) => b.onclick = () => {
       notice = ""; paint();
     });

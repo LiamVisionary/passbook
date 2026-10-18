@@ -36,35 +36,35 @@ from typing import Any, Callable, Iterable, Mapping
 # balance. `keys` are the credentials the provider is used with; `reading_keys`, when present, are the only
 # ones that can read its billing. Generated from HivemindOS's catalog on 2026-10-12.
 PROVIDERS: tuple[dict, ...] = (
-    {"id": "openrouter", "name": "OpenRouter", "category": "Models", "keys": ('OPENROUTER_API_KEY',), "reading_keys": ('OPENROUTER_MANAGEMENT_KEY',), "billing": "prepaid", "console_url": "https://openrouter.ai", "billing_url": "https://openrouter.ai/settings/credits", "adapter": "openrouter", "docs_url": "https://openrouter.ai/docs/api/api-reference/credits/get-remaining-credits", "verified": "2026-10-02", "payment_note": "Buy credits on OpenRouter. Its former Coinbase Commerce top-up API is deprecated; no payment is made here."},
-    {"id": "openai-api", "name": "OpenAI API", "category": "Models", "keys": ('OPENAI_API_KEY',), "billing": "mixed", "console_url": "https://platform.openai.com", "billing_url": "https://platform.openai.com/settings/organization/billing/overview", "docs_url": "https://help.openai.com/en/articles/8264644-setting-up-and-managing-prepaid-api-billing", "verified": "2026-10-02", "payment_note": "API billing is separate from ChatGPT subscriptions. Purchase credits on the OpenAI billing page."},
-    {"id": "anthropic", "name": "Anthropic API", "category": "Models", "keys": ('ANTHROPIC_API_KEY',), "billing": "mixed", "console_url": "https://platform.claude.com", "billing_url": "https://platform.claude.com/settings/billing", "verified": "2026-10-02", "payment_note": "API billing is separate from Claude subscriptions. Confirm your account’s billing model on the billing page."},
+    {"id": "openrouter", "name": "OpenRouter", "category": "Models", "keys": ('OPENROUTER_API_KEY',), "reading_keys": ('OPENROUTER_MANAGEMENT_KEY',), "accounts": ({"key": "OPENROUTER_BENCH_API_KEY", "label": "bench key", "adapter": "openrouter-key"},), "billing_key": {"key": "OPENROUTER_BALANCE_KEY", "why": "Only a management key can see the account's credits.", "label": "OpenRouter management key", "permission": "A management key. Inference keys cannot read the account's credits.", "create_url": "https://openrouter.ai/settings/management-keys"}, "billing": "prepaid", "console_url": "https://openrouter.ai", "billing_url": "https://openrouter.ai/settings/credits", "adapter": "openrouter", "docs_url": "https://openrouter.ai/docs/api/api-reference/credits/get-remaining-credits", "verified": "2026-10-02", "payment_note": "Buy credits on OpenRouter. Its former Coinbase Commerce top-up API is deprecated; no payment is made here."},
+    {"id": "openai-api", "name": "OpenAI API", "category": "Models", "keys": ('OPENAI_API_KEY',), "reading_keys": (), "adapter": "openai-costs", "billing": "mixed", "billing_key": {"key": "OPENAI_BALANCE_KEY", "why": "OpenAI shows spend only to organization Admin keys.", "label": "OpenAI admin key", "permission": "An organization Admin key (made by an organization owner). OpenAI reports spend to it, not the credit left: no key can read the prepaid balance.", "create_url": "https://platform.openai.com/settings/organization/admin-keys"}, "console_url": "https://platform.openai.com", "billing_url": "https://platform.openai.com/settings/organization/billing/overview", "docs_url": "https://platform.openai.com/docs/api-reference/usage/costs", "verified": "2026-10-18", "payment_note": "API billing is separate from ChatGPT subscriptions. Purchase credits on the OpenAI billing page."},
+    {"id": "anthropic", "name": "Anthropic API", "category": "Models", "keys": ('ANTHROPIC_API_KEY', 'CLAUDE_API_KEY_LIAM_AT_RIZZMA_IO'), "reading_keys": (), "adapter": "anthropic-costs", "billing": "mixed", "billing_key": {"key": "ANTHROPIC_BALANCE_KEY", "why": "Anthropic shows spend only to Admin API keys.", "label": "Anthropic Admin API key", "permission": "An Admin API key (sk-ant-admin…, made by an organization admin). Anthropic reports spend to it, not the credit left.", "create_url": "https://platform.claude.com/settings/admin-keys"}, "console_url": "https://platform.claude.com", "billing_url": "https://platform.claude.com/settings/billing", "docs_url": "https://platform.claude.com/docs/en/api/admin-api/usage-cost/get-cost-report", "verified": "2026-10-18", "payment_note": "API billing is separate from Claude subscriptions. Confirm your account’s billing model on the billing page."},
     {"id": "xai", "name": "xAI API", "category": "Models", "keys": ('XAI_API_KEY',), "billing": "mixed", "console_url": "https://console.x.ai", "docs_url": "https://docs.x.ai/developers/rest-api-reference/management/billing", "verified": "2026-10-02", "payment_note": "xAI documents a top-up API requiring a management key and team. In-app charging stays unavailable until payment identity and duplicate-charge reconciliation are verified. Use the console for now."},
-    {"id": "fal", "name": "fal", "category": "Media", "keys": ('FAL_KEY',), "reading_keys": ('FAL_ADMIN_KEY', 'FAL_KEY'), "billing": "prepaid", "console_url": "https://fal.ai/dashboard", "billing_url": "https://fal.ai/dashboard/usage-billing/billing", "adapter": "fal", "docs_url": "https://fal.ai/docs/platform-apis/v1/account/billing", "verified": "2026-10-02", "payment_note": "A billing read requires an Admin key. An existing FAL_KEY is tried read-only; the provider enforces its permissions. Complete purchases on fal’s billing page."},
-    {"id": "meshy", "name": "Meshy", "category": "Media", "keys": ('MESHY_API_KEY',), "billing": "mixed", "console_url": "https://www.meshy.ai/workspace", "adapter": "meshy", "docs_url": "https://docs.meshy.ai/en/api/balance", "verified": "2026-10-02", "payment_note": "Meshy reports credits, not dollars. Subscription credits and API purchases must be checked on the provider’s site."},
+    {"id": "fal", "name": "fal", "category": "Media", "keys": ('FAL_KEY',), "reading_keys": ('FAL_ADMIN_KEY', 'FAL_KEY'), "accounts": ({"key": "FAL_KEY_BACKUP", "label": "backup key"},), "billing_key": {"key": "FAL_BALANCE_KEY", "why": "Only a key with billing read access (the Billing preset) can see it.", "label": "fal Admin key", "permission": "A key with the Billing or Read-only preset (it carries billing:usage:read), or a legacy ADMIN key. API keys run models but cannot read billing.", "create_url": "https://fal.ai/dashboard/keys"}, "billing": "prepaid", "console_url": "https://fal.ai/dashboard", "billing_url": "https://fal.ai/dashboard/usage-billing/billing", "adapter": "fal", "docs_url": "https://fal.ai/docs/platform-apis/v1/account/billing", "verified": "2026-10-02", "payment_note": "A billing read requires an Admin key. An existing FAL_KEY is tried read-only; the provider enforces its permissions. Complete purchases on fal’s billing page."},
+    {"id": "meshy", "name": "Meshy", "category": "Media", "keys": ('MESHY_API_KEY', 'MESHY_AMI_API_KEY'), "billing": "mixed", "console_url": "https://www.meshy.ai/workspace", "adapter": "meshy", "docs_url": "https://docs.meshy.ai/en/api/balance", "verified": "2026-10-02", "payment_note": "Meshy reports credits, not dollars. Subscription credits and API purchases must be checked on the provider’s site."},
     {"id": "vast", "name": "Vast.ai", "category": "Cloud", "keys": ('VAST_API_KEY', 'VASTAI_API_KEY'), "billing": "prepaid", "console_url": "https://console.vast.ai", "adapter": "vast", "docs_url": "https://docs.vast.ai/api-reference/accounts/show-user", "verified": "2026-10-02", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated."},
     {"id": "apify", "name": "Apify", "category": "Research", "keys": ('APIFY_TOKEN', 'APIFY_API_KEY', 'APIFY_API_TOKEN'), "billing": "mixed", "console_url": "https://console.apify.com", "billing_url": "https://console.apify.com/billing", "adapter": "apify", "docs_url": "https://docs.apify.com/api/v2/users-me-usage-monthly-get", "verified": "2026-10-02", "payment_note": "The live reading is monthly usage, not a remaining credit balance. Manage the plan and spending limits on Apify."},
-    {"id": "runware", "name": "Runware", "category": "Media", "keys": ('RUNWARE_API_KEY',), "billing": "prepaid", "console_url": "https://my.runware.ai", "docs_url": "https://runware.ai/docs/models-api/pricing", "verified": "2026-10-02", "payment_note": "Top up inference credits on the Runware dashboard. Serverless credit is a separate pool; no balance conversion is assumed."},
-    {"id": "tripo", "name": "Tripo API", "category": "Media", "keys": ('TRIPO_API_KEY',), "billing": "prepaid", "console_url": "https://platform.tripo3d.ai", "docs_url": "https://docs.tripo3d.ai/other/wallet.html", "verified": "2026-10-02", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated."},
-    {"id": "ideogram", "name": "Ideogram", "category": "Media", "keys": ('IDEOGRAM_API_KEY',), "billing": "prepaid", "console_url": "https://ideogram.ai", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated."},
-    {"id": "kie", "name": "KIE", "category": "Media", "keys": ('KIE_API_KEY',), "billing": "prepaid", "console_url": "https://kie.ai", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated."},
+    {"id": "runware", "name": "Runware", "category": "Media", "keys": ('RUNWARE_API_KEY', 'RUNWARE_API_KEY_HIVEMINDOS'), "billing": "prepaid", "console_url": "https://my.runware.ai", "adapter": "runware", "docs_url": "https://runware.ai/docs/models-api/account-management", "verified": "2026-10-18", "payment_note": "Top up inference credits on the Runware dashboard. Serverless credit is a separate pool; no balance conversion is assumed."},
+    {"id": "tripo", "name": "Tripo API", "category": "Media", "keys": ('TRIPO_API_KEY', 'TRIPO_AMI_API_KEY'), "billing": "prepaid", "adapter": "tripo", "billing_url": "https://platform.tripo3d.ai/billing", "console_url": "https://platform.tripo3d.ai", "docs_url": "https://docs.tripo3d.ai/other/wallet.html", "verified": "2026-10-18", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated."},
+    {"id": "ideogram", "name": "Ideogram", "category": "Media", "keys": ('IDEOGRAM_API_KEY', 'IDEOGRAM_API_KEY_HIVEMIND_OS'), "billing": "prepaid", "console_url": "https://ideogram.ai", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated."},
+    {"id": "kie", "name": "KIE", "category": "Media", "keys": ('KIE_API_KEY', 'KIE_API_KEY_HIVEMINDOS'), "billing": "prepaid", "console_url": "https://kie.ai", "billing_url": "https://kie.ai/billing", "adapter": "kie", "docs_url": "https://docs.kie.ai/common-api/get-account-credits", "verified": "2026-10-18", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated."},
     {"id": "icypeas", "name": "Icypeas", "category": "Research", "keys": ('ICYPEAS_API_KEY',), "billing": "mixed", "console_url": "https://app.icypeas.com", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated."},
     {"id": "kinovi", "name": "Kinovi", "category": "Media", "keys": ('KINOVI_API_KEY',), "billing": "prepaid", "console_url": "https://kinovi.ai", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated."},
     {"id": "alchemy", "name": "Alchemy", "category": "Developer tools", "keys": ('ALCHEMY_API_KEY',), "billing": "unknown", "console_url": "https://dashboard.alchemy.com", "docs_url": "https://www.alchemy.com/docs/admin-api/usage/get-usage-summary", "verified": "2026-10-02", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated.", "reading_note": "Usage reporting requires an Alchemy admin key with usage-read permission. Your saved RPC key alone does not establish billing access."},
     {"id": "ngrok", "name": "ngrok", "category": "Developer tools", "keys": ('NGROK_API_KEY', 'NGROK_AUTHTOKEN'), "billing": "unknown", "console_url": "https://dashboard.ngrok.com", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated."},
     {"id": "vercel", "name": "Vercel", "category": "Cloud", "keys": ('VERCEL_TOKEN', 'VERCEL_OIDC_TOKEN'), "billing": "unknown", "console_url": "https://vercel.com/dashboard", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated."},
-    {"id": "vultr", "name": "Vultr", "category": "Cloud", "keys": ('VULTR_API_KEY',), "billing": "postpaid", "console_url": "https://my.vultr.com", "adapter": "vultr", "docs_url": "https://github.com/vultr/govultr/blob/master/account.go", "verified": "2026-10-02", "payment_note": "Account balance and pending charges are shown as reported. Their signs are not interpreted as spendable funds. Complete payments on Vultr."},
-    {"id": "composio", "name": "Composio", "category": "Developer tools", "keys": ('COMPOSIO_API_KEY',), "billing": "unknown", "console_url": "https://platform.composio.dev", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated."},
+    {"id": "vultr", "name": "Vultr", "category": "Cloud", "keys": ('VULTR_API_KEY',), "billing_key": {"key": "VULTR_BALANCE_KEY", "why": "Any Vultr API key that allows this computer's address.", "label": "Vultr API key", "permission": "Any Vultr API key. Vultr keys only work from the addresses on their Access Control list, so allow this computer's address (or all IPv4) for it.", "create_url": "https://my.vultr.com/settings/#settingsapi"}, "billing": "postpaid", "console_url": "https://my.vultr.com", "adapter": "vultr", "docs_url": "https://github.com/vultr/govultr/blob/master/account.go", "verified": "2026-10-02", "payment_note": "Account balance and pending charges are shown as reported. Their signs are not interpreted as spendable funds. Complete payments on Vultr."},
+    {"id": "composio", "name": "Composio", "category": "Developer tools", "keys": ('COMPOSIO_API_KEY', 'COMPOSIO_API_KEY_HIVEMINDOS', 'COMPOSIO_API_KEY_HIVEMINDOS_FULL'), "billing": "unknown", "console_url": "https://platform.composio.dev", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated."},
     {"id": "google-cloud", "name": "Google Cloud", "category": "Cloud", "billing": "unknown", "console_url": "https://console.cloud.google.com/billing", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated."},
-    {"id": "cloudflare", "name": "Cloudflare", "category": "Cloud", "keys": ('CLOUDFLARE_API_TOKEN',), "billing": "unknown", "console_url": "https://dash.cloudflare.com", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated."},
+    {"id": "cloudflare", "name": "Cloudflare", "category": "Cloud", "keys": ('CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_INFRA_ADMIN_API_KEY', 'CLOUDFLARE_PAGES_API_TOKEN'), "billing": "unknown", "console_url": "https://dash.cloudflare.com", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated."},
     {"id": "supabase", "name": "Supabase", "category": "Cloud", "keys": ('SUPABASE_ACCESS_TOKEN',), "billing": "unknown", "console_url": "https://supabase.com/dashboard", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated."},
-    {"id": "github", "name": "GitHub", "category": "Developer tools", "keys": ('GITHUB_TOKEN', 'GH_TOKEN'), "billing": "unknown", "console_url": "https://github.com/settings/billing", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated."},
+    {"id": "github", "name": "GitHub", "category": "Developer tools", "keys": ('GITHUB_TOKEN', 'GH_TOKEN', 'GH_GLOBAL'), "billing": "unknown", "console_url": "https://github.com/settings/billing", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated."},
     {"id": "resend", "name": "Resend", "category": "Developer tools", "keys": ('RESEND_API_KEY',), "billing": "mixed", "console_url": "https://resend.com", "adapter": "resend", "docs_url": "https://resend.com/docs/api-reference/usage/retrieve-usage", "verified": "2026-10-02", "payment_note": "Email and other allowances are usage limits, not cash. Review your plan and billing on Resend."},
-    {"id": "hetzner", "name": "Hetzner", "category": "Cloud", "keys": ('HETZNER_API_TOKEN', 'HCLOUD_TOKEN'), "billing": "postpaid", "console_url": "https://console.hetzner.cloud", "docs_url": "https://docs.hetzner.com/cloud/billing/faq/", "verified": "2026-10-02", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated.", "reading_note": "Resource prices can support an estimate, but they do not report your invoice or account balance. Review Hetzner billing."},
+    {"id": "hetzner", "name": "Hetzner", "category": "Cloud", "keys": ('HETZNER_API_TOKEN', 'HCLOUD_TOKEN', 'HETZNER_COUSIN_API_KEY'), "billing": "postpaid", "console_url": "https://console.hetzner.cloud", "docs_url": "https://docs.hetzner.com/cloud/billing/faq/", "verified": "2026-10-02", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated.", "reading_note": "Resource prices can support an estimate, but they do not report your invoice or account balance. Review Hetzner billing."},
     {"id": "agentmail", "name": "AgentMail", "category": "Developer tools", "keys": ('AGENTMAIL_API_KEY',), "billing": "unknown", "console_url": "https://console.agentmail.to", "adapter": "agentmail", "docs_url": "https://docs.agentmail.to/api-reference/organizations/get", "verified": "2026-10-02", "payment_note": "The organization endpoint reports connected inboxes and domains, not a monetary balance. Review your plan and payment on AgentMail."},
     {"id": "scrapecreators", "name": "Scrape Creators", "category": "Research", "keys": ('SCRAPECREATORS_API_KEY', 'SCRAPE_CREATORS_API_KEY'), "billing": "prepaid", "console_url": "https://scrapecreators.com", "docs_url": "https://docs.scrapecreators.com/v1/account/credit-balance/", "verified": "2026-10-02", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated.", "reading_note": "Checking this balance costs one provider credit. Automatic reads are disabled; review the balance on Scrape Creators."},
     {"id": "resemble", "name": "Resemble AI", "category": "Media", "keys": ('RESEMBLE_API_KEY',), "billing": "unknown", "console_url": "https://app.resemble.ai", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated."},
-    {"id": "quiver", "name": "QuiverAI", "category": "Media", "keys": ('QUIVER_API_KEY', 'QUIVERAI_API_KEY'), "reading_keys": ('QUIVER_BILLING_ADMIN_KEY',), "billing": "prepaid", "console_url": "https://quiver.ai", "adapter": "quiver", "docs_url": "https://docs.quiver.ai/api-reference/organization/get-organization-balance", "verified": "2026-10-02", "payment_note": "Balance reporting uses a separate existing organization Admin key with billing-read permission. Your inference key stays separate. Credits cover the organization across projects. Purchase credits on QuiverAI.", "billing_key": {"key": "QUIVER_BILLING_ADMIN_KEY", "label": "QuiverAI organization billing key", "permission": "An existing organization Admin key with billing-read permission. Project keys cannot read organization billing; Admin keys cannot run inference."}},
+    {"id": "quiver", "name": "QuiverAI", "category": "Media", "keys": ('QUIVER_API_KEY', 'QUIVERAI_API_KEY'), "reading_keys": ('QUIVER_BILLING_ADMIN_KEY',), "billing": "prepaid", "console_url": "https://quiver.ai", "adapter": "quiver", "docs_url": "https://docs.quiver.ai/api-reference/organization/get-organization-balance", "verified": "2026-10-02", "payment_note": "Balance reporting uses a separate existing organization Admin key with billing-read permission. Your inference key stays separate. Credits cover the organization across projects. Purchase credits on QuiverAI.", "billing_key": {"key": "QUIVER_BILLING_ADMIN_KEY", "why": "Only an organization Admin key can see billing.", "label": "QuiverAI organization billing key", "permission": "An existing organization Admin key with billing-read permission. Project keys cannot read organization billing; Admin keys cannot run inference."}},
     {"id": "nansen", "name": "Nansen", "category": "Research", "keys": ('NANSEN_API_KEY',), "billing": "unknown", "console_url": "https://app.nansen.ai", "docs_url": "https://docs.nansen.ai/getting-started/credits", "verified": "2026-10-02", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated.", "reading_note": "A supported credit-balance endpoint has not been verified. Review your credit balance on the Nansen dashboard."},
     {"id": "vadoo", "name": "Vadoo", "category": "Media", "keys": ('VADOO_API_KEY',), "billing": "unknown", "console_url": "https://www.vadoo.tv", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated."},
     {"id": "termly", "name": "Termly", "category": "Developer tools", "billing": "unknown", "console_url": "https://app.termly.io", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated."},
@@ -72,12 +72,12 @@ PROVIDERS: tuple[dict, ...] = (
     {"id": "chatgpt", "name": "ChatGPT subscription", "category": "Models", "billing": "unknown", "console_url": "https://chatgpt.com", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated."},
     {"id": "claude-plan", "name": "Claude subscription", "category": "Models", "billing": "unknown", "console_url": "https://claude.ai", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated."},
     {"id": "elevenlabs", "name": "ElevenLabs", "category": "Media", "keys": ('ELEVENLABS_API_KEY',), "billing": "mixed", "console_url": "https://elevenlabs.io/app", "adapter": "elevenlabs", "docs_url": "https://elevenlabs.io/docs/api-reference/user/subscription/get", "verified": "2026-10-02", "payment_note": "Plan allowance, usage, overage and the next invoice are distinct from a cash balance. Review your plan or additional credits on ElevenLabs."},
-    {"id": "muapi", "name": "Muapi", "category": "Media", "keys": ('MUAPI_API_KEY',), "billing": "mixed", "console_url": "https://muapi.ai", "billing_url": "https://muapi.ai/topup", "docs_url": "https://muapi.ai/topup", "verified": "2026-10-02", "payment_note": "Buy credits on Muapi’s official billing page. Check whether the selected plan includes credits before purchasing more."},
+    {"id": "muapi", "name": "Muapi", "category": "Media", "keys": ('MUAPI_API_KEY',), "billing": "mixed", "console_url": "https://muapi.ai", "billing_url": "https://muapi.ai/topup", "adapter": "muapi", "docs_url": "https://muapi.ai/docs/credits", "verified": "2026-10-18", "payment_note": "Buy credits on Muapi’s official billing page. Check whether the selected plan includes credits before purchasing more."},
     {"id": "supergrok", "name": "SuperGrok subscription", "category": "Models", "billing": "unknown", "console_url": "https://grok.com", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated."},
     {"id": "codex-credits", "name": "Codex / Work credits", "category": "Models", "billing": "unknown", "console_url": "https://chatgpt.com", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated."},
     {"id": "azure", "name": "Microsoft Azure", "category": "Cloud", "billing": "unknown", "console_url": "https://portal.azure.com", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated."},
-    {"id": "render", "name": "Render", "category": "Cloud", "keys": ('RENDER_API_KEY',), "billing": "unknown", "console_url": "https://dashboard.render.com", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated."},
-    {"id": "huggingface", "name": "Hugging Face", "category": "Models", "keys": ('HF_TOKEN', 'HUGGING_FACE_HUB_TOKEN'), "billing": "unknown", "console_url": "https://huggingface.co/settings/billing", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated."},
+    {"id": "render", "name": "Render", "category": "Cloud", "keys": ('RENDER_API_KEY', 'RENDER_MANAGEMENT_KEY'), "billing": "unknown", "console_url": "https://dashboard.render.com", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated."},
+    {"id": "huggingface", "name": "Hugging Face", "category": "Models", "keys": ('HF_TOKEN', 'HUGGING_FACE_HUB_TOKEN', 'HUGGINGFACE_READ_WRITE_KEY'), "billing": "unknown", "console_url": "https://huggingface.co/settings/billing", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated."},
     {"id": "colab", "name": "Google Colab", "category": "Cloud", "billing": "unknown", "console_url": "https://colab.research.google.com", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated."},
     {"id": "aws", "name": "Amazon Web Services", "category": "Cloud", "billing": "unknown", "console_url": "https://console.aws.amazon.com/billing", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated."},
     {"id": "obsidian-sync", "name": "Obsidian Sync", "category": "Developer tools", "billing": "unknown", "console_url": "https://obsidian.md/account", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated."},
@@ -85,32 +85,60 @@ PROVIDERS: tuple[dict, ...] = (
     {"id": "streamoji", "name": "Streamoji Avatars", "category": "Media", "billing": "unknown", "console_url": "https://streamoji.com", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated."},
     {"id": "universal-sign-in", "name": "Universal Sign In", "category": "Developer tools", "billing": "unknown", "console_url": "https://universal-sign-in.com/auth/login", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated."},
     {"id": "deepseek", "name": "DeepSeek", "category": "Models", "keys": ('DEEPSEEK_API_KEY',), "billing": "prepaid", "console_url": "https://platform.deepseek.com", "adapter": "deepseek", "docs_url": "https://api-docs.deepseek.com/api/get-user-balance/", "verified": "2026-10-02", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated."},
-    {"id": "bankr", "name": "Bankr LLM", "category": "Models", "keys": ('BANKR_LLM_KEY',), "billing": "prepaid", "console_url": "https://bankr.bot", "billing_url": "https://bankr.bot/terminal/llm", "adapter": "bankr", "docs_url": "https://docs.bankr.bot/llm-gateway/api-reference/", "verified": "2026-10-02", "payment_note": "The available balance covers this wallet across its API keys and includes pending usage. Daily spending limits are separate. Complete purchases on Bankr."},
-    {"id": "venice", "name": "Venice AI", "category": "Models", "keys": ('VENICE_API_KEY',), "billing": "mixed", "console_url": "https://venice.ai", "adapter": "venice", "docs_url": "https://docs.venice.ai/api-reference/endpoint/billing/balance", "verified": "2026-10-02", "payment_note": "USD funds and DIEM allowance are shown separately. DIEM is not added to your dollar balance. Manage payments on Venice."},
+    {"id": "bankr", "name": "Bankr LLM", "category": "Models", "keys": ('BANKR_LLM_KEY',), "reading_keys": ('BANKR_MANAGEMENT_API_KEY', 'BANKR_MANAGEMENT_KEY', 'BANKR_LLM_KEY'), "billing": "prepaid", "console_url": "https://bankr.bot", "billing_url": "https://bankr.bot/terminal/llm", "adapter": "bankr", "docs_url": "https://docs.bankr.bot/llm-gateway/api-reference/", "verified": "2026-10-18", "payment_note": "The available balance covers this wallet across its API keys and includes pending usage. Daily spending limits are separate. Complete purchases on Bankr."},
+    {"id": "venice", "name": "Venice AI", "category": "Models", "keys": ('VENICE_API_KEY',), "billing": "mixed", "console_url": "https://venice.ai", "adapter": "venice", "docs_url": "https://docs.venice.ai/api-reference/endpoint/api_keys/rate_limits", "verified": "2026-10-18", "payment_note": "USD funds and DIEM allowance are shown separately. DIEM is not added to your dollar balance. Manage payments on Venice."},
     {"id": "usepod", "name": "UsePod", "category": "Models", "keys": ('USEPOD_TOKEN',), "billing": "prepaid", "console_url": "https://usepod.com", "docs_url": "https://docs.usepod.ai/using/funding/", "verified": "2026-10-02", "payment_note": "Billing coverage is not integrated. Check this provider’s account and payment options before funding.", "reading_note": "UsePod reports balance with paid responses. This dashboard does not spend money to obtain a balance; review your funding page."},
     {"id": "groq", "name": "Groq", "category": "Models", "keys": ('GROQ_API_KEY',), "billing": "unknown", "console_url": "https://console.groq.com", "payment_note": "Billing coverage is not integrated. Check this provider’s account and payment options before funding."},
     {"id": "dot", "name": "Dot", "category": "Models", "keys": ('DOT_API_KEY',), "billing": "unknown", "console_url": "https://usedot.xyz", "payment_note": "Billing coverage is not integrated. Check this provider’s account and payment options before funding."},
     {"id": "engy", "name": "engy", "category": "Models", "keys": ('ENGYAI_API_KEY',), "billing": "unknown", "console_url": "https://engy.ai", "payment_note": "Billing coverage is not integrated. Check this provider’s account and payment options before funding."},
     {"id": "nearai", "name": "NEAR AI", "category": "Models", "keys": ('NEAR_AI_API_KEY',), "billing": "unknown", "console_url": "https://cloud.near.ai", "payment_note": "Billing coverage is not integrated. Check this provider’s account and payment options before funding."},
-    {"id": "gemini", "name": "Gemini", "category": "Models", "keys": ('GEMINI_API_KEY',), "billing": "unknown", "console_url": "https://aistudio.google.com", "payment_note": "Billing coverage is not integrated. Check this provider’s account and payment options before funding."},
+    {"id": "gemini", "name": "Gemini", "category": "Models", "keys": ('GEMINI_API_KEY', 'GOOGLE_AI_STUDIO_API_KEY'), "billing": "unknown", "console_url": "https://aistudio.google.com", "payment_note": "Billing coverage is not integrated. Check this provider’s account and payment options before funding."},
+    {"id": "runpod", "name": "RunPod", "category": "Cloud", "keys": ('RUNPOD_API_KEY', 'RUNPOD_MANAGEMENT_API_KEY'), "accounts": ({"key": "RUNPOD_SECOND_MANAGEMENT_API_KEY", "label": "second account"},), "billing": "prepaid", "console_url": "https://console.runpod.io", "billing_url": "https://console.runpod.io/user/billing", "adapter": "runpod", "docs_url": "https://docs.runpod.io/sdks/graphql/manage-pods", "verified": "2026-10-18", "payment_note": "Add funds on RunPod's billing page. PassBook only reads the balance."},
+    {"id": "stripe", "name": "Stripe", "category": "Money", "keys": ('STRIPE_SECRET_KEY', 'STRIPE_MANAGEMENT_API_KEY', 'PORTFOLIO_STRIPE_SECRET_KEY'), "billing": "unknown", "console_url": "https://dashboard.stripe.com", "billing_url": "https://dashboard.stripe.com/balance", "adapter": "stripe", "docs_url": "https://docs.stripe.com/api/balance/balance_retrieve", "verified": "2026-10-18", "payment_note": "This is money Stripe holds for you (sales not yet paid out), not credit to spend. Payouts happen on Stripe.", "billing_key": {"key": "STRIPE_BALANCE_KEY", "why": "A restricted key with Balance: Read is enough.", "label": "Stripe restricted key", "permission": "A restricted key with Balance: Read and nothing else.", "create_url": "https://dashboard.stripe.com/apikeys"}},
+    {"id": "alpaca", "name": "Alpaca", "category": "Money", "keys": ('ALPACA_API_SECRET_KEY',), "pairs": {"ALPACA_API_SECRET_KEY": "ALPACA_API_KEY_ID"}, "billing": "unknown", "console_url": "https://app.alpaca.markets", "billing_url": "https://app.alpaca.markets/brokerage/banking", "adapter": "alpaca", "docs_url": "https://docs.alpaca.markets/reference/getaccount-1", "verified": "2026-10-18", "payment_note": "A brokerage account: cash and holdings move with the market, so they are shown as reported and never counted as spend. Deposits happen on Alpaca."},
+    {"id": "bfl", "name": "Black Forest Labs", "category": "Media", "keys": ('BFL_API_KEY', 'BLACK_FOREST_LABS_API_KEY'), "billing": "prepaid", "console_url": "https://dashboard.bfl.ai", "billing_url": "https://dashboard.bfl.ai", "adapter": "bfl", "docs_url": "https://docs.bfl.ml/api-reference/get-the-users-credits", "verified": "2026-10-18", "payment_note": "Buy credits on the BFL dashboard. PassBook only reads the balance."},
+    {"id": "fish", "name": "Fish Audio", "category": "Media", "keys": ('FISH_AUDIO_API_KEY',), "billing": "prepaid", "console_url": "https://fish.audio", "billing_url": "https://fish.audio/app/billing/", "adapter": "fish", "docs_url": "https://docs.fish.audio/api-reference/openapi.json", "verified": "2026-10-18", "payment_note": "Top up API credit on Fish Audio. Its API reports the credit without a unit; it is bought in dollars, so it is shown as dollars. PassBook only reads the balance."},
+    {"id": "browser-use", "name": "Browser Use", "category": "Developer tools", "keys": ('BROWSER_USE_API_KEY', 'BROWSER_USE_API_KEY_HIVEMIND_OS'), "billing": "prepaid", "console_url": "https://cloud.browser-use.com", "billing_url": "https://cloud.browser-use.com/billing", "adapter": "browser-use", "docs_url": "https://docs.browser-use.com/cloud/api-v2/billing/get-account-billing", "verified": "2026-10-18", "payment_note": "Buy credits on Browser Use. PassBook only reads the balance."},
+    {"id": "bankr-wallet", "name": "Bankr wallets", "category": "Money", "keys": ('BANKR_MANAGEMENT_API_KEY', 'BANKR_MANAGEMENT_KEY'), "billing": "unknown", "console_url": "https://bankr.bot", "billing_url": "https://bankr.bot/terminal", "adapter": "bankr-wallet", "docs_url": "https://docs.bankr.bot/docs/wallet-api/portfolio", "verified": "2026-10-18", "payment_note": "Tokens on your Bankr wallets, valued in dollars by Bankr. Prices move, so the value is shown as reported and never counted as spend."},
+    {"id": "modal", "name": "Modal", "category": "Cloud", "keys": ('MODAL_TOKEN_SECRET', 'MODAL_TOKEN_SECRET_HIVEMIND_OS'), "billing": "postpaid", "console_url": "https://modal.com/settings/usage", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated."},
 )
 
-# Where each reader asks, and how it says who it is. The documented Vast endpoint redirects to this
-# trailing-slash address; asking it directly means the key never follows a redirect.
-REQUESTS: dict[str, tuple[str, str]] = {
+# Where each reader asks, and how it says who it is: `Bearer` and `Key` go in Authorization, `alpaca` is
+# its id-and-secret pair, anything else is the header's own name. A third item is a JSON body (a POST).
+# `{month_start}` and `{month_start_iso}` are the first of this month, UTC. The documented Vast endpoint
+# redirects to this trailing-slash address; asking it directly means the key never follows a redirect.
+RUNPOD_QUERY = {"query": "query { myself { clientBalance currentSpendPerHr spendLimit } }"}
+REQUESTS: dict[str, tuple] = {
     "openrouter": ("https://openrouter.ai/api/v1/credits", "Bearer"),
     "fal": ("https://api.fal.ai/v1/account/billing?expand=credits", "Key"),
     "meshy": ("https://api.meshy.ai/openapi/v1/balance", "Bearer"),
     "vast": ("https://console.vast.ai/api/v0/users/current/", "Bearer"),
     "apify": ("https://api.apify.com/v2/users/me/usage/monthly", "Bearer"),
     "deepseek": ("https://api.deepseek.com/user/balance", "Bearer"),
-    "venice": ("https://api.venice.ai/api/v1/billing/balance", "Bearer"),
-    "bankr": ("https://llm.bankr.bot/v1/credits", "Bearer"),
+    # The per-key rate-limits answer carries the account's balances and is open to an inference key;
+    # /billing/balance answers 401 to one (probed 2026-10-18).
+    "venice": ("https://api.venice.ai/api/v1/api_keys/rate_limits", "Bearer"),
+    "bankr": ("https://llm.bankr.bot/v1/credits", "X-API-Key"),
     "elevenlabs": ("https://api.elevenlabs.io/v1/user/subscription", "xi-api-key"),
     "agentmail": ("https://api.agentmail.to/v0/organizations", "Bearer"),
     "vultr": ("https://api.vultr.com/v2/account", "Bearer"),
     "resend": ("https://api.resend.com/usage", "Bearer"),
     "quiver": ("https://api.quiver.ai/v1/organization/balance", "Bearer"),
+    "openrouter-key": ("https://openrouter.ai/api/v1/key", "Bearer"),
+    "runpod": ("https://api.runpod.io/graphql", "Bearer", RUNPOD_QUERY),
+    "stripe": ("https://api.stripe.com/v1/balance", "Bearer"),
+    "runware": ("https://api.runware.ai/v1", "Bearer", [{"taskType": "accountManagement", "operation": "getDetails",
+                                                          "taskUUID": "6f1d2b1e-5a0c-4b7e-9c55-2f7a1d3e9b40"}]),
+    "muapi": ("https://api.muapi.ai/api/v1/account/balance", "x-api-key"),
+    "bankr-wallet": ("https://api.bankr.bot/wallet/portfolio", "X-API-Key"),
+    "alpaca": ("https://api.alpaca.markets/v2/account", "alpaca"),
+    "kie": ("https://api.kie.ai/api/v1/chat/credit", "Bearer"),
+    "tripo": ("https://api.tripo3d.ai/v2/openapi/user/balance", "Bearer"),
+    "bfl": ("https://api.bfl.ai/v1/credits", "x-key"),
+    "fish": ("https://api.fish.audio/wallet/self/api-credit", "Bearer"),
+    "browser-use": ("https://api.browser-use.com/api/v2/billing/account", "X-Browser-Use-API-Key"),
+    "openai-costs": ("https://api.openai.com/v1/organization/costs?start_time={month_start}&bucket_width=1d&limit=31", "Bearer"),
+    "anthropic-costs": ("https://api.anthropic.com/v1/organizations/cost_report?starting_at={month_start_iso}&bucket_width=1d&limit=31", "x-api-key"),
 }
 
 # What a ready reading means, said once per kind: the reading is never more than the provider reported.
@@ -120,6 +148,13 @@ READY_NOTES = {
     "resend": "Plan usage and allowances are not a cash balance. An uncapped daily allowance does not remove your monthly plan limit.",
     "agentmail": "Organization counts and limits are not a cash balance.",
     "vultr": "Accounting amounts are shown as reported, without assuming spendable funds or combining pending charges.",
+    "openrouter-key": "This key's own spending limit, not the account's credits.",
+    "stripe": "Money Stripe holds for you, not credit to spend.",
+    "venice": "What this key can spend: the account's balance, capped by any limit on the key.",
+    "bankr-wallet": "Token value as Bankr prices it; prices move, so it is not counted as spend.",
+    "alpaca": "Brokerage cash and holdings as reported; market moves are not spend.",
+    "openai-costs": "Spend this month so far. OpenAI does not report the credit left to any key.",
+    "anthropic-costs": "Spend this month so far. Anthropic does not report the credit left to any key.",
 }
 READY_NOTE = "Provider-reported balance for the saved billing credential. Other organizations or accounts may be missing."
 MANUAL_NOTE = "This provider does not report a balance to an API key. Check it on the provider's site."
@@ -230,14 +265,16 @@ def parse_reading(adapter: str, payload: Any) -> dict:
             + _amount("Purchased balance", row.get("topped_up_balance"), str(row["currency"])))]
         return {"balance": _decimal(primary.get("total_balance")), "unit": str(primary["currency"]), "details": details}
     if adapter == "venice":
-        balances = _record(body.get("balances"))
-        balance = _number(balances.get("usd"))
+        # The rate-limits answer (`data.balances`, upper-case) or the billing one (`balances`, lower-case).
+        balances = _record(data.get("balances")) or _record(body.get("balances"))
+        pick = lambda *names: next((balances[name] for name in names if name in balances), None)  # noqa: E731
+        balance = _number(pick("usd", "USD"))
         if balance is None:
             raise Unreadable("Unexpected balance response")
         return {"balance": balance, "unit": "USD", "details": (
-            _amount("DIEM allowance remaining", balances.get("diem"), "DIEM")
+            _amount("DIEM allowance remaining", pick("diem", "DIEM"), "DIEM")
             + _amount("DIEM epoch allocation", body.get("diemEpochAllocation"), "DIEM")
-            + _amount("Bundled credits", balances.get("bundledCredits"), "credits")
+            + _amount("Bundled credits", pick("bundledCredits", "BUNDLED_CREDITS"), "credits")
             + _amount("Earned credits", balances.get("earnedCredits"), "credits"))}
     if adapter == "bankr":
         balance = _number(body.get("effectiveBalanceUsd"))
@@ -303,6 +340,114 @@ def parse_reading(adapter: str, payload: Any) -> dict:
             raise Unreadable("Unexpected balance response")
         return {"balance": balance, "unit": "credits", "accountLabel": _text(body.get("organization_id")),
                 "observedAt": _iso(observed), "details": _amount("Organization credits across projects", body.get("available_credits"), "credits")}
+    if adapter == "openrouter-key":
+        limit, left = _number(data.get("limit")), _number(data.get("limit_remaining"))
+        month = _number(data.get("usage_monthly"))
+        if month is None or (limit is not None and left is None):
+            raise Unreadable("Unexpected key response")
+        reading = {"usageUsd": month, "usagePeriod": "This month, this key", "details": (
+            _amount("This key's spend, all time", data.get("usage"), "USD") + _amount("Today", data.get("usage_daily"), "USD"))}
+        if limit is not None:
+            budget = _record(data.get("effective_budget"))
+            reading["allowance"] = {"used": round(limit - left, 6), "limit": limit, "unit": "USD",
+                                    "resetsAt": _timestamp(budget.get("resets_at"))}
+        else:
+            reading["details"].insert(0, {"label": "Spending limit", "value": "None on this key"})
+        return reading
+    if adapter == "runpod":
+        me = _record(data.get("myself"))
+        balance = _number(me.get("clientBalance"))
+        if balance is None or body.get("errors"):
+            raise Unreadable("Unexpected balance response")
+        return {"balance": balance, "unit": "USD", "details": (
+            _amount("Spending now, per hour", me.get("currentSpendPerHr"), "USD")
+            + _amount("Spend limit", me.get("spendLimit"), "USD"))}
+    if adapter == "stripe":
+        available, pending = body.get("available"), body.get("pending")
+        if not isinstance(available, list) or not isinstance(pending, list) or not isinstance(body.get("livemode"), bool):
+            raise Unreadable("Unexpected balance response")
+        def money(label: str, rows: list) -> list[dict]:
+            return [item for row in map(_record, rows) if _currency(row.get("currency")) and _number(row.get("amount")) is not None
+                    for item in _amount(label, row["amount"] / 100, _currency(row["currency"]))]
+        # Money held for you, not credit to spend: figures only, so it is never taken for spend or a top-up.
+        return {"details": money("Available", available) + money("Pending", pending)
+                + [{"label": "Mode", "value": "Live" if body["livemode"] else "Test"}]}
+    if adapter == "alpaca":
+        cash, equity = _decimal(body.get("cash")), _decimal(body.get("equity"))
+        if cash is None or equity is None or not _currency(body.get("currency")):
+            raise Unreadable("Unexpected account response")
+        unit = _currency(body.get("currency"))
+        # Holdings move with the market: shown as reported, never a balance whose fall is spend.
+        return {"details": _amount("Account value", body.get("equity"), unit) + _amount("Cash", body.get("cash"), unit)
+                + _amount("Buying power", body.get("buying_power"), unit)
+                + ([{"label": "Status", "value": _text(body.get("status"))}] if _text(body.get("status")) else [])}
+    if adapter == "runware":
+        # The answer also lists the account's API keys: only the balance and the organization's name are kept.
+        first = _record((body.get("data") or [None])[0] if isinstance(body.get("data"), list) else None)
+        balance = _number(first.get("balance"))
+        if balance is None:
+            raise Unreadable("Unexpected account response")
+        return {"balance": balance, "unit": "USD", "accountLabel": _text(first.get("organizationName"))}
+    if adapter == "muapi":
+        balance, unit = _number(body.get("balance")), _currency(body.get("currency") or "USD")
+        if balance is None or not unit:
+            raise Unreadable("Unexpected balance response")
+        return {"balance": balance, "unit": unit}
+    if adapter == "bankr-wallet":
+        chains = _record(body.get("balances"))
+        totals = {name: _decimal(_record(chain).get("total")) for name, chain in chains.items()}
+        if body.get("success") is not True or not chains or any(value is None for value in totals.values()):
+            raise Unreadable("Unexpected portfolio response")
+        held = sorted(((value, name) for name, value in totals.items() if value), reverse=True)
+        # Prices move: shown as reported, so a falling token is never read as spend.
+        return {"details": [{"label": "Wallet value", "value": f"{round(sum(totals.values()), 2):g} USD"}]
+                + [{"label": f"On {name}", "value": f"{round(value, 2):g} USD"} for value, name in held]}
+    if adapter == "kie":
+        balance = _number(body.get("data"))
+        if body.get("code") != 200 or balance is None:
+            raise Unreadable("Unexpected balance response")
+        return {"balance": balance, "unit": "credits"}
+    if adapter == "tripo":
+        balance = _number(data.get("balance"))
+        if body.get("code") != 0 or balance is None:
+            raise Unreadable("Unexpected balance response")
+        return {"balance": balance, "unit": "credits", "details": _amount("Held for running tasks", data.get("frozen"), "credits")}
+    if adapter == "bfl":
+        balance = _number(body.get("credits"))
+        if balance is None:
+            raise Unreadable("Unexpected balance response")
+        return {"balance": balance, "unit": "credits"}
+    if adapter == "fish":
+        balance = _decimal(body.get("credit"))
+        if balance is None:
+            raise Unreadable("Unexpected balance response")
+        return {"balance": balance, "unit": "USD", "details": _amount("Topped up, all time", body.get("cumulative_top_up"), "USD")}
+    if adapter == "browser-use":
+        balance = _number(body.get("totalCreditsBalanceUsd"))
+        if balance is None:
+            raise Unreadable("Unexpected balance response")
+        plan = _record(body.get("planInfo"))
+        return {"balance": balance, "unit": "USD", "details": (
+            _amount("Monthly plan credits", body.get("monthlyCreditsBalanceUsd"), "USD")
+            + _amount("Bought credits", body.get("additionalCreditsBalanceUsd"), "USD")
+            + ([{"label": "Plan", "value": _text(plan.get("planName"))}] if _text(plan.get("planName")) else []))}
+    if adapter in ("openai-costs", "anthropic-costs"):
+        buckets = body.get("data")
+        if not isinstance(buckets, list):
+            raise Unreadable("Unexpected cost response")
+        total = 0.0
+        for bucket in map(_record, buckets):
+            for result in map(_record, bucket.get("results") or []):
+                amount = result.get("amount")
+                # OpenAI: {"value": dollars, "currency": "usd"}. Anthropic: a decimal string of cents.
+                value = _number(_record(amount).get("value")) if adapter == "openai-costs" else _decimal(amount)
+                currency = str(_record(amount).get("currency") or "usd") if adapter == "openai-costs" else str(result.get("currency") or "USD")
+                if value is None or currency.upper() != "USD":
+                    raise Unreadable("Unexpected cost response")
+                total += value if adapter == "openai-costs" else value / 100
+        if body.get("has_more"):
+            raise Unreadable("More cost pages than one month holds")
+        return {"usageUsd": round(total, 4), "usagePeriod": "This month so far"}
     raise Unreadable(f"No reader for {adapter}")
 
 
@@ -314,9 +459,27 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def _get(url: str, scheme: str, key: str, timeout: float, limit: int) -> tuple[int, Any]:
-    header = {"xi-api-key": key} if scheme == "xi-api-key" else {"Authorization": f"{scheme} {key}"}
-    request = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "passbook-balances", **header})
+def _headers(scheme: str, key: str, url: str) -> dict[str, str]:
+    if scheme in ("Bearer", "Key"):
+        return {"Authorization": f"{scheme} {key}"}
+    if scheme == "alpaca":
+        # A pair: the key id and its secret, joined by a newline in `read_provider`.
+        key_id, _, secret = key.partition("\n")
+        return {"APCA-API-KEY-ID": key_id, "APCA-API-SECRET-KEY": secret}
+    extra = {"anthropic-version": "2023-06-01"} if url.startswith("https://api.anthropic.com/") else {}
+    return {scheme: key, **extra}
+
+
+def _month_start(now: float) -> datetime:
+    today = datetime.fromtimestamp(now, timezone.utc)
+    return today.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
+def _get(url: str, scheme: str, key: str, timeout: float, limit: int, body: Any = None) -> tuple[int, Any]:
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    request = urllib.request.Request(url, data=data, method="POST" if data else "GET", headers={
+        "Accept": "application/json", "User-Agent": "passbook-balances", **_headers(scheme, key, url),
+        **({"Content-Type": "application/json"} if data else {})})
     opener = urllib.request.build_opener(_NoRedirect)
     try:
         with opener.open(request, timeout=timeout) as response:
@@ -328,8 +491,11 @@ def _get(url: str, scheme: str, key: str, timeout: float, limit: int) -> tuple[i
 
 def fetch_reading(adapter: str, key: str, *, timeout: float = 12.0) -> tuple[int, Any]:
     """(HTTP status, parsed JSON or None). A denial's body is never read: it can echo the credential."""
-    url, scheme = REQUESTS[adapter]
-    return _get(url, scheme, key, timeout, 2_000_000)
+    url, scheme, *body = REQUESTS[adapter]
+    start = _month_start(time.time())
+    url = url.replace("{month_start}", str(int(start.timestamp()))).replace(
+        "{month_start_iso}", start.isoformat().replace("+00:00", "Z"))
+    return _get(url, scheme, key, timeout, 2_000_000, body[0] if body else None)
 
 
 # ── a provider's own daily spend ────────────────────────────────────────────
@@ -409,25 +575,120 @@ def enrich(root: Path, rows: list[dict], *, now: Callable[[], float] = time.time
 # ── a provider's line ───────────────────────────────────────────────────────
 
 
+# The apps that run the balance readers, and so the only ones a balance-only key is opened for: the CLI,
+# PassBook's own window, and HivemindOS (service-accounts/readings.ts). Each gets numbers, never the key.
+BALANCE_KEY_READERS = ("passbook-balances", "passbook-app", "hivemindos")
+
+
 def provider(provider_id: str) -> dict | None:
-    return next((entry for entry in PROVIDERS if entry["id"] == provider_id), None)
+    """A catalog entry, or for a second account (`fal/FAL_KEY_BACKUP`) the entry that reads it."""
+    base_id, _, key = str(provider_id).partition("/")
+    entry = next((entry for entry in PROVIDERS if entry["id"] == base_id), None)
+    if entry is None or not key:
+        return entry
+    account = next((item for item in entry.get("accounts", ()) if item["key"] == key), None)
+    return _account_entry(entry, account) if account else None
+
+
+def _account_entry(entry: Mapping[str, Any], account: Mapping[str, Any]) -> dict:
+    """Another account of the same provider, read with its own key and shown as its own row."""
+    return {**entry, "id": f"{entry['id']}/{account['key']}", "name": f"{entry['name']} · {account['label']}",
+            "keys": (account["key"],), "reading_keys": (account["key"],), "accounts": (), "billing_key": None,
+            "adapter": account.get("adapter", entry.get("adapter")), "base": entry["id"]}
 
 
 def top_up_url(entry: Mapping[str, Any]) -> str:
     return str(entry.get("billing_url") or entry.get("console_url") or "")
 
 
+def balance_key(entry: Mapping[str, Any]) -> dict | None:
+    """The key PassBook reads this provider's balance with and nothing else uses, when it can have one.
+
+    Every provider with a reader can have one, so a key that runs models keeps the permissions it has and
+    the balance is read with a stronger key kept apart for it. The catalog names the permission it needs
+    where that is known; otherwise any key of the account that can read billing.
+    """
+    if not entry.get("adapter") or entry.get("base") or entry.get("pairs"):
+        return None
+    given = entry.get("billing_key") or {}
+    stem = entry["id"].upper().replace("-", "_")
+    return {"key": given.get("key") or f"{stem}_BALANCE_KEY", "label": given.get("label") or f"{entry['name']} balance key",
+            "why": given.get("why") or "",
+            "permission": given.get("permission") or f"A {entry['name']} key that can read the account's balance.",
+            "createUrl": given.get("create_url") or entry.get("console_url") or ""}
+
+
+def _reading_names(entry: Mapping[str, Any]) -> tuple[str, ...]:
+    """The keys tried, in order: the balance-only key, then the billing keys, else the provider's keys.
+    A catalog `reading_keys` (even an empty one) means its other keys cannot read billing."""
+    slot = (balance_key(entry) or {}).get("key")
+    names = entry["reading_keys"] if "reading_keys" in entry else entry.get("keys", ())
+    return tuple(dict.fromkeys(name for name in (slot, *names) if name))
+
+
+def _all_names(entry: Mapping[str, Any]) -> tuple[str, ...]:
+    slot = (balance_key(entry) or {}).get("key")
+    return tuple(dict.fromkeys(name for name in (*entry.get("keys", ()), *entry.get("reading_keys", ()), slot) if name))
+
+
 def _base(entry: Mapping[str, Any], present: set[str], checked_at: str) -> dict:
-    names = (*entry.get("keys", ()), *entry.get("reading_keys", ()))
+    names = _all_names(entry)
+    slot = balance_key(entry)
     return {
-        "providerId": entry["id"], "name": entry["name"], "category": entry["category"],
+        "providerId": entry["id"], "provider": entry.get("base") or entry["id"], "name": entry["name"],
+        "category": entry["category"],
         "billing": BILLING_LABELS.get(entry.get("billing", "unknown"), BILLING_LABELS["unknown"]),
         "credentialPresent": any(name in present for name in names), "keyNames": list(names),
         "status": "manual", "checkedAt": checked_at, "observedAt": None, "balance": None, "unit": None,
         "usageUsd": None, "usagePeriod": None, "accountLabel": None, "details": [], "allowance": None,
         "topUpUrl": top_up_url(entry), "paymentNote": entry.get("payment_note", ""),
         "message": entry.get("reading_note") or MANUAL_NOTE,
+        "balanceKey": {**slot, "held": slot["key"] in present} if slot else None,
     }
+
+
+# What needs doing, said once for every surface: which row, what is wrong in a few words, what fixes it,
+# and the one action that does. Worst first by `rank`. A ready row has none.
+ISSUE_RANK = {"key-rejected": 1, "needs-balance-key": 2, "missing-key": 2, "locked": 3, "unreachable": 4, "no-api": 9}
+
+
+def _a(words: str) -> str:
+    return f"an {words}" if words[:1].upper() in "AEIOU" else f"a {words}"
+
+
+def issue_for(row: Mapping[str, Any]) -> dict | None:
+    """`title` is the headline, `fix` one short line under it, `detail` what the paste form explains."""
+    status, slot, name = row.get("status"), row.get("balanceKey"), row.get("name")
+    used = row.get("keyName") or ""
+    http = (row.get("providerError") or {}).get("httpStatus")
+    add = {"action": "add-key", "key": slot["key"], "createUrl": slot["createUrl"],
+           "detail": f"What to make: {slot['permission']}"} if slot else {"action": "open"}
+
+    def made(kind: str, title: str, fix: str, **extra: Any) -> dict:
+        return {"kind": kind, "rank": ISSUE_RANK[kind], "title": title, "fix": fix, **extra}
+
+    if status == "ready":
+        return None
+    if status == "locked":
+        return made("locked", "Locked", "Its key is sealed. Unlock PassBook to read it.", action="unlock")
+    if status == "manual":
+        return made("no-api", "Not readable by API", row.get("message") or MANUAL_NOTE, action="open")
+    if status == "missing":
+        if row.get("needsKey"):
+            return made("missing-key", f"Needs {row['needsKey']}",
+                        f"{name} signs in with a key id and a secret; only {used} is here.", action="open")
+        if slot:
+            return made("needs-balance-key", f"Needs {_a(slot['label'])}", slot["why"] or slot["permission"], **add)
+        return made("missing-key", "No key", "No saved key can read this balance.", action="open")
+    if http == 401:
+        why = "Revoked or expired"
+        why += ", or this computer's address is not on the key's allowed list" if row["provider"] == "vultr" else ""
+        return made("key-rejected", f"{name} refused {used}", why + ". Paste a new key to read the balance.",
+                    **({**add, "detail": f"{add['detail']} Apps that use {used} need it replaced too, under Keys."} if slot else add))
+    if http == 403:
+        return made("needs-balance-key", f"{used} can't see billing",
+                    f"{slot['why'] or 'It needs more permission.'} {used} stays as it is." if slot else "It needs more permission.", **add)
+    return made("unreachable", "Didn't answer", "Try again in a moment; no balance is assumed.", action="retry")
 
 
 def fingerprint(salt: bytes, provider_id: str, key: str) -> str:
@@ -460,56 +721,79 @@ def read_provider(entry: Mapping[str, Any], values: Mapping[str, str], present: 
     reading = _base(entry, present, _iso(now()))
     adapter = entry.get("adapter")
     if not adapter:
+        reading["issue"] = issue_for(reading)
         return reading
-    names = tuple(entry.get("reading_keys") or entry.get("keys") or ())
+    names = _reading_names(entry)
     key_name = next((name for name in names if values.get(name) and not str(values[name]).startswith("hive-sealed:")), None)
+    key = values.get(key_name or "", "")
+    pair = (entry.get("pairs") or {}).get(key_name or "")
+    if pair:
+        if not values.get(pair) or str(values[pair]).startswith("hive-sealed:"):
+            reading.update(status="missing", keyName=key_name, needsKey=pair,
+                           message=f"Reading the balance needs {pair} as well as {key_name}.")
+            reading["issue"] = issue_for(reading)
+            return reading
+        key = f"{values[pair]}\n{key}"
     if key_name and fresh_from and salt:
         kept = fresh_from.get(entry["id"])
-        if kept and kept.get("connection") == fingerprint(salt, entry["id"], values[key_name]):
+        if kept and kept.get("connection") == fingerprint(salt, entry["id"], key):
+            # The very same object: the command tells a reading just asked from a remembered one by identity.
+            kept.update(balanceKey=reading["balanceKey"], provider=reading["provider"], issue=None)
             return kept
     if not key_name:
         held = any(name in present for name in names)
-        billing = entry.get("billing_key")
+        billing = balance_key(entry)
         reading.update(status="locked" if held else "missing", message=(
             "The saved key could not be read here. Open the vault and refresh." if held
             else f"Add your {billing['label']} ({billing['key']}) to read the balance. {billing['permission']}" if billing
-            else f"Reading the balance needs its own billing key ({', '.join(names)}); an inference key cannot read billing."
-            if entry.get("reading_keys") else "No saved key can read this balance."))
+            and "reading_keys" in entry
+            else "No saved key can read this balance."))
+        reading["issue"] = issue_for(reading)
         return reading
     # Which key this reading is from, said without the key: its name, and an opaque fingerprint that changes
     # when the key does (`connection`), so a rotated key is never shown the old account's numbers.
-    reading.update(keyName=key_name, connection=fingerprint(salt, entry["id"], values[key_name]) if salt else None)
+    reading.update(keyName=key_name, connection=fingerprint(salt, entry["id"], key) if salt else None)
     try:
-        status, payload = fetch(adapter, values[key_name])
+        status, payload = fetch(adapter, key)
     except Exception:  # noqa: BLE001 — offline, a timeout, a refused redirect: no balance is assumed
         reading.update(status="error", message="The provider did not answer. Try again; no balance is assumed.")
+        reading["issue"] = issue_for(reading)
         return reading
     if status in (401, 403):
         reading.update(status="error", providerError={"httpStatus": status,
                        "category": "authentication-rejected" if status == 401 else "access-denied"},
                        message="The provider rejected the key. Check it and the account on the provider's site." if status == 401
                        else "The provider refused this key billing access. Check its permissions on the provider's site.")
+        reading["issue"] = issue_for(reading)
         return reading
     if status >= 400:
         reading.update(status="error", message=f"The provider answered {status}. Try again; no balance is assumed.")
+        reading["issue"] = issue_for(reading)
         return reading
     try:
         parsed = parse_reading(adapter, payload)
     except Unreadable:
         reading.update(status="error", message="The provider's answer was not understood; no balance is assumed.")
+        reading["issue"] = issue_for(reading)
         return reading
     reading.update(parsed)
     reading.update(status="ready", observedAt=parsed.get("observedAt") or reading["checkedAt"],
-                   message=READY_NOTES.get(adapter, READY_NOTE))
+                   message=READY_NOTES.get(adapter, READY_NOTE), issue=None)
     return reading
+
+
+def _accounts(entry: Mapping[str, Any], held: set[str]) -> list[dict]:
+    return [_account_entry(entry, item) for item in entry.get("accounts", ()) if item["key"] in held]
 
 
 def wanted_keys(present: Iterable[str], *, everything: bool = False, only: Iterable[str] = ()) -> list[str]:
     """The keys the readers need, among those held: what `run` must open for this."""
     held = set(present)
     chosen = _chosen(held, everything=everything, only=only)
-    return sorted({name for entry in chosen if entry.get("adapter")
-                   for name in (entry.get("reading_keys") or entry.get("keys") or ()) if name in held})
+    entries = [item for entry in chosen if entry.get("adapter") for item in (entry, *_accounts(entry, held))]
+    names = {name for entry in entries for name in _reading_names(entry)}
+    names |= {pair for entry in entries for name, pair in (entry.get("pairs") or {}).items() if name in names}
+    return sorted(name for name in names if name in held)
 
 
 def _chosen(held: set[str], *, everything: bool, only: Iterable[str]) -> list[dict]:
@@ -518,17 +802,39 @@ def _chosen(held: set[str], *, everything: bool, only: Iterable[str]) -> list[di
         return [entry for entry in PROVIDERS if entry["id"] in asked]
     if everything:
         return list(PROVIDERS)
-    return [entry for entry in PROVIDERS if any(name in held for name in (*entry.get("keys", ()), *entry.get("reading_keys", ())))]
+    return [entry for entry in PROVIDERS if any(name in held for name in (
+        *_all_names(entry), *(item["key"] for item in entry.get("accounts", ()))))]
+
+
+def _same_account(one: Mapping[str, Any], other: Mapping[str, Any]) -> bool:
+    """Two keys that read the very same figures are one account, shown once."""
+    figures = ("balance", "unit", "accountLabel", "usageUsd", "allowance", "details")
+    return one.get("status") == other.get("status") == "ready" and all(one.get(f) == other.get(f) for f in figures)
 
 
 def readings(values: Mapping[str, str], present: Iterable[str], *, everything: bool = False, only: Iterable[str] = (),
              fetch: Callable[[str, str], tuple[int, Any]] = fetch_reading, now: Callable[[], float] = time.time,
              salt: bytes = b"", fresh_from: Mapping[str, dict] | None = None) -> list[dict]:
-    """A reading per provider you hold a key for (every provider with `everything`, or the ones named).
+    """A reading per provider you hold a key for (every provider with `everything`, or the ones named), and
+    one more for each other account held (`accounts`: a second RunPod login, fal's backup key).
     `fresh_from` answers a provider from a recent reading when the same key made it (see `fingerprint`)."""
     held = set(present)
-    return [read_provider(entry, values, held, fetch=fetch, now=now, salt=salt, fresh_from=fresh_from)
-            for entry in _chosen(held, everything=everything, only=only)]
+    rows: list[dict] = []
+    for entry in _chosen(held, everything=everything, only=only):
+        first = read_provider(entry, values, held, fetch=fetch, now=now, salt=salt, fresh_from=fresh_from)
+        rows.append(first)
+        for extra in _accounts(entry, held):
+            row = read_provider(extra, values, held, fetch=fetch, now=now, salt=salt, fresh_from=fresh_from)
+            if not _same_account(first, row):
+                rows.append(row)
+    return rows
+
+
+def issues(rows: Iterable[Mapping[str, Any]]) -> list[dict]:
+    """Everything that needs doing, worst first: the page's and the command's first lines."""
+    found = [{"providerId": row["providerId"], "provider": row.get("provider") or row["providerId"], "name": row["name"],
+              "category": row.get("category"), **row["issue"]} for row in rows if row.get("issue")]
+    return sorted(found, key=lambda item: (item["rank"], item["name"].lower()))
 
 
 # ── the opt-in, and the short memory of readings ────────────────────────────

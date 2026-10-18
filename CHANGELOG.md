@@ -4,6 +4,36 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+### Balances reads every balance your keys can reach, and says plainly what stops the rest
+
+Liam, 2026-10-18: "passbook is missing LOTS of balances ... add a way in the balances view to add those
+higher permission keys specifically for that, so the rest of the keys keep their current permissions", and
+"this needs to be as USER FRIENDLY as possible ... super easy to know which keys need a stronger management
+key". Every new reader was checked against his own keys through a probe that printed only status and shape.
+
+- **New readers:** RunPod (GraphQL), Stripe (money held for you, shown as reported), Alpaca (account value
+  and cash, shown as reported, never counted as spend), KIE, Tripo, Black Forest Labs, Fish Audio, Browser
+  Use, an OpenRouter key's own spending limit, and month-to-date spend for OpenAI and Anthropic through an
+  organization Admin key (neither reports the credit left to any key).
+- **Fixed readers.** Venice asks `/api_keys/rate_limits`, which reports the balance to an inference key;
+  `/billing/balance` answered 401 to one. Bankr reads with a management key, sent as `X-API-Key`.
+- **Keys PassBook did not recognise are read:** `MESHY_AMI_API_KEY`, `TRIPO_AMI_API_KEY`,
+  `KIE_API_KEY_HIVEMINDOS`, `BLACK_FOREST_LABS_API_KEY`, `BROWSER_USE_API_KEY_HIVEMIND_OS` and others.
+- **A second account is its own row.** `fal/FAL_KEY_BACKUP`, `runpod/RUNPOD_SECOND_MANAGEMENT_API_KEY` and
+  `openrouter/OPENROUTER_BENCH_API_KEY` are read and shown beside the first. Two keys that read the same
+  figures are one account, shown once.
+- **A balance-only key per provider** (`FAL_BALANCE_KEY`, `OPENAI_BALANCE_KEY`, …). It is tried first, it is
+  never a key another app uses, and the window limits it to the balance readers (`passbook-balances`,
+  `passbook-app`, `hivemindos`). A key that runs models keeps the permissions it has.
+- **What to fix, first on the page.** Each problem is one line: what is wrong (rejected, can't see billing,
+  needs an Admin key, locked), the one sentence that fixes it, and the button that does it: paste a key, make
+  one on the provider's page (`passbook balances open ID --keys`), unlock, or try again. The command prints
+  the same list first. The wording lives in `passbook_balances.issue_for`, so HivemindOS can say the same.
+- **Guarded keys are read.** Balances runs itself under a broker grant when a guarded key (Stripe's) is
+  involved, as `run` does; before, those rows said "locked".
+- Not read, and why: xAI (needs a management key and team), Alchemy (an admin key), Hetzner, Render, Groq,
+  Gemini, Hugging Face, Modal and the subscriptions report no balance to an API key.
+
 ## [1.10.14] — 2026-10-14
 
 ### The access ledger is archived in segments, so it stops growing without bound

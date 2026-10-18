@@ -4,6 +4,20 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+### Anthropic: say which accounts can be read, and ask for the key that can read them
+
+Liam, on 1.10.16: "my claude liamnabut key has organization scope, most do, i believe, so most should be able
+to retrieve the balances. u sure u did it right?". 1.10.16 asked for an Admin key for every Anthropic account.
+
+- Anthropic's Usage and Cost API accepts a personal key with Organization scope as well as an Admin key, but
+  "The Admin API is unavailable for individual accounts". His three Individual Orgs' Organization-scope keys
+  are refused on every admin endpoint (usage, cost, workspaces, keys, users). Those accounts now read "Anthropic
+  doesn't offer cost reading to <account>", with the step that would change it, instead of asking for a key.
+- An account whose keys are workspace keys (401) asks for a key with Organization scope, made on the API keys
+  page, rather than an Admin key.
+- When an account's keys are refused differently, the Organization-scope key's refusal is the one reported.
+- Anthropic reports spend to these keys, never the credit left; the page says so.
+
 ## [1.10.16] — 2026-10-18
 
 ### Several keys for one provider are several accounts, each named, each with its own balance key

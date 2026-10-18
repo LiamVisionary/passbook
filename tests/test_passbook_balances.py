@@ -598,8 +598,14 @@ def test_each_account_is_its_own_row_named_by_its_organization_with_its_own_bala
     assert ami["accountKeys"] == ["ANTHROPIC_API_KEY_AMI", "CLAUDE_API_KEY_VIBE"]
     assert main["balanceKey"]["key"] == "ANTHROPIC_BALANCE_KEY" and ami["balanceKey"]["key"] == "ANTHROPIC_API_KEY_AMI_BALANCE_KEY"
     issue = {item["providerId"]: item for item in balances.issues(rows)}["anthropic/ANTHROPIC_API_KEY_AMI"]
-    assert issue["title"].endswith("for Ami's Individual Org") and issue["keys"] == ami["accountKeys"]
-    assert "organization key without permission" in issue["fix"], "a 403 on a cost report is a missing permission"
+    assert issue["title"] == "Anthropic doesn't offer cost reading to Ami's Individual Org" and issue["keys"] == ami["accountKeys"]
+    # An Organization-scope key refused (403) is Anthropic declining the account (individual accounts have no
+    # Admin API), not a key to paste; a workspace key's 401 asks for an Organization-scope key.
+    assert issue["kind"] == "not-offered" and issue["action"] == "open" and "individual accounts" in issue["fix"]
+    rows = balances.readings(values, set(values), fetch=lambda a, k: (401, None), identify=_who, known={})
+    main_issue = next(row for row in rows if row["providerId"] == "anthropic")["issue"]
+    assert main_issue["kind"] == "needs-balance-key" and main_issue["key"] == "ANTHROPIC_BALANCE_KEY"
+    assert main_issue["title"] == "Needs an Anthropic key with Organization scope for NewVisionary"
     assert balances.provider("anthropic/ANTHROPIC_API_KEY_AMI")["billing_key"]["key"] == "ANTHROPIC_API_KEY_AMI_BALANCE_KEY"
 
 
@@ -651,3 +657,11 @@ def test_keys_that_read_the_same_figures_are_one_account_and_different_ones_are_
     rows = balances.readings(same, set(same), only=["stripe"], fetch=lambda a, k: (200, answer if k == "a" else other))
     assert [row["providerId"] for row in rows] == ["stripe", "stripe/PORTFOLIO_STRIPE_SECRET_KEY"]
     assert rows[1]["name"] == "Stripe · PORTFOLIO_STRIPE_SECRET_KEY"
+
+
+def test_an_organization_keys_refusal_says_more_than_a_workspace_keys():
+    values = _anthropic_values()
+    refusals = {"k-main": (401, None), "k-main-2": (403, None)}
+    rows = balances.readings(values, set(values), fetch=lambda a, k: refusals.get(k, (401, None)), identify=_who, known={})
+    main = next(row for row in rows if row["providerId"] == "anthropic")
+    assert main["keyName"] == "CLAUDE_CODE_X_API_KEY" and main["issue"]["kind"] == "not-offered"

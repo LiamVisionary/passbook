@@ -38,7 +38,7 @@ from typing import Any, Callable, Iterable, Mapping
 PROVIDERS: tuple[dict, ...] = (
     {"id": "openrouter", "name": "OpenRouter", "category": "Models", "keys": ('OPENROUTER_API_KEY',), "key_patterns": (r"^OPENROUTER_[A-Z0-9_]*KEY$",), "identify": "openrouter", "reading_keys": ('OPENROUTER_MANAGEMENT_KEY',), "accounts": ({"key": "OPENROUTER_BENCH_API_KEY", "label": "bench key", "adapter": "openrouter-key"},), "billing_key": {"key": "OPENROUTER_BALANCE_KEY", "why": "Only a management key can see the account's credits.", "label": "OpenRouter management key", "permission": "A management key. Inference keys cannot read the account's credits.", "create_url": "https://openrouter.ai/settings/management-keys"}, "billing": "prepaid", "console_url": "https://openrouter.ai", "billing_url": "https://openrouter.ai/settings/credits", "adapter": "openrouter", "docs_url": "https://openrouter.ai/docs/api/api-reference/credits/get-remaining-credits", "verified": "2026-10-02", "payment_note": "Buy credits on OpenRouter. Its former Coinbase Commerce top-up API is deprecated; no payment is made here."},
     {"id": "openai-api", "name": "OpenAI API", "category": "Models", "keys": ('OPENAI_API_KEY',), "key_patterns": (r"^OPENAI_[A-Z0-9_]*API_KEY[A-Z0-9_]*$",), "reading_keys": (), "refusal_is_permission": True, "adapter": "openai-costs", "billing": "mixed", "billing_key": {"key": "OPENAI_BALANCE_KEY", "why": "OpenAI shows spend only to organization Admin keys.", "label": "OpenAI admin key", "permission": "An organization Admin key (made by an organization owner). OpenAI reports spend to it, not the credit left: no key can read the prepaid balance.", "create_url": "https://platform.openai.com/settings/organization/admin-keys"}, "console_url": "https://platform.openai.com", "billing_url": "https://platform.openai.com/settings/organization/billing/overview", "docs_url": "https://platform.openai.com/docs/api-reference/usage/costs", "verified": "2026-10-18", "payment_note": "API billing is separate from ChatGPT subscriptions. Purchase credits on the OpenAI billing page."},
-    {"id": "anthropic", "name": "Anthropic API", "category": "Models", "keys": ('ANTHROPIC_API_KEY',), "key_patterns": (r"^(ANTHROPIC|CLAUDE)_[A-Z0-9_]*API_KEY[A-Z0-9_]*$",), "identify": "anthropic", "try_each": True, "refusal_is_permission": True, "adapter": "anthropic-costs", "billing": "mixed", "billing_key": {"key": "ANTHROPIC_BALANCE_KEY", "why": "Anthropic shows spend only to an Admin key, or an organization key allowed to read cost.", "label": "Anthropic Admin API key", "permission": "An Admin API key (sk-ant-admin…), or an organization-scoped key with permission to read usage and cost, made in this organization. Anthropic reports spend to it, not the credit left.", "create_url": "https://platform.claude.com/settings/admin-keys"}, "console_url": "https://platform.claude.com", "billing_url": "https://platform.claude.com/settings/billing", "docs_url": "https://platform.claude.com/docs/en/api/admin-api/usage-cost/get-cost-report", "verified": "2026-10-18", "payment_note": "API billing is separate from Claude subscriptions. Confirm your account’s billing model on the billing page."},
+    {"id": "anthropic", "name": "Anthropic API", "category": "Models", "keys": ('ANTHROPIC_API_KEY',), "key_patterns": (r"^(ANTHROPIC|CLAUDE)_[A-Z0-9_]*API_KEY[A-Z0-9_]*$",), "identify": "anthropic", "try_each": True, "refusal_is_permission": True, "adapter": "anthropic-costs", "billing": "mixed", "billing_key": {"key": "ANTHROPIC_BALANCE_KEY", "why": "Workspace keys can't read cost; a key with Organization scope can.", "label": "Anthropic key with Organization scope", "permission": "In this organization's Console, API keys → Create key: Linked account yourself, scope Organization (not one workspace); or an Admin key. Anthropic reports this month's spend to it, not the credit left.", "create_url": "https://platform.claude.com/settings/keys"}, "console_url": "https://platform.claude.com", "billing_url": "https://platform.claude.com/settings/billing", "docs_url": "https://platform.claude.com/docs/en/api/admin-api/usage-cost/get-cost-report", "verified": "2026-10-18", "payment_note": "API billing is separate from Claude subscriptions. Confirm your account’s billing model on the billing page."},
     {"id": "xai", "name": "xAI API", "category": "Models", "keys": ('XAI_API_KEY',), "billing": "mixed", "console_url": "https://console.x.ai", "docs_url": "https://docs.x.ai/developers/rest-api-reference/management/billing", "verified": "2026-10-02", "payment_note": "xAI documents a top-up API requiring a management key and team. In-app charging stays unavailable until payment identity and duplicate-charge reconciliation are verified. Use the console for now.", "reading_note": "xAI reports the prepaid balance only to a management key (Console → Settings → Management keys) together with your team id; PassBook does not read it yet. Check it on the console."},
     {"id": "fal", "name": "fal", "category": "Media", "keys": ('FAL_KEY',), "reading_keys": ('FAL_ADMIN_KEY', 'FAL_KEY'), "accounts": ({"key": "FAL_KEY_BACKUP", "label": "backup key"},), "billing_key": {"key": "FAL_BALANCE_KEY", "why": "Only a key with billing read access (the Billing preset) can see it.", "label": "fal Admin key", "permission": "A key with the Billing or Read-only preset (it carries billing:usage:read), or a legacy ADMIN key. API keys run models but cannot read billing.", "create_url": "https://fal.ai/dashboard/keys"}, "billing": "prepaid", "console_url": "https://fal.ai/dashboard", "billing_url": "https://fal.ai/dashboard/usage-billing/billing", "adapter": "fal", "docs_url": "https://fal.ai/docs/platform-apis/v1/account/billing", "verified": "2026-10-02", "payment_note": "A billing read requires an Admin key. An existing FAL_KEY is tried read-only; the provider enforces its permissions. Complete purchases on fal’s billing page."},
     {"id": "meshy", "name": "Meshy", "category": "Media", "keys": ('MESHY_API_KEY', 'MESHY_AMI_API_KEY'), "billing": "mixed", "console_url": "https://www.meshy.ai/workspace", "adapter": "meshy", "docs_url": "https://docs.meshy.ai/en/api/balance", "verified": "2026-10-02", "payment_note": "Meshy reports credits, not dollars. Subscription credits and API purchases must be checked on the provider’s site."},
@@ -714,7 +714,7 @@ def _base(entry: Mapping[str, Any], present: set[str], checked_at: str) -> dict:
 # What needs doing, said once for every surface: which row, what is wrong in a few words, what fixes it,
 # and the one action that does. Worst first by `rank`. A ready row has none.
 ISSUE_RANK = {"key-rejected": 1, "wrong-account": 1, "needs-balance-key": 2, "missing-key": 2, "locked": 3, "unreachable": 4,
-              "no-api": 9}
+              "not-offered": 5, "no-api": 9}
 
 
 def _a(words: str) -> str:
@@ -745,11 +745,20 @@ def issue_for(row: Mapping[str, Any]) -> dict | None:
         if slot:
             return made("needs-balance-key", f"Needs {_a(slot['label'])}", slot["why"] or slot["permission"], **add)
         return made("missing-key", "No key", "No saved key can read this balance.", action="open")
+    if http == 403 and row.get("refusalIsPermission") and row.get("provider") == "anthropic":
+        # An Organization-scope key refused: Anthropic has no Admin API for individual accounts ("The Admin
+        # API is unavailable for individual accounts"), and its keys are refused on every admin endpoint
+        # (usage, cost, workspaces, keys, users: seen on three such accounts, 2026-10-18). No key pasted here
+        # changes that, so it is said as it is, with the step that would.
+        return made("not-offered", "Anthropic doesn't offer cost reading to this account",
+                    f"{used} has Organization scope, but Anthropic refuses this account's keys on every admin endpoint, as it does "
+                    "for individual accounts. Set the account up as an organization in the Console to read its spend here.",
+                    action="open")
     if http in (401, 403) and row.get("refusalIsPermission") and slot:
         # For a cost report a refusal says the key lacks the permission, not that it is dead (Anthropic: 401
-        # "requires an Admin API key or an organization-scoped API key", 403 to an organization key without it).
-        lacks = (f"{used} is an organization key without permission to read cost." if http == 403
-                 else f"{used} can't read cost. {slot['why'] or slot['permission']}")
+        # "requires an Admin API key or an organization-scoped API key" to a workspace key).
+        lacks = (f"{used} is a workspace key, and workspace keys can't read cost. Make one with Organization scope." if http == 401
+                 and row.get("provider") == "anthropic" else f"{used} can't read cost. {slot['why'] or slot['permission']}")
         return made("needs-balance-key", f"Needs {_a(slot['label'])}", lacks, **add)
     if http == 401:
         why = "Revoked or expired"
@@ -804,13 +813,15 @@ def read_provider(entry: Mapping[str, Any], values: Mapping[str, str], present: 
     names = tuple(names) if names is not None else _reading_names(entry)
     openable = [name for name in names if _open(values, name)]
     if entry.get("try_each") and len(openable) > 1:
-        # Several keys may stand for the account and only some may read its cost: ask each until one does,
-        # and if none can, say what the last one was told.
-        for name in openable[:-1]:
-            first = read_provider(entry, values, present, fetch=fetch, now=now, salt=salt, fresh_from=fresh_from, names=(name,))
-            if first.get("status") == "ready":
-                return first
-        names = (openable[-1],)
+        # Several keys may stand for the account and only some may read its cost: ask each until one does.
+        # If none can, an Organization-scope key's refusal (403) says more than a workspace key's (401).
+        tried = []
+        for name in openable:
+            one = read_provider(entry, values, present, fetch=fetch, now=now, salt=salt, fresh_from=fresh_from, names=(name,))
+            if one.get("status") == "ready":
+                return one
+            tried.append(one)
+        return next((one for one in tried if (one.get("providerError") or {}).get("httpStatus") == 403), tried[-1])
     key_name = next((name for name in names if _open(values, name)), None)
     key = values.get(key_name or "", "")
     pair = (entry.get("pairs") or {}).get(key_name or "")
@@ -997,9 +1008,12 @@ def readings(values: Mapping[str, str], present: Iterable[str], *, everything: b
                 row["accountLabel"] = row.get("accountLabel") or found["name"]
                 if index == 0:
                     row["name"] = f"{entry['name']} · {found['name']}"
-                if row.get("issue") and row["issue"]["kind"] == "needs-balance-key":
+                if row.get("issue") and row["issue"]["kind"] in ("needs-balance-key", "not-offered"):
                     # Which of several accounts it is for, in the headline itself.
-                    row["issue"] = {**row["issue"], "title": f"{row['issue']['title']} for {found['name']}"}
+                    title = row["issue"]["title"]
+                    title = (title.replace("this account", found["name"]) if "this account" in title
+                             else f"{title} for {found['name']}")
+                    row["issue"] = {**row["issue"], "title": title}
             if stray:
                 row["issue"] = {"kind": "wrong-account", "rank": ISSUE_RANK["wrong-account"], "action": "add-key", "key": slot,
                                 "createUrl": row["balanceKey"]["createUrl"], "detail": f"What to make: {row['balanceKey']['permission']}",

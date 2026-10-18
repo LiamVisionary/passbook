@@ -3323,7 +3323,8 @@ passbook oauth connect google:work</pre>
                         missing: ["", "Needs a stronger key"], manual: ["", "On their site"] };
   // What each kind of problem is called, worst first (passbook_balances.issue_for says what and why).
   const ISSUE_TAG = { "key-rejected": ["off", "Key rejected"], "wrong-account": ["off", "Wrong account"], "needs-balance-key": ["mid", "Needs a stronger key"],
-                      "missing-key": ["mid", "Missing a key"], locked: ["", "Locked"], unreachable: ["", "Didn't answer"] };
+                      "missing-key": ["mid", "Missing a key"], locked: ["", "Locked"], unreachable: ["", "Didn't answer"],
+                      "not-offered": ["", "Not offered"] };
   const BALANCE_SPANS = [["today", "Today"], ["week", "7 days"], ["month", "30 days"]];
   const SPAN_WORDS = { today: "today", week: "last 7 days", month: "last 30 days" };
 
@@ -3539,7 +3540,9 @@ passbook oauth connect google:work</pre>
         ${open ? balanceKeyForm(r) : ""}
       </div>`;
     };
-    return `<div class="group balfix"><h3>${list.length} thing${list.length === 1 ? "" : "s"} to fix to see every balance</h3>
+    const fixable = list.filter((x) => x.kind !== "not-offered").length, notOffered = list.length - fixable;
+    return `<div class="group balfix"><h3>${fixable ? `${fixable} thing${fixable === 1 ? "" : "s"} to fix to see every balance` : "Nothing to fix"}${notOffered
+        ? ` · ${notOffered} not offered by the provider` : ""}</h3>
       ${shown.map(item).join("")}
       ${list.length > shown.length ? `<button class="morelink" data-bal-fixes="1">${list.length - shown.length} more ${icon("chevron", "tinyicon")}</button>` : ""}
     </div>`;

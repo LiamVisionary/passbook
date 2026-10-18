@@ -4,6 +4,8 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [1.10.15] — 2026-10-18
+
 ### Balances reads every balance your keys can reach, and says plainly what stops the rest
 
 Liam, 2026-10-18: "passbook is missing LOTS of balances ... add a way in the balances view to add those

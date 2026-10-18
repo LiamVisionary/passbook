@@ -3059,7 +3059,7 @@ passbook oauth connect google:work</pre>
     balanceRead = (async () => {
       balancesView.busy = true;
       if (!quiet) { balancesView.error = ""; paint(); }
-      try { balancesView.data = await invoke("balances_state", { fresh }); }
+      try { balancesView.data = await invoke("balances_state", { fresh }); balancesView.readAt = Date.now(); }
       catch (e) { if (!quiet) balancesView.error = balanceError(e); }
       finally { balancesView.busy = false; if (!quiet || page === "balances") paint(); }
       loadBalanceIcons();
@@ -3548,6 +3548,9 @@ passbook oauth connect google:work</pre>
     </div>`;
   }
 
+  /** A provider's name without the account after it or a trailing "API": "Anthropic", not "Anthropic API · NewVisionary". */
+  const shortName = (r) => String(r.name || "").split(" · ")[0].replace(/ API$/, "");
+
   /** Everything that keeps a balance from showing, worst first, each with its fix and the button that does it. */
   function balanceFixes(d) {
     const v = balancesView, rows = d.providers || [];
@@ -3564,7 +3567,12 @@ passbook oauth connect google:work</pre>
         : x.action === "enter-balance" ? (v.entering === x.providerId ? "" : `<button class="act primary" data-eb-open="${esc(x.providerId)}">Enter credits</button>`)
         : x.action === "unlock" ? `<button class="act primary" data-goto="vault">Unlock</button>`
         : x.action === "retry" ? `<button class="act" data-balances-refresh="1" ${v.busy ? "disabled" : ""}>Try again</button>`
-        : r.topUpUrl ? `<button class="act" data-topup="${esc(r.provider || r.providerId)}">Open ${esc(r.name)}</button>` : "";
+        // Not offered today can change on the provider's side (Anthropic: Convert to team), so it can be asked
+        // again at once, and a key can still be added for it.
+        : x.kind === "not-offered" ? `<button class="act primary" data-balances-refresh="1" ${v.busy ? "disabled" : ""}>${v.busy ? "Checking…" : "Check again"}</button>
+            ${r.balanceKey && !open ? `<button class="act" data-bk-open="${esc(x.providerId)}">Add the key</button>` : ""}
+            ${r.topUpUrl ? `<button class="act" data-topup="${esc(r.provider || r.providerId)}">Open ${esc(shortName(r))}</button>` : ""}`
+        : r.topUpUrl ? `<button class="act" data-topup="${esc(r.provider || r.providerId)}">Open ${esc(shortName(r))}</button>` : "";
       return `<div class="fixrow">
         ${logo(r)}
         <div class="fixtext"><span class="fixtitle"><strong>${esc(x.name)}</strong><span class="tag ${tone}">${esc(label)}</span></span>
@@ -6954,6 +6962,10 @@ passbook oauth connect google:work</pre>
   for (const gone of ["mousedown", "keydown", "wheel"]) document.addEventListener(gone, hideTip, { passive: true });
   document.addEventListener("scroll", hideTip, { capture: true, passive: true });
   window.addEventListener("blur", hideTip);
+  // Back from a provider's console (a key made, an organization converted): Balances reads again by itself.
+  window.addEventListener("focus", () => {
+    if (page === "balances" && balancesView.data?.enabled && Date.now() - (balancesView.readAt || 0) > 60 * 1000) loadBalances(false, true);
+  });
 
   boot();
   // A poll that repaints unconditionally repaints for nothing nearly every

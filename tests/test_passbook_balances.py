@@ -601,10 +601,10 @@ def test_each_account_is_its_own_row_named_by_its_organization_with_its_own_bala
     assert ami["accountKeys"] == ["ANTHROPIC_API_KEY_AMI", "CLAUDE_API_KEY_VIBE"]
     assert main["balanceKey"]["key"] == "ANTHROPIC_BALANCE_KEY" and ami["balanceKey"]["key"] == "ANTHROPIC_API_KEY_AMI_BALANCE_KEY"
     issue = {item["providerId"]: item for item in balances.issues(rows)}["anthropic/ANTHROPIC_API_KEY_AMI"]
-    assert issue["title"] == "Anthropic doesn't offer cost reading to Ami's Individual Org" and issue["keys"] == ami["accountKeys"]
+    assert issue["title"] == "Ami's Individual Org is an individual organization" and issue["keys"] == ami["accountKeys"]
     # An Organization-scope key refused (403) is Anthropic declining the account (individual accounts have no
     # Admin API), not a key to paste; a workspace key's 401 asks for an Organization-scope key.
-    assert issue["kind"] == "not-offered" and issue["action"] == "open" and "individual accounts" in issue["fix"]
+    assert issue["kind"] == "not-offered" and issue["action"] == "open" and "Convert to team" in issue["fix"]
     rows = balances.readings(values, set(values), fetch=lambda a, k: (401, None), identify=_who, known={})
     main_issue = next(row for row in rows if row["providerId"] == "anthropic")["issue"]
     assert main_issue["kind"] == "needs-balance-key" and main_issue["key"] == "ANTHROPIC_BALANCE_KEY"
@@ -754,3 +754,13 @@ def test_known_keeps_the_entered_balance_and_clear_takes_it_off(store, monkeypat
     assert passbook_cli.cmd_balances(args) == 0 and balances.entered(home) == {}
     args.provider = ["kie", "5"]
     assert passbook_cli.cmd_balances(args) != 0, "only a provider that reports spend and not credit takes one"
+
+
+def test_a_remembered_reading_keeps_what_it_asks_for():
+    """1.10.18 wiped a cached row's issue, so "Enter credits" vanished for two minutes after every fresh read."""
+    salt = b"s" * 32
+    kept = {"openrouter": {"providerId": "openrouter", "status": "ready", "balance": 6, "issue": {"kind": "enter-balance"},
+                           "connection": balances.fingerprint(salt, "openrouter", KEY)}}
+    again = balances.read_provider(_entry("openrouter"), {"OPENROUTER_MANAGEMENT_KEY": KEY}, {"OPENROUTER_MANAGEMENT_KEY"},
+                                   fetch=lambda *a: pytest.fail("answered from memory"), salt=salt, fresh_from=kept)
+    assert again["issue"] == {"kind": "enter-balance"}

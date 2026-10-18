@@ -772,9 +772,10 @@ def issue_for(row: Mapping[str, Any]) -> dict | None:
         # API is unavailable for individual accounts"), and its keys are refused on every admin endpoint
         # (usage, cost, workspaces, keys, users: seen on three such accounts, 2026-10-18). No key pasted here
         # changes that, so it is said as it is, with the step that would.
-        return made("not-offered", "Anthropic doesn't offer cost reading to this account",
-                    f"{used} has Organization scope, but Anthropic refuses this account's keys on every admin endpoint, as it does "
-                    "for individual accounts. Set the account up as an organization in the Console to read its spend here.",
+        return made("not-offered", "this account is an individual organization",
+                    f"Anthropic turns off cost reading for individual organizations, so {used} is refused even with Organization "
+                    "scope. In this organization's Console, open Settings → Organization and press Convert to team; the keys "
+                    "here should then read its spend, with no new key.",
                     action="open")
     if http in (401, 403) and row.get("refusalIsPermission") and slot:
         # For a cost report a refusal says the key lacks the permission, not that it is dead (Anthropic: 401
@@ -858,7 +859,9 @@ def read_provider(entry: Mapping[str, Any], values: Mapping[str, str], present: 
         kept = fresh_from.get(entry["id"])
         if kept and kept.get("connection") == fingerprint(salt, entry["id"], key):
             # The very same object: the command tells a reading just asked from a remembered one by identity.
-            kept.update(balanceKey=reading["balanceKey"], provider=reading["provider"], issue=None)
+            # Its issue stays: a live row can still ask for something ("Enter credits"), and wiping it here hid
+            # that for two minutes after every fresh read (1.10.18).
+            kept.update(balanceKey=reading["balanceKey"], provider=reading["provider"], issue=kept.get("issue"))
             return kept
     if not key_name:
         held = any(name in present for name in names)
@@ -1121,7 +1124,7 @@ def _provider_rows(entry: Mapping[str, Any], values: Mapping[str, str], held: se
                 title = row["issue"]["title"]
                 title = (title.replace("this account", found["name"]) if "this account" in title
                          else f"{title} for {found['name']}")
-                row["issue"] = {**row["issue"], "title": title}
+                row["issue"] = {**row["issue"], "title": title[:1].upper() + title[1:]}
         if entry.get("entered_balance"):
             _apply_entered(row, record, entry["name"].removesuffix(" API"))
         if stray:

@@ -4,6 +4,20 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+### Anthropic's individual organizations name the button that fixes them
+
+Liam, 2026-10-19: "THEY ARE ALL ORGANIZATIONS MAN", with the Console's Organization page for "Liam's Individual
+Org" showing **Convert to team organization**. 1.10.18 said "set the account up as an organization", which reads
+as wrong for an account the Console already calls an organization. Now: "<name> is an individual organization ...
+In this organization's Console, open Settings → Organization and press Convert to team." Checked again first: the
+cost and usage reports answer 403 to its Organization-scope keys with `x-api-key` and with `Bearer`, and 400 to
+`anthropic-workspace-id` ("not supported on Admin API endpoints").
+- After he pressed Convert to team, the existing key read the organization at once, but the window still showed
+  the old row with only "Open Anthropic API". A not-offered row now has **Check again** and **Add the key**, and
+  Balances reads again by itself when the window comes back after a minute away.
+- A reading reused from the last two minutes kept its fix: 1.10.18 wiped it, so "Enter credits" vanished after
+  every fresh read.
+
 ## [1.10.18] — 2026-10-18
 
 ### Credits for providers that report only spend, a save you can see, and a read four times faster

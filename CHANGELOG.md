@@ -4,6 +4,8 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [1.10.20] — 2026-10-19
+
 ### The Console sign-in window finishes: it sees the sign-in, and Google sign-in works
 
 Liam, 2026-10-19, on 1.10.19: "im trying to console login from the passbook row and its failing ... im doing

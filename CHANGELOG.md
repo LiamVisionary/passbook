@@ -4,6 +4,13 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+### Install from the repository, not PyPI; vulnerability reports have somewhere to go
+
+`pyproject.toml` told people to `uv tool install passbook` / `pipx install passbook`. On PyPI that name belongs to an
+unrelated Apple Wallet pass generator, so both commands installed the wrong project. The comment now gives the git URL,
+as the README already did. Separately, GitHub's private vulnerability reporting was switched on for the repository
+(2026-10-19): SECURITY.md has always sent reporters there, and until now the link refused them.
+
 ## [1.10.21] — 2026-10-19
 
 ### Balances names its columns, and keeps the names in view

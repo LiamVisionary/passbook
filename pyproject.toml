@@ -1,7 +1,11 @@
 # Packaging PassBook for the tools people already have.
 #
-#   uv tool install passbook
-#   pipx install passbook
+#   uv tool install git+https://github.com/LiamVisionary/passbook
+#   pipx install git+https://github.com/LiamVisionary/passbook
+#
+# From the repository, not from PyPI: `passbook` on PyPI is an unrelated
+# project (an Apple Wallet pass generator), and a bare `pip install passbook`
+# installs that instead.
 #
 # Both create their own isolated environment, so `cryptography` installs
 # cleanly and nothing touches a system Python. That is why it is a hard

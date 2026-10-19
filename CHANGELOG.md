@@ -4,6 +4,8 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [1.10.21] — 2026-10-19
+
 ### Balances names its columns, and keeps the names in view
 
 Liam, 2026-10-19: "we need a sticky table header.. i dont know what each column is". The live list has a header

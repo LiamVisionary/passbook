@@ -4,6 +4,16 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+### Balances names its columns, and keeps the names in view
+
+Liam, 2026-10-19: "we need a sticky table header.. i dont know what each column is". The live list has a header
+row (Service, How full, Left, Spent over the chosen span) that stays at the top of the page while the rows scroll
+under it. It is a row of the same grid, so its names sit over their columns; every row's button is one width and
+the figure column a fixed one when narrow, so the columns no longer drift from row to row (measured equal at
+1040, 900 and 760 wide). "from the Console" and "estimate" no longer leave a stray dot. Also seen in his data
+that day: the Console sign-in read Ami's Individual Org ($158.93) and ThatGuyLiam's Individual Org ($200.00),
+which confirms `prepaid/credits` answers `{"amount": cents}`.
+
 ## [1.10.20] — 2026-10-19
 
 ### The Console sign-in window finishes: it sees the sign-in, and Google sign-in works

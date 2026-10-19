@@ -1215,3 +1215,18 @@ def test_a_key_name_can_be_selected_and_copied_and_no_tooltip_is_the_systems():
     assert 'attributeFilter: ["title"]' in page and "function adoptTitles(" in page
     assert page.count("<title>") == 1, "only the document's own; an SVG <title> is a system tooltip too, use data-tip"
 
+
+
+def test_the_balances_list_names_its_columns_in_a_header_that_stays_in_view():
+    """Liam, 2026-10-19: "we need a sticky table header.. i dont know what each column is". The header is a row
+    of the same grid, so it lines up; the card must not clip with overflow: hidden, or the header sticks to the
+    card instead of the page; and every row's button is one width, or the columns drift row to row."""
+    source = UI.read_text(encoding="utf-8")
+    start = source.index("/* ── balances ──")
+    styles = source[start:source.index("/* ── end of balances ── */", start)]
+    assert ".group.ballist { overflow: clip; }" in styles
+    assert "position: sticky" in styles.split(".brow.bhead {")[1].split("}")[0]
+    assert ".brow > .act, .bhead .bph { width: 78px;" in styles
+    assert "balanceHeader(span) + shownLive.map" in source
+    for word in ("Service", "How full", "Left", "Spent"):
+        assert word in source.split("function balanceHeader(span)")[1].split("function balanceRow")[0], word

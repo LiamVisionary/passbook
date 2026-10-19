@@ -256,6 +256,20 @@
   .fchip[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
   .fsel { display: flex; gap: 6px; }
   .ballist { padding: 0; }
+  /* The column names stay in view while the list scrolls (Liam, 2026-10-19: "i dont know what each column is").
+     A card clips with overflow: hidden, which would make it the header's scroller; clip trims the corners
+     without that. */
+  .group.ballist { overflow: clip; }
+  /* main's 30px top padding is inside its scrollport: -30px puts the header flush with the top edge. */
+  .brow.bhead { position: sticky; top: -30px; z-index: 2; background: var(--card); border-bottom: 1px solid var(--line); }
+  /* Every row's button is one width, so every row's columns, and the header's, line up. */
+  .brow > .act, .bhead .bph { width: 78px; flex: none; justify-content: center; text-align: center; padding-left: 0; padding-right: 0; }
+  .brow.bhead + .brow { border-top: 0; }
+  .bhead .bmain { cursor: default; padding-top: 9px; padding-bottom: 9px; }
+  .bhead .bmain > span { font-size: 10.5px; font-weight: 600; letter-spacing: .03em; text-transform: uppercase; color: var(--ink3);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .bhead .bfig { display: block; text-align: right; }
+  .bhead .bph { visibility: hidden; }
   .brow { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 0 12px 0 0; position: relative; }
   .brow + .brow { border-top: 1px solid var(--line); }
   .brow.low::before { content: ""; position: absolute; left: 0; top: 8px; bottom: 8px; width: 3px; border-radius: 0 3px 3px 0; background: var(--warn); }
@@ -333,7 +347,7 @@
   }
   /* Narrower still: the figure takes the width it needs, so it never runs into the row's button. */
   @media (max-width: 860px) {
-    .bmain { grid-template-columns: 34px minmax(96px, 1fr) minmax(90px, 1fr) auto; }
+    .bmain { grid-template-columns: 34px minmax(96px, 1fr) minmax(90px, 1fr) 112px; }
   }
   /* ── end of balances ── */
 
@@ -3437,6 +3451,14 @@ passbook oauth connect google:work</pre>
     </div>`;
   }
 
+  /** The live list's column names, sticky at the top while it scrolls; the same grid as a row, so they line up. */
+  function balanceHeader(span) {
+    return `<div class="brow bhead" role="row"><div class="bmain">
+        <span></span><span>Service</span><span>How full</span><span class="bfig">Left</span>
+        <span class="bfig spend">${span === "today" ? "Spent today" : `Spent · ${span === "week" ? "7" : "30"} days`}</span></div>
+      <span class="act bph" aria-hidden="true">Top up</span></div>`;
+  }
+
   /** One live service: logo, name, meter, what is left, what it costs, top up. Opens for the detail. */
   function balanceRow(r, span) {
     const i = r.insights || {}, m = i.meter, open = balancesView.open === r.providerId;
@@ -3451,12 +3473,13 @@ passbook oauth connect google:work</pre>
     // A quota that refills before it would run out is not counting down to anything.
     const refills = m?.kind === "quota" && m.resetsAt ? (Date.parse(m.resetsAt) - Date.now()) / 86400000 : null;
     const hasRunway = i.runwayDays !== null && i.runwayDays !== undefined;
-    const estimate = r.balanceKind === "entered" ? "estimate · " : r.balanceKind === "console" ? "from the Console · " : "";
-    const leftSub = estimate + (hasRunway && refills !== null && i.runwayDays >= refills ? "enough until it resets"
+    const estimate = r.balanceKind === "entered" ? "estimate" : r.balanceKind === "console" ? "from the Console" : "";
+    const leftRest = (hasRunway && refills !== null && i.runwayDays >= refills ? "enough until it resets"
       : hasRunway ? runwayWords(i.runwayDays)
       : m?.kind === "quota" ? "left on the plan" : r.usagePeriod ? r.usagePeriod.toLowerCase()
       : asReported ? `${d0.label.toLowerCase()}${d1 ? ` · ${d1.label.toLowerCase()} ${figure(d1.value)}` : ""}`
       : "");
+    const leftSub = [estimate, leftRest].filter(Boolean).join(" · ");
     // Whether there is anything here whose movement could be spend at all.
     const trackable = m || (r.usageUsd !== null && r.usageUsd !== undefined);
     return `<div class="brow${i.low ? " low" : ""}${open ? " open" : ""}">
@@ -3752,7 +3775,7 @@ passbook oauth connect google:work</pre>
         </div>
       </div>
       ${isLook && !fixes.length ? `<div class="group"><div class="empty">Nothing to fix: every balance that can be read is showing.</div></div>` : ""}
-      ${showLive ? `<div class="group ballist">${shownLive.length ? shownLive.map((r) => balanceRow(r, span)).join("")
+      ${showLive ? `<div class="group ballist">${shownLive.length ? balanceHeader(span) + shownLive.map((r) => balanceRow(r, span)).join("")
         : `<div class="empty">${v.filter === "low" ? "Nothing is running low." : "No service here is reporting a live figure."}</div>`}</div>` : ""}
       ${showRest && rest.filter(inCategory).length ? `<div class="group ballist"><h3>No live figure</h3>${rest.filter(inCategory).map(balanceQuietRow).join("")}</div>` : ""}
       ${v.filter === "all" && !v.rest && rest.filter(inCategory).length ? `<button class="morelink" data-bal-rest="1">${rest.filter(inCategory).length} more service${rest.filter(inCategory).length === 1 ? "" : "s"} without a live figure ${icon("chevron", "tinyicon")}</button>` : ""}

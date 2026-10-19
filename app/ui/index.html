@@ -3737,7 +3737,7 @@ passbook oauth connect google:work</pre>
         <strong>Sign in to the Anthropic Console in the window that opened</strong>
         <div class="note">PassBook keeps that sign-in on this Mac only, for Balances only, and reads each organization's credits
         through Anthropic's undocumented web API, which can change without notice. The sign-in can do anything the Console can.
-        The window closes by itself once you are in.</div></div></div></div>` : ""}
+        The window closes by itself once you are in. If Google sign-in does not finish, use Continue with email there.</div></div></div></div>` : ""}
       ${showLook ? balanceFixes(d) : ""}
       ${isLook ? "" : balanceStats(d, span)}
       ${!isLook && usdDays.some((p) => p.v > 0) ? `<div class="group chart"><h3>Dollars spent per day</h3>${dayBars(usdDays, "USD", span)}</div>` : ""}

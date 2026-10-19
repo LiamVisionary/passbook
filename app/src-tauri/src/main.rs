@@ -978,6 +978,9 @@ async fn console_signin(app: tauri::AppHandle, provider: String) -> Result<Value
         .map_err(|error| format!("Could not wait for {error}"))??;
     let text = |name: &str| info.get(name).and_then(Value::as_str).unwrap_or_default().to_string();
     let (login, cookie_url, cookie_name, title) = (text("login"), text("cookieUrl"), text("cookie"), text("name"));
+    // Google will not sign in to a window that does not say it is a browser (it reads an embedded view as
+    // unsafe), and the console's "Continue with Google" opens a pop-up: both are handled below.
+    let agent = text("userAgent");
     let login: tauri::Url = login.parse().map_err(|_| "The console's address could not be read.".to_string())?;
     let target: tauri::Url = cookie_url.parse().map_err(|_| "The console's address could not be read.".to_string())?;
 
@@ -986,12 +989,35 @@ async fn console_signin(app: tauri::AppHandle, provider: String) -> Result<Value
         let _ = open.set_focus();
         return Err("The sign-in window is already open.".into());
     }
-    tauri::WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::External(login))
+    // A pop-up (Google's sign-in) opens as a window of its own that shares this window's private session, so
+    // what it signs in to is what this window then holds. 1.10.19 let pop-ups open in a session of their own,
+    // and Google sign-in ended in "There was an error logging you in" (Liam, 2026-10-19).
+    let popups = app.clone();
+    let popup_base = label.clone();
+    let popup_agent = agent.clone();
+    let opened = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut builder = tauri::WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::External(login))
         .title(format!("Sign in to {title} · PassBook"))
         .inner_size(520.0, 760.0)
         .incognito(true)
-        .build()
-        .map_err(|error| format!("Could not open the sign-in window: {error}"))?;
+        .on_new_window(move |_url, features| {
+            let n = opened.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let mut child = tauri::WebviewWindowBuilder::new(&popups, format!("{popup_base}-popup-{n}"),
+                    tauri::WebviewUrl::External("about:blank".parse().expect("a fixed address")))
+                .window_features(features)
+                .title("Sign in · PassBook");
+            if !popup_agent.is_empty() {
+                child = child.user_agent(&popup_agent);
+            }
+            match child.build() {
+                Ok(window) => tauri::webview::NewWindowResponse::Create { window },
+                Err(_) => tauri::webview::NewWindowResponse::Deny,
+            }
+        });
+    if !agent.is_empty() {
+        builder = builder.user_agent(&agent);
+    }
+    builder.build().map_err(|error| format!("Could not open the sign-in window: {error}"))?;
 
     // Cookie reads stay off the main thread (they deadlock there on Windows). Fifteen minutes to sign in.
     let handle = app.clone();
@@ -1002,10 +1028,26 @@ async fn console_signin(app: tauri::AppHandle, provider: String) -> Result<Value
             let Some(window) = handle.get_webview_window(&waiting) else {
                 return Err("The sign-in window was closed before signing in.".into());
             };
-            if let Ok(cookies) = window.cookies_for_url(target.clone()) {
+            // All of the window's cookies, kept to the console's host. `cookies_for_url` answered none on macOS
+            // while `cookies()` held the signed-in cookie (measured in a real build, 2026-10-19), so 1.10.19's
+            // window waited forever.
+            let host = target.host_str().unwrap_or_default().to_string();
+            let ours = |cookie: &tauri::webview::Cookie<'static>| {
+                cookie.domain().map_or(false, |domain| {
+                    let domain = domain.trim_start_matches('.');
+                    host == domain || host.ends_with(&format!(".{domain}"))
+                })
+            };
+            if let Ok(cookies) = window.cookies().map(|all| all.into_iter().filter(|cookie| ours(cookie)).collect::<Vec<_>>()) {
                 if cookies.iter().any(|cookie| cookie.name() == cookie_name && !cookie.value().is_empty()) {
                     let header = Zeroizing::new(cookies.iter().map(|cookie| format!("{}={}", cookie.name(), cookie.value()))
                         .collect::<Vec<_>>().join("; "));
+                    // Its pop-ups go with it.
+                    for (name, other) in handle.webview_windows() {
+                        if name.starts_with(&format!("{waiting}-popup-")) {
+                            let _ = other.close();
+                        }
+                    }
                     let _ = window.close();
                     return Ok(header);
                 }

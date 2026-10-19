@@ -3166,7 +3166,7 @@ def cmd_balances(args: argparse.Namespace) -> int:
         if not spec:
             return _fail("Which console?  passbook balances console-login anthropic")
         print(json.dumps({"provider": ids[0], "name": spec["name"], "login": spec["login"], "cookieUrl": spec["base"] + "/",
-                          "cookie": spec["cookie"]}))
+                          "cookie": spec["cookie"], "userAgent": balances.CONSOLE_AGENT}))
         return 0
     if action == "console-save":
         # The window's cookies after a console sign-in, on stdin: kept as one key per login, sealed, for the

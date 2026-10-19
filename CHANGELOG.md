@@ -4,6 +4,21 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+### The Console sign-in window finishes: it sees the sign-in, and Google sign-in works
+
+Liam, 2026-10-19, on 1.10.19: "im trying to console login from the passbook row and its failing ... im doing
+continue with google", with the Console showing "There was an error logging you in".
+
+- **The window never saw a sign-in.** `cookies_for_url` answers no cookies on macOS while `cookies()` holds the
+  signed-in one (measured in a real build), so 1.10.19's window waited forever whatever way he signed in. It now
+  reads the window's cookies and keeps the console host's own.
+- **Google's pop-up shares the window's private session**, so what it signs in to is what the window holds;
+  before, it opened in a session of its own. The window and its pop-ups say they are Safari, since Google will not
+  sign in to a window that does not. Pop-ups close with the window.
+- Checked in a real build against a local stand-in console: a cookie set by the page, and one set by a pop-up,
+  are both kept (limited to the balance readers) and both windows close. Not checked: Google's own pages, which
+  need his account.
+
 ## [1.10.19] — 2026-10-19
 
 ### Anthropic credits from the Console, with a sign-in PassBook keeps for Balances only

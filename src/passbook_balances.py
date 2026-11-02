@@ -64,7 +64,7 @@ PROVIDERS: tuple[dict, ...] = (
     {"id": "hetzner", "name": "Hetzner", "category": "Cloud", "keys": ('HETZNER_API_TOKEN', 'HCLOUD_TOKEN', 'HETZNER_COUSIN_API_KEY'), "billing": "postpaid", "console_url": "https://console.hetzner.cloud", "docs_url": "https://docs.hetzner.com/cloud/billing/faq/", "verified": "2026-10-02", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated.", "reading_note": "Resource prices can support an estimate, but they do not report your invoice or account balance. Review Hetzner billing."},
     {"id": "agentmail", "name": "AgentMail", "category": "Developer tools", "keys": ('AGENTMAIL_API_KEY',), "billing": "unknown", "console_url": "https://console.agentmail.to", "adapter": "agentmail", "docs_url": "https://docs.agentmail.to/api-reference/organizations/get", "verified": "2026-10-02", "payment_note": "The organization endpoint reports connected inboxes and domains, not a monetary balance. Review your plan and payment on AgentMail."},
     {"id": "scrapecreators", "name": "Scrape Creators", "category": "Research", "keys": ('SCRAPECREATORS_API_KEY', 'SCRAPE_CREATORS_API_KEY'), "billing": "prepaid", "console_url": "https://scrapecreators.com", "docs_url": "https://docs.scrapecreators.com/v1/account/credit-balance/", "verified": "2026-10-02", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated.", "reading_note": "Checking this balance costs one provider credit. Automatic reads are disabled; review the balance on Scrape Creators."},
-    {"id": "resemble", "name": "Resemble AI", "category": "Media", "keys": ('RESEMBLE_API_KEY',), "billing": "unknown", "console_url": "https://app.resemble.ai", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated."},
+    {"id": "resemble", "name": "Resemble AI", "category": "Media", "keys": ('RESEMBLE_API_KEY',), "billing": "prepaid", "console_url": "https://app.resemble.ai", "billing_url": "https://app.resemble.ai/hub/billing", "adapter": "resemble", "docs_url": "https://docs.resemble.ai/platform-management/billing/wallet", "verified": "2026-11-02", "payment_note": "Add funds to the wallet on Resemble. PassBook only reads the balance."},
     {"id": "quiver", "name": "QuiverAI", "category": "Media", "keys": ('QUIVER_API_KEY', 'QUIVERAI_API_KEY'), "reading_keys": ('QUIVER_BILLING_ADMIN_KEY',), "billing": "prepaid", "console_url": "https://quiver.ai", "adapter": "quiver", "docs_url": "https://docs.quiver.ai/api-reference/organization/get-organization-balance", "verified": "2026-10-02", "payment_note": "Balance reporting uses a separate existing organization Admin key with billing-read permission. Your inference key stays separate. Credits cover the organization across projects. Purchase credits on QuiverAI.", "billing_key": {"key": "QUIVER_BILLING_ADMIN_KEY", "why": "Only an organization Admin key can see billing.", "label": "QuiverAI organization billing key", "permission": "An existing organization Admin key with billing-read permission. Project keys cannot read organization billing; Admin keys cannot run inference."}},
     {"id": "nansen", "name": "Nansen", "category": "Research", "keys": ('NANSEN_API_KEY',), "billing": "unknown", "console_url": "https://app.nansen.ai", "docs_url": "https://docs.nansen.ai/getting-started/credits", "verified": "2026-10-02", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated.", "reading_note": "A supported credit-balance endpoint has not been verified. Review your credit balance on the Nansen dashboard."},
     {"id": "vadoo", "name": "Vadoo", "category": "Media", "keys": ('VADOO_API_KEY',), "billing": "unknown", "console_url": "https://www.vadoo.tv", "payment_note": "Review billing and complete any payment on the provider’s site. In-app payment is not integrated."},
@@ -137,6 +137,7 @@ REQUESTS: dict[str, tuple] = {
     "tripo": ("https://api.tripo3d.ai/v2/openapi/user/balance", "Bearer"),
     "bfl": ("https://api.bfl.ai/v1/credits", "x-key"),
     "fish": ("https://api.fish.audio/wallet/self/api-credit", "Bearer"),
+    "resemble": ("https://app.resemble.ai/billing/api/v1/wallet", "Bearer"),
     "browser-use": ("https://api.browser-use.com/api/v2/billing/account", "X-Browser-Use-API-Key"),
     "openai-costs": ("https://api.openai.com/v1/organization/costs?start_time={month_start}&bucket_width=1d&limit=31", "Bearer"),
     "anthropic-costs": ("https://api.anthropic.com/v1/organizations/cost_report?starting_at={month_start_iso}&bucket_width=1d&limit=31", "x-api-key"),
@@ -454,6 +455,14 @@ def parse_reading(adapter: str, payload: Any) -> dict:
         if balance is None:
             raise Unreadable("Unexpected balance response")
         return {"balance": balance, "unit": "USD", "details": _amount("Topped up, all time", body.get("cumulative_top_up"), "USD")}
+    if adapter == "resemble":
+        wallet = _record(body.get("wallet"))
+        cents = _number(wallet.get("balance_cents"))
+        if cents is None:
+            raise Unreadable("Unexpected balance response")
+        consumed = _number(wallet.get("lifetime_consumed_cents"))
+        return {"balance": round(cents / 100, 4), "unit": "USD",
+                "details": _amount("Consumed, all time", None if consumed is None else round(consumed / 100, 2), "USD")}
     if adapter == "browser-use":
         balance = _number(body.get("totalCreditsBalanceUsd"))
         if balance is None:

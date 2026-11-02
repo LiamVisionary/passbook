@@ -38,7 +38,7 @@ def test_the_catalog_is_whole_and_every_reader_has_an_address():
     assert len(ids) == len(set(ids)) == 65
     readers = {entry["adapter"] for entry in balances.PROVIDERS if entry.get("adapter")}
     readers |= {item["adapter"] for entry in balances.PROVIDERS for item in entry.get("accounts", ()) if item.get("adapter")}
-    assert readers == set(balances.REQUESTS) and len(readers) == 27
+    assert readers == set(balances.REQUESTS) and len(readers) == 28
     for url, *_ in balances.REQUESTS.values():
         assert url.startswith("https://")
     for entry in balances.PROVIDERS:
@@ -435,6 +435,7 @@ def test_turning_balances_off_forgets_the_history_the_logos_and_stops_alerts(sto
     ("runware", {"data": [{"balance": 18.32, "organizationName": "Liam", "apiKeys": [{"apiKey": "rw-secret"}]}]}, {"balance": 18.32, "unit": "USD", "accountLabel": "Liam"}),
     ("muapi", {"balance": 18.3, "currency": "USD", "email": "x@y.z"}, {"balance": 18.3, "unit": "USD"}),
     ("fish", {"credit": "100.688820", "cumulative_top_up": "105.00"}, {"balance": 100.68882, "unit": "USD"}),
+    ("resemble", {"wallet": {"balance_cents": 9994.56404, "balance_dollars": 99.9456404, "lifetime_consumed_cents": 5105.43596}}, {"balance": 99.9456, "unit": "USD"}),
     ("browser-use", {"totalCreditsBalanceUsd": 50.04, "monthlyCreditsBalanceUsd": 0.0, "additionalCreditsBalanceUsd": 50.04}, {"balance": 50.04, "unit": "USD"}),
     ("openrouter-key", {"data": {"limit": 100, "limit_remaining": 97.9, "usage_monthly": 2.1, "usage": 99.1,
                                  "effective_budget": {"resets_at": "2026-11-01T00:00:00.000Z"}}},

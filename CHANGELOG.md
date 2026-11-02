@@ -4,6 +4,12 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+### Balances reads Resemble's wallet
+
+Liam, 2026-11-02: Resemble's wallet ran out for four days unnoticed, and it was missing from Balances. The row said
+Resemble reports no balance to an API key. It does: `GET app.resemble.ai/billing/api/v1/wallet`, in cents, with the
+ordinary key (checked live; $99.95 after a $100 top-up). Prepaid now, so low-balance alerts cover it.
+
 ### Install from the repository, not PyPI; vulnerability reports have somewhere to go
 
 `pyproject.toml` told people to `uv tool install passbook` / `pipx install passbook`. On PyPI that name belongs to an

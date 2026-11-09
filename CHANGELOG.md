@@ -4,6 +4,8 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [1.10.22] — 2026-11-09
+
 ### An agent can ask you to sign in, and you approve it in PassBook's window
 
 Liam, 2026-11-09, after an agent stopped at a locked vault and told him to go and type `passbook signin`: "can you

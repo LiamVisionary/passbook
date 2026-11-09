@@ -21,7 +21,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # ubuntu-24.04, not -latest: from 2026-10-19 -latest is Ubuntu 26.04, which setup-python
+        # has no 3.9 for, and requires-python still promises 3.9.
+        os: [ubuntu-24.04, macos-latest, windows-latest]
         python: ["3.9", "3.12"]
     steps:
       - uses: actions/checkout@v4

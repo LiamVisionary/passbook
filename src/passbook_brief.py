@@ -164,7 +164,8 @@ they have different repairs, so do not treat them alike:
 - **absent** — genuinely not in the store. `passbook add NAME` is the fix.
 - **sealed, and the vault is locked** — it IS here, encrypted, and this machine
   cannot open it until somebody signs in. `passbook check` says so. The fix is
-  `passbook signin`, and adding the key again would write a second copy.
+  `passbook signin --ask "why"` (owner approves it), and adding the key again
+  would write a second copy.
 - **refused** — present and readable, but this project or app is not allowed it.
   The refusal names the reason. `passbook umbrella` and `passbook projects` show
   what governs it. Adding it again fixes nothing.
@@ -175,7 +176,7 @@ they have different repairs, so do not treat them alike:
   "invalid token": revoked or expired there. Make a new one; `passbook add NAME`.
 
 Reporting a sealed, refused or guarded key as missing is what this note exists
-to prevent. Ask for `passbook signin` only when `passbook vault` says locked; a
+to prevent. Ask for a sign-in only when `passbook vault` says locked; a
 service's auth error never means a locked vault.
 
 An agent that speaks MCP should use the server: `passbook mcp` on stdio.

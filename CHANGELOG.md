@@ -4,6 +4,23 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+### An agent can ask you to sign in, and you approve it in PassBook's window
+
+Liam, 2026-11-09, after an agent stopped at a locked vault and told him to go and type `passbook signin`: "can you
+build a way for you to run passbook signin then it surfaces a prompt here i can approve". `passbook signin --ask
+"why"` (and the MCP server's new `request_signin` tool) opens `passbook://signin?by=…&reason=…&workspace=…`. PassBook's
+window comes forward on its sign-in card, saying who is asking and why, with Touch ID, the password and Not now; the
+command waits (`--wait`, 300 s by default) and returns the moment the vault opens. The password is typed into
+PassBook and never passes through the agent, whose output is a transcript. The link carries no value; the app's
+parser (`signin.rs`) refuses anything but those three fields, a workspace that is not a name, and a label or reason
+over its limit (60 / 200 characters), and the CLI's limits are tested against it. Who is asking is the request's own
+word, and the card says so. Not now leaves the agent waiting out its own time. `vault_status` now points agents at
+`request_signin` instead of telling them to send the owner to a terminal.
+
+Found while building it, and not changed here: `passbook signin --device` opens the vault with no prompt for anything
+already running as you, because the device key the CLI stores has no biometric guard (only the signed app asks for
+Touch ID first; `vault_signin_device` in main.rs says as much). An agent that ran it would skip the person entirely.
+
 ### Balances reads Resemble's wallet
 
 Liam, 2026-11-02: Resemble's wallet ran out for four days unnoticed, and it was missing from Balances. The row said

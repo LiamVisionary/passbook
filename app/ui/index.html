@@ -4489,6 +4489,61 @@ passbook oauth connect google:work</pre>
   }
   let gateView = { mode: "pick", chosen: null, error: "", busy: false, hint: "" };
 
+  // ── An agent asks to open the vault ───────────────────────────────────────
+  //
+  //  `passbook signin --ask WHY` (or the MCP server's request_signin) opens
+  //  passbook://signin naming who asks and why (signin.rs). The agent must never
+  //  be handed the password, so the person approves here, on the same sign-in
+  //  card as always, and the agent sees only that the vault opened. Who is
+  //  asking is the request's own word; the card says so, and Not now is the guard.
+  let agentAsk = null;
+
+  const agentAskRow = () => {
+    const rows = workspaceRows();
+    return rows.find((row) => row.id === agentAsk?.workspace) || (!agentAsk?.workspace && rows.find((row) => row.active)) || null;
+  };
+  const agentAskOpen = () => Boolean(agentAsk) && (vault?.unlocked_workspaces || []).includes(agentAskRow()?.id ?? agentAsk.workspace);
+  const agentAskWaiting = () => Boolean(agentAsk) && Boolean(agentAskRow()) && !agentAskOpen();
+
+  async function loadAgentAsk() {
+    if (!invoke) return;
+    let next = null;
+    try { next = await invoke("pending_signin_ask"); } catch { return; /* an older build */ }
+    if (!next) return;
+    agentAsk = next;
+    // Whether it is already open is the broker's answer now, not this window's last reading.
+    try { await refreshVault(); } catch { /* judged on what the window has */ }
+    if (agentAsk?.id !== next.id) return;  // settled, or replaced, while it was reading
+    if (!agentAskRow()) {
+      notice = `${next.by} asked to open a workspace this window does not have: ${next.workspace}.`;
+      settleAgentAsk(true);
+      paint();
+      return;
+    }
+    if (agentAskOpen()) { settleAgentAsk(true); return; }
+    gateView = { mode: "signin", chosen: agentAskRow(), error: "", busy: false, hint: "" };
+    paintGate();
+    document.getElementById("g-pw")?.focus();
+  }
+
+  /** Clears the request once its workspace is open, or when `force`d (Not now). */
+  function settleAgentAsk(force = false) {
+    if (!agentAsk || (!force && !agentAskOpen())) return;
+    const id = agentAsk.id;
+    agentAsk = null;
+    invoke?.("dismiss_signin_ask", { id }).catch(() => undefined);
+  }
+
+  function agentAskCard(row) {
+    if (!agentAsk || agentAskRow()?.id !== row.id) return "";
+    return `
+      <p class="glede" style="text-align:left;margin:0"><strong>${esc(agentAsk.by)}</strong> asks you to
+        open this workspace${agentAsk.reason ? `: “${esc(agentAsk.reason)}”` : "."}</p>
+      <p class="glede" style="text-align:left;margin:0;font-size:12px">That is what the request says
+        about itself; any program on this computer can ask. Approve only if you expect it. Agents and
+        scripts can then use this workspace's credentials until you lock it. Your password stays here.</p>`;
+  }
+
   /** A colour per workspace: stable for a given name, distinct within a screen.
    *
    *  A plain hash gave two of three workspaces the same violet, which does not
@@ -4535,6 +4590,7 @@ passbook oauth connect google:work</pre>
     // A request on screen carries its own unlock step, and the sign-in
     // sheet underneath it would mean approving something unread.
     if (webLink.active() || authorization.active() || askShouldShow() || impShouldShow() || impView.done || ghShouldShow()) return false;
+    if (agentAskWaiting()) return true;
     // The passkey offer comes AFTER a successful sign-in, which is the one
     // moment it can succeed — and the same moment the gate would otherwise
     // decide it is no longer needed and take the offer down with it.
@@ -4599,6 +4655,7 @@ passbook oauth connect google:work</pre>
           </div>
         </div>
         ${gateView.hint ? `<p class="glede" style="text-align:left;margin:0">${esc(gateView.hint)}</p>` : ""}
+        ${agentAskCard(row)}
         ${row.has_device && biometry.available ? `
           <button class="gprimary" data-gdevice="1" ${gateView.busy ? "disabled" : ""}>
             ${icon("person")} Unlock with ${esc(biometry.label)}</button>
@@ -4629,7 +4686,9 @@ passbook oauth connect google:work</pre>
           own yet, so there is nothing to unlock. Give it one from the Vault page.</p>`}
         <p class="gerror">${esc(gateView.error)}</p>
         <div style="display:grid;justify-items:center">
-          <button class="gback" data-gback="1">Choose a different workspace</button>
+          ${agentAskCard(row)
+            ? `<button class="gback" data-gnotnow="1" ${gateView.busy ? "disabled" : ""}>Not now</button>`
+            : `<button class="gback" data-gback="1">Choose a different workspace</button>`}
         </div>
       </section>
       ${gateAgentPanel()}`;
@@ -4953,6 +5012,14 @@ passbook oauth connect google:work</pre>
       paintGate();
     });
 
+    // The asking agent is not told no; it waits out its own time and says so.
+    gate.querySelectorAll("[data-gnotnow]").forEach((b) => b.onclick = () => {
+      settleAgentAsk(true);
+      gateView = { mode: "pick", chosen: null, error: "", busy: false, hint: "" };
+      paintGate();
+      paint();
+    });
+
     gate.querySelectorAll("[data-gagents]").forEach((b) => b.onclick = async () => {
       gateView.busy = true; paintGate();
       try { vault = await invoke("vault_signout", { workspace: "", everything: true }); }
@@ -5042,6 +5109,9 @@ passbook oauth connect google:work</pre>
   }
 
   function paintGate() {
+    // Every successful sign-in repaints the gate, so this is where a request
+    // whose workspace has just opened is cleared.
+    settleAgentAsk();
     const show = gateShouldShow();
     gate.hidden = !show;
     if (!show) return;
@@ -6797,6 +6867,7 @@ passbook oauth connect google:work</pre>
       await loadAsk();
       await authorization.load();
       await webLink.load();
+      await loadAgentAsk();
       wireDrop();
       // Where every key is, for Devices, Attention and the key rows: asked now and every ten minutes,
       // which is how often the devices exchange keys by themselves.
@@ -6814,6 +6885,7 @@ passbook oauth connect google:work</pre>
         events.listen("passbook://ask", () => loadAsk());
         events.listen("passbook://authorize", () => authorization.load());
         events.listen("passbook://weblink", () => webLink.load());
+        events.listen("passbook://signin", () => loadAgentAsk());
         events.listen("passbook://ask-refused", (e) => {
           notice = String(e?.payload || "That link could not be read.");
           paint();

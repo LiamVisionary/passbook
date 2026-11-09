@@ -5931,6 +5931,34 @@ def _signin_broker_ready(workspace: str) -> bool:
     return False
 
 
+def _signin_by_asking(args: argparse.Namespace, *, workspace: str, has_profiles: bool) -> int:
+    """`passbook signin --ask WHY`: the person approves in PassBook's window.
+
+    For an agent, which must never be handed the password: it opens
+    passbook://signin naming who asks and why, and waits for the vault to
+    open (passbook_signin_ask.py).
+    """
+    import passbook_signin_ask
+
+    if (args.passkey or args.device or getattr(args, "recovery", False)
+            or getattr(args, "password_stdin", False) or args.profile or args.duration):
+        return _fail("--ask leaves the factor and the session length to the person in PassBook's window.",
+                     "Drop the other options, or sign in yourself without --ask.")
+    if not has_profiles:
+        return _fail("This workspace has no password yet, so there is nothing to approve.",
+                     "Set one up first, in PassBook or with:  passbook signin")
+    answer = passbook_signin_ask.ask(
+        workspace=workspace, reason=args.ask, by=args.by, wait=args.wait,
+        on_asked=lambda _link: print(
+            "Asked in PassBook's window. Waiting for the owner to approve it there…",
+            file=sys.stderr, flush=True),
+    )
+    if not answer.get("ok"):
+        return _fail(answer.get("error", "Not signed in."))
+    print("Already signed in." if answer.get("already") else "Signed in: the owner approved it in PassBook.")
+    return 0
+
+
 def cmd_signin(args: argparse.Namespace) -> int:
     import passbook_broker
 
@@ -5954,6 +5982,8 @@ def cmd_signin(args: argparse.Namespace) -> int:
         return _fail(str(error))
     if profile and not any(p["id"] == profile for p in profiles):
         return _fail(f"No such profile: {profile}", "See available profiles:  passbook profile")
+    if getattr(args, "ask", None) is not None:
+        return _signin_by_asking(args, workspace=workspace, has_profiles=bool(profiles))
     if not _signin_broker_ready(workspace):
         return 1
 
@@ -8026,6 +8056,14 @@ def build_parser() -> argparse.ArgumentParser:
                         help="sign in with a recovery code instead of the password")
     signin.add_argument("--password-stdin", dest="password_stdin",
         action="store_true", help="read the password from stdin instead of prompting")
+    signin.add_argument("--ask", default=None, metavar="WHY",
+                        help="for agents: ask the owner to approve in PassBook's window, "
+                             "saying why, and wait until the vault is open")
+    signin.add_argument("--by", default="", metavar="NAME",
+                        help="with --ask: who is asking, as the window names it "
+                             "(default: the agent this runs under)")
+    signin.add_argument("--wait", type=float, default=300.0, metavar="SECONDS",
+                        help="with --ask: how long to wait for the approval (default 300)")
     signin.set_defaults(func=cmd_signin)
 
     vault_cmd = subs.add_parser("vault", help="is the vault open, and who can open it")

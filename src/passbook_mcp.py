@@ -280,6 +280,28 @@ TOOLS = [
         ),
         "inputSchema": {"type": "object", "properties": {}},
     },
+    {
+        "name": "request_signin",
+        "title": "Ask the owner to open the store",
+        "description": (
+            "When the store is locked, ask the owner to open it. PassBook's window comes "
+            "forward on its sign-in card, saying who you are and why you asked, and the "
+            "owner approves there with Touch ID or their password. You never see or handle "
+            "the password. This waits until the store is open or `wait_seconds` pass, so "
+            "tell the owner you are asking before you call it."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "reason": {"type": "string",
+                           "description": "Why you need it open, in one line the owner will read "
+                                          "(\"read the copy-trading operator state\")."},
+                "wait_seconds": {"type": "number",
+                                 "description": "How long to wait for the approval: 120 if omitted, at most 600."},
+            },
+            "required": ["reason"],
+        },
+    },
 ]
 
 
@@ -539,9 +561,41 @@ def _tool_vault_status(arguments: Mapping[str, Any], state: Mapping[str, Any]) -
         "unlocked": unlocked,
         "detail": shape.get("detail", "The store is not encrypted."),
         "advice": ("Credentials are readable." if unlocked
-                   else "The store is locked. Ask the owner to run `passbook signin`; "
-                        "retrying will not help."),
+                   else "The store is locked. Call request_signin to ask the owner to open it "
+                        "in PassBook's window; retrying will not help."),
     }
+
+
+def _tool_request_signin(arguments: Mapping[str, Any], state: Mapping[str, Any]) -> dict[str, Any]:
+    """Ask in PassBook's window and wait. The password never comes through here."""
+    import passbook_signin_ask
+
+    reason = str(arguments.get("reason") or "")
+    try:
+        wait = float(arguments.get("wait_seconds") or 120)
+    except (TypeError, ValueError):
+        wait = 120.0
+    root = state.get("root")
+    workspace = passbook.workspace() or passbook.ROOT_WORKSPACE_ID
+
+    def status(name: str) -> Mapping[str, Any]:
+        import passbook_broker
+
+        return passbook_broker.vault_status(root=root, workspace=name)
+
+    try:
+        import passbook_vault
+
+        if not passbook_vault.status(root=root).get("sealed"):
+            return {"unlocked": True, "detail": "The store is not encrypted, so there is nothing to open."}
+    except Exception:  # noqa: BLE001 — no vault module is answered by the ask below
+        pass
+    answer = passbook_signin_ask.ask(workspace=workspace, reason=reason, by=_client_name(state),
+                                     wait=min(max(wait, 1.0), 600.0), status=status)
+    if answer.get("ok"):
+        return {"unlocked": True,
+                "detail": "Already open." if answer.get("already") else "The owner approved it in PassBook."}
+    return {"unlocked": False, "asked": bool(answer.get("asked")), "detail": answer.get("error", "Not signed in.")}
 
 
 def _oauth_module():
@@ -691,6 +745,7 @@ HANDLERS: dict[str, Callable[[Mapping[str, Any], Mapping[str, Any]], dict[str, A
     "proxy_request": _tool_proxy_request,
     "check_credentials": _tool_check_credentials,
     "vault_status": _tool_vault_status,
+    "request_signin": _tool_request_signin,
     "list_sign_ins": _tool_list_sign_ins,
     "get_oauth_token": _tool_get_oauth_token,
     "list_services": _tool_list_services,

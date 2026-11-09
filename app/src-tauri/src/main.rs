@@ -2034,6 +2034,7 @@ fn key_history(name: String) -> Result<Value, String> {
 /// the store is read over IPC by the process that needs it, never over this.
 mod ask;
 mod authorize;
+mod signin;
 mod update;
 mod veil;
 mod weblink;
@@ -2441,6 +2442,17 @@ fn remember_ask(app: &tauri::AppHandle, url: &str) {
         }
         return;
     }
+    // An agent asking the person to open the vault (signin.rs). Grants nothing:
+    // the window shows its sign-in card and the person decides there.
+    let signin_id = format!("{:x}", std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
+    if signin::remember(url, &signin_id) {
+        let _ = app.emit("passbook://signin", ());
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.unminimize(); let _ = window.show(); let _ = window.set_focus();
+        }
+        return;
+    }
     // Distinct per request, so approving cannot be replayed against whatever
     // arrived afterwards.
     let id = format!("{:x}", std::time::SystemTime::now()
@@ -2505,6 +2517,14 @@ fn pending_web_link() -> Result<Option<Value>, String> { weblink::inspect() }
 
 #[tauri::command(async)]
 fn dismiss_web_link(id: String) -> Result<(), String> { weblink::dismiss(&id) }
+
+/// An agent's request to open the vault, if one is waiting (signin.rs).
+#[tauri::command(async)]
+fn pending_signin_ask() -> Option<signin::SigninAsk> { signin::pending() }
+
+/// Not now, or done: the window clears the request it was showing.
+#[tauri::command(async)]
+fn dismiss_signin_ask(id: String) { signin::dismiss(&id) }
 
 #[tauri::command(async)]
 fn decide_web_link(id: String, decision: String, workspace: String, code: String, password: String) -> Result<Value, String> {
@@ -2785,6 +2805,7 @@ fn main() {
             pending_ask, dismiss_ask, apply_ask, inspect_env, import_env,
             pending_authorization, dismiss_authorization, decide_authorization,
             pending_web_link, dismiss_web_link, decide_web_link,
+            pending_signin_ask, dismiss_signin_ask,
             github_state, github_connect_token, github_connect_gh, github_connect_device,
             github_disconnect, github_targets, github_environments, github_check, github_push,
             balances_state, balances_enable, balances_open, balances_icons, balances_full, balances_known, console_signin, balances_alerts, appearance, set_appearance,

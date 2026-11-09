@@ -150,6 +150,7 @@ py-modules = [
     "passbook_keystore",
     "passbook_link",
     "passbook_web_link",
+    "passbook_signin_ask",
     "passbook_managed_cli",
     "passbook_managed_authorize",
     "passbook_managed_client",

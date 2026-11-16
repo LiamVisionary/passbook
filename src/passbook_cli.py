@@ -546,13 +546,24 @@ def _replicate_write(keys, values) -> None:
     try:
         # Company hosts are left out here: they keep only the keys you share to
         # them, and a value they discard on arrival has still been sent.
-        peers = passbook_fleet.reachable()
+        # Not this machine: its own Hivemind Link node answers like a peer, and
+        # on 2026-11-16 an add here queued a retry to itself (see _other_machines).
+        peers = _other_machines(passbook_fleet.reachable())
         company_hosts = passbook_fleet.company_hosts_seen()
     except Exception:  # noqa: BLE001 — no tailnet is not a failed write
         return
     for host in company_hosts:
         print(f"not sent to {host}: it keeps only the keys you share to it")
     if not peers:
+        # Said, not swallowed: on 2026-11-16 a key added on a Mac whose Tailscale
+        # this process could not find went to no other machine, and nothing said so.
+        if passbook_fleet.fleet_disabled():
+            return
+        seen, _why = passbook_fleet.available()
+        where = ("Tailscale is not installed or not found on this machine" if not seen
+                 else "no other machine on the tailnet has a HivemindOS collector answering")
+        print(f"not sent to any other machine: {where}. "
+              "Run  passbook sync --status  to see your machines.", file=sys.stderr)
         return
     policy = _access().read_policy() if _access() is not None else None
     outcome = passbook_sync.replicate(chosen, peers, policy=policy)

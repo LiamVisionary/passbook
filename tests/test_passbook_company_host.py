@@ -225,7 +225,7 @@ def test_sync_json_names_company_hosts_beside_the_peers_it_used(tmp_path, monkey
     monkeypatch.setattr(fleet, "_read_status", lambda: {"Peer": {
         "a": {"Online": True, "HostName": "laptop", "OS": "macos", "TailscaleIPs": ["100.64.0.1"]},
         "b": {"Online": True, "HostName": "rented", "OS": "linux", "TailscaleIPs": ["100.64.0.9"]}}})
-    monkeypatch.setattr(fleet, "_reachable_collector", lambda ip: "8798")
+    monkeypatch.setattr(fleet, "_reachable_collector", lambda ip, timeout=None: "8798")
     monkeypatch.setattr(fleet, "collector_health", lambda address, port, **_: (
         COMPANY_HEALTH if address == "100.64.0.9" else ORDINARY_HEALTH))
     fetched, pushed = [], []

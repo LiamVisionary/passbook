@@ -4,6 +4,30 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+### A key added on a Mac with Homebrew's Tailscale reaches your other machines
+
+Liam, 2026-11-16, after a key added on his second Mac never arrived on the first while HiveDrop saw both machines
+fine: "why the fuck didnt it sync? … does passbook not use similar logic??" It did not. HiveDrop goes through
+HivemindOS's own Link node; PassBook finds the tailnet with the `tailscale` command, and on that Mac Tailscale came
+from Homebrew, whose folder was not on the PATH PassBook was started with, and there is no app bundle to fall back
+to. No `tailscale` meant no tailnet, so no peers, so the key went nowhere, and `add` said nothing.
+
+- **Tailscale is found where it is installed.** After PATH, PassBook looks in the app bundle, Homebrew's folders
+  (Apple silicon and Intel), the Linux system folders, snap and the Windows installer's folder.
+  `PASSBOOK_TAILSCALE_CLI` still overrides all of it.
+- **Sending and pulling wait for a slow peer.** `reachable()`, which every send and pull uses, now gives a peer
+  4 seconds to answer instead of the window's 0.35. Probes run together, so this bounds the sweep, not each peer.
+  Before, the timeout it was given never reached the probe, and a peer behind a DERP relay, or Liam's Helsinki
+  server at 315 ms, was "not in the fleet". The Machines window keeps its quick probe.
+- **A key that reaches no machine says so.** `add` now prints "not sent to any other machine" with the reason
+  (Tailscale not found, or no collector answering) instead of returning in silence.
+- **`add` no longer sends to the machine it runs on.** Its own Hivemind Link node answers like a peer; `add` now
+  leaves it out the way `sync --status` already did, instead of queueing a retry to itself.
+- **Checked:** five new tests (Homebrew found off PATH, the app bundle first, no Tailscale is no tailnet, sync waits
+  seconds, the silent miss is spoken); the full suite passes (1629 passed, 3 skipped). On the Mac where it failed:
+  `passbook sync --status` said "No other machine on this network is running a collector"; with Tailscale's
+  Homebrew path it listed the first Mac and the key it lacked, and the key then reached that Mac.
+
 ## [1.10.22] — 2026-11-09
 
 ### An agent can ask you to sign in, and you approve it in PassBook's window

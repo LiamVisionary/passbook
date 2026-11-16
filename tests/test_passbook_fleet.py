@@ -174,3 +174,46 @@ def test_the_suite_never_sees_a_real_tailnet(monkeypatch):
     assert fleet._read_status() == {}
     assert fleet.reachable() == []
     fleet._STATUS_CACHE = None
+
+
+# ── finding tailscale, and waiting long enough to reach a peer ───────────────
+#
+# 2026-11-16: a Mac with Tailscale from Homebrew ran PassBook with a PATH that
+# had no /opt/homebrew/bin in it. It found no tailscale, so no tailnet, so no
+# peers, and a key added there reached no other machine.
+
+def test_tailscale_is_found_in_homebrew_when_it_is_not_on_path(monkeypatch):
+    monkeypatch.delenv("PASSBOOK_TAILSCALE_CLI", raising=False)
+    monkeypatch.setattr(fleet.shutil, "which", lambda name: None)
+    monkeypatch.setattr(fleet.os.path, "exists", lambda path: path == "/opt/homebrew/bin/tailscale")
+    assert fleet._tailscale_cli() == "/opt/homebrew/bin/tailscale"
+
+
+def test_the_app_bundle_still_wins_over_a_package_folder(monkeypatch):
+    monkeypatch.delenv("PASSBOOK_TAILSCALE_CLI", raising=False)
+    monkeypatch.setattr(fleet.shutil, "which", lambda name: None)
+    monkeypatch.setattr(fleet.os.path, "exists", lambda path: True)
+    assert fleet._tailscale_cli() == "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+
+
+def test_no_tailscale_anywhere_is_no_tailnet_not_an_error(monkeypatch):
+    monkeypatch.delenv("PASSBOOK_TAILSCALE_CLI", raising=False)
+    monkeypatch.setattr(fleet.shutil, "which", lambda name: None)
+    monkeypatch.setattr(fleet.os.path, "exists", lambda path: False)
+    assert fleet._tailscale_cli() == ""
+    assert fleet.available()[0] is False
+
+
+def test_sync_waits_long_enough_for_a_relayed_peer(tailnet, monkeypatch):
+    """`reachable()` is what every send and pull uses: it must give a peer
+    behind a DERP relay seconds, not the window's 0.35 s."""
+    waits: list[float] = []
+    monkeypatch.setattr(fleet, "_reachable_collector",
+                        lambda ip, timeout=fleet.PROBE_TIMEOUT: waits.append(timeout) or "8798")
+    monkeypatch.setattr(fleet, "peer_is_company_host", lambda *a, **k: False)
+
+    found = fleet.reachable()
+
+    assert [row["host"] for row in found] == ["alpha", "beta"]
+    assert waits and min(waits) >= 2.0, f"sync probed with {waits}"
+    assert fleet.SYNC_PROBE_TIMEOUT > fleet.PROBE_TIMEOUT

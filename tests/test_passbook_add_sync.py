@@ -50,3 +50,22 @@ def test_no_sync_wins_and_a_replaced_key_is_sent_too(sent, monkeypatch):
     _pipe(monkeypatch, "KEPT_LOCAL=synthetic-value-four\n")
     assert cli.main(["add", "--stdin", "--sync", "--replace"]) == 0
     assert sent == [["KEPT_LOCAL"]], "a changed value is what the other machines most need"
+
+
+def test_a_key_that_reaches_no_machine_says_so(monkeypatch, capsys):
+    """2026-11-16: a key added where no tailscale could be found went nowhere,
+    and nothing said so. The write stands; the miss is now spoken."""
+    import passbook_fleet
+
+    monkeypatch.delenv("PASSBOOK_FLEET", raising=False)
+    monkeypatch.setattr(passbook_fleet, "company_host_mode", lambda: False)
+    monkeypatch.setattr(passbook_fleet, "reachable", lambda **_: [])
+    monkeypatch.setattr(passbook_fleet, "company_hosts_seen", lambda: [])
+    monkeypatch.setattr(passbook_fleet, "available", lambda: (False, "no tailscale CLI on this machine"))
+
+    cli._replicate_write(["NEW_KEY"], {"NEW_KEY": "value"})
+
+    said = capsys.readouterr().err
+    assert "not sent to any other machine" in said
+    assert "Tailscale is not installed or not found" in said
+    assert "value" not in said

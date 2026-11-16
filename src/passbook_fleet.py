@@ -51,7 +51,31 @@ from typing import Any
 # on the tailnet but not in the fleet.
 COLLECTOR_PORTS = ("8798", "8799", "8787")
 PROBE_TIMEOUT = 0.35
+# What a probe may wait when a key is about to be SENT or PULLED. The window's
+# 0.35 s is fine for a list that redraws, but a peer reached through a DERP
+# relay takes far longer to accept a connection: measured 2026-11-16, Liam's
+# Helsinki server answered in 315 ms on a direct path, and the other Mac's path
+# to this one has run through a relay at 0.8-3.9 s. Under 0.35 s such a peer was
+# "not in the fleet", so a key added there went nowhere. Probes run together,
+# so this bounds the whole sweep, not each peer in turn.
+SYNC_PROBE_TIMEOUT = 4.0
 _IPV4 = re.compile(r"^\d+\.\d+\.\d+\.\d+$")
+
+# Where `tailscale` lives when it is not on PATH. A GUI app, a launchd agent and
+# a Hivemind Link shell all start with a short PATH that has no Homebrew in it,
+# and a Homebrew Tailscale has no app bundle: on 2026-11-16 Liam's second Mac
+# (Tailscale from Homebrew) found no tailscale, so no tailnet, so no peers, and
+# a key added there reached no other machine while HiveDrop (which uses
+# HivemindOS's own Link node, not this CLI) saw every machine.
+_TAILSCALE_PLACES = (
+    "/Applications/Tailscale.app/Contents/MacOS/Tailscale",  # Mac App Store / standalone app
+    "/opt/homebrew/bin/tailscale",                            # Homebrew, Apple silicon
+    "/usr/local/bin/tailscale",                               # Homebrew, Intel; manual installs
+    "/usr/bin/tailscale",                                     # Linux packages
+    "/usr/sbin/tailscale",
+    "/snap/bin/tailscale",
+    r"C:\Program Files\Tailscale\tailscale.exe",              # Windows installer
+)
 
 # How long a discovery answer stays good, and where it is kept.
 #
@@ -89,9 +113,9 @@ def _tailscale_cli() -> str:
     found = shutil.which("tailscale")
     if found:
         return found
-    # The macOS App Store build does not put itself on PATH.
-    packaged = "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
-    return packaged if os.path.exists(packaged) else ""
+    # Not on PATH: the app bundle, or a package manager's folder this process's
+    # PATH leaves out (see _TAILSCALE_PLACES).
+    return next((place for place in _TAILSCALE_PLACES if os.path.exists(place)), "")
 
 
 def _status() -> dict[str, Any]:
@@ -137,7 +161,7 @@ def _read_status() -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def _reachable_collector(ip: str) -> str:
+def _reachable_collector(ip: str, timeout: float = PROBE_TIMEOUT) -> str:
     """Which collector port this peer answers on, or "" for none.
 
     A TCP connect, not an HTTP request: this is asking "is the fleet running
@@ -146,7 +170,7 @@ def _reachable_collector(ip: str) -> str:
     """
     for port in COLLECTOR_PORTS:
         try:
-            with socket.create_connection((ip, int(port)), timeout=PROBE_TIMEOUT):
+            with socket.create_connection((ip, int(port)), timeout=timeout):
                 return port
         except OSError:
             continue
@@ -295,7 +319,7 @@ def company_host_mode(root: Path | None = None) -> bool:
     return value.strip().strip("'\"").lower() in _TRUTHY
 
 
-def reachable(*, timeout: float = PROBE_TIMEOUT) -> list[dict[str, str]]:
+def reachable(*, timeout: float = SYNC_PROBE_TIMEOUT) -> list[dict[str, str]]:
     """Peers running a collector, WITH the address needed to reach them.
 
     Separate from `peers()` because this is the only thing that may see an
@@ -321,7 +345,7 @@ def company_hosts_seen() -> list[str]:
     return list(_COMPANY_HOSTS_SEEN)
 
 
-def reachable_split(*, timeout: float = PROBE_TIMEOUT) -> tuple[list[dict[str, str]], list[str]]:
+def reachable_split(*, timeout: float = SYNC_PROBE_TIMEOUT) -> tuple[list[dict[str, str]], list[str]]:
     """`(peers to replicate with, names of company hosts left out)`.
 
     Every value PassBook sends and every store it pulls goes to a peer from
@@ -342,7 +366,7 @@ def reachable_split(*, timeout: float = PROBE_TIMEOUT) -> tuple[list[dict[str, s
         return [], []
 
     def look(ip: str) -> tuple[str, bool]:
-        port = _reachable_collector(ip)
+        port = _reachable_collector(ip, timeout)
         return port, bool(port) and peer_is_company_host(ip, port)
 
     with ThreadPoolExecutor(max_workers=min(PROBE_WORKERS, len(found))) as pool:

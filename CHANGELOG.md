@@ -4,6 +4,8 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [1.10.23] — 2026-11-16
+
 ### A key added on a Mac with Homebrew's Tailscale reaches your other machines
 
 Liam, 2026-11-16, after a key added on his second Mac never arrived on the first while HiveDrop saw both machines

@@ -4,6 +4,17 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+### A second Runware account's balance is read
+
+Liam, 2026-11-17, after adding `RUNWARE_API_KEY_LIAM_RIZZMA_IO` for a second Runware account ($250 of startup
+credits) and moving his Workers onto it: the Balances page kept showing only the old account's $17. Runware's keys
+were two fixed names in the catalog, so a third key named like them was never read.
+
+- **Any key named like a Runware key is read** (`RUNWARE_…API_KEY…`), the way extra Anthropic and OpenAI keys
+  already are. Each key whose figures differ is its own row; two keys of one account stay one row.
+- **Checked:** one new test (fails on 1.10.23); the full suite passes (1630 passed, 3 skipped). Against the real
+  store: `Runware: 17.12 USD` and `Runware · RUNWARE_API_KEY_LIAM_RIZZMA_IO: 252.00 USD`.
+
 ## [1.10.23] — 2026-11-16
 
 ### A key added on a Mac with Homebrew's Tailscale reaches your other machines

@@ -653,6 +653,21 @@ def test_every_key_named_like_a_providers_is_found_and_balance_keys_are_not_mist
     assert "CLAUDE_CODE_OAUTH_TOKEN" not in wanted
 
 
+def test_a_runware_key_from_a_second_account_gets_its_own_row():
+    # 2026-11-17: Liam added RUNWARE_API_KEY_LIAM_RIZZMA_IO for a second Runware account ($250 of startup
+    # credits) and moved the Workers onto it; the Balances page kept showing only the old $17 account,
+    # because Runware's keys were two fixed names and nothing else named like them was read.
+    values = {"RUNWARE_API_KEY_HIVEMINDOS": "rw-old", "RUNWARE_API_KEY_LIAM_RIZZMA_IO": "rw-new", "RUNWARE_BALANCE_KEY": "rw-old"}
+    assert balances.held_names(balances.provider("runware"), set(values)) == [
+        "RUNWARE_API_KEY_HIVEMINDOS", "RUNWARE_API_KEY_LIAM_RIZZMA_IO"]
+    answer = {"rw-old": {"data": [{"balance": 17.12, "organizationName": "HivemindOS"}]},
+              "rw-new": {"data": [{"balance": 252, "organizationName": "Rizzma"}]}}
+    rows = balances.readings(values, set(values), only=["runware"], fetch=lambda a, k: (200, answer[k]))
+    assert [(row["providerId"], row["balance"]) for row in rows] == [
+        ("runware", 17.12), ("runware/RUNWARE_API_KEY_LIAM_RIZZMA_IO", 252)]
+    assert rows[1]["accountKeys"] == ["RUNWARE_API_KEY_LIAM_RIZZMA_IO"]
+
+
 def test_keys_that_read_the_same_figures_are_one_account_and_different_ones_are_two():
     same = {"STRIPE_MANAGEMENT_API_KEY": "a", "PORTFOLIO_STRIPE_SECRET_KEY": "b"}
     answer = {"available": [{"amount": 0, "currency": "usd"}], "pending": [], "livemode": True}

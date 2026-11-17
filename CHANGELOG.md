@@ -4,6 +4,8 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [1.10.24] — 2026-11-17
+
 ### A second Runware account's balance is read
 
 Liam, 2026-11-17, after adding `RUNWARE_API_KEY_LIAM_RIZZMA_IO` for a second Runware account ($250 of startup

@@ -20,7 +20,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "passbook"
-version = "1.10.24"
+version = "1.10.25"
 description = "One credential store per machine, shared by every app that opts in."
 readme = "README.md"
 requires-python = ">=3.9"

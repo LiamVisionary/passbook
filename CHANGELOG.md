@@ -4,6 +4,8 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [1.10.25] — 2026-11-25
+
 ### Keys: a key can be found, opened and changed without hunting for how, and adding one does not wait on other machines
 
 Liam, 2026-11-24: "our passbook ui feels incredibly unintuitive.. i search a key and there is no way to edit it. i

@@ -15,13 +15,17 @@ track of email accounts, as automatically as possible, with fallback to optional
   (Google, GitHub, a password...), the account or team name, and a note. `passbook account lookup` asks the
   providers whose API says who owns a key: DeepInfra (email, sign-in method and team), Vultr, RunPod, Hugging Face,
   Stripe, Cloudflare (a token with User Details: Read), Vast.ai, Apify, Resemble, GitHub, Anthropic (the
-  organization's name) and fal (the username). Keys are opened the way `balances` opens them, and each read is
-  recorded. For the rest (DashScope, Groq, DeepSeek...) `passbook account set KEY --email … --via google`.
+  organization's name) and fal (the username, for a key with billing read). All but Vultr and Stripe were measured
+  with live keys; those two follow their published API. Keys are opened the way `balances` opens them, and each
+  read is recorded. For the rest (DashScope, Groq, DeepSeek...) `passbook account set KEY --email … --via google`.
 - **Found and typed fields are kept apart.** A lookup fills what the provider said and leaves the rest, so a
-  sign-in method typed by hand survives. A key already asked is not asked again until its value changes, and a
-  rotation asks about the new key and says so when it is in a different account from the old one.
+  sign-in method typed by hand survives. When the provider names a different email, what was typed about the old
+  account is dropped rather than shown beside the new one. A key is asked about once per value, whatever the
+  answer (a provider that did not answer is tried again the next day), so `balances` adds no calls once it has
+  asked. A rotation asks about the new key and says so when it is in a different account from the old one.
 - **Shown wherever a key is:** under the key in `passbook check`, in `passbook rotate KEY --status` and before a
-  rotation asks for the new value, in `passbook list --accounts`, under each `passbook balances` row, and on the
+  rotation asks for the new value, in `passbook list --accounts`, under each `passbook balances` row (not in
+  `--json`, which other apps read), and on the
   key's page in the window, where it can be added, changed or asked of the provider. On the window's Rotate
   steps it says which account to sign in to.
 - **Agents:** the MCP server's `record_account` and `list_accounts`. An entry an agent makes says which agent made it.

@@ -27,6 +27,9 @@ import pytest
 # to the tailnet's collectors, and on 2026-09-25 a full run seeded a developer's
 # three real stores with API_KEY, DEPLOY_TOKEN, KEEP_ME and the rest.
 os.environ["PASSBOOK_FLEET"] = "off"
+# Nor a real provider: `rotate` and `balances` ask a key's provider who owns it (passbook_accounts.py), and
+# the suite rotates keys named like real ones (CLOUDFLARE_INFRA_ADMIN_API_KEY) with made-up values.
+os.environ["PASSBOOK_OWNER_LOOKUP"] = "off"
 
 BEGIN = "<!-- BEGIN PASSBOOK -->"
 END = "<!-- END PASSBOOK -->"

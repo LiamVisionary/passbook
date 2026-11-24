@@ -1356,6 +1356,8 @@ def _account_lookup(args: argparse.Namespace, names: list[str]) -> int:
         print(f"{item['key']}: {line}  ({status})" if line else f"{item['key']}: {status}")
         for field in item.get("changed") or []:
             print(f"    note: the {field} recorded before was different; the provider's answer replaced it")
+        if item.get("dropped"):
+            print(f"    note: another account, so what was entered about the old one is dropped: {', '.join(item['dropped'])}")
     return 0
 
 
@@ -3510,8 +3512,9 @@ def cmd_balances(args: argparse.Namespace) -> int:
     told = alerts.run(root, rows, values.get(bot_key, "")) if bot_key else {"on": alerting["on"], "sent": 0, "failed": 0,
         "error": f"The bot token ({alerting['key']}) is not in this store." if alerting["on"] and not ids else ""}
     # Whose account each row is (passbook_accounts.py), added after the alerts went out and after the rows were
-    # remembered, so an email is never in a message or the readings cache.
-    _owners_for_rows(rows, values)
+    # remembered, so an email is never in a message or the readings cache; and only to what a person reads,
+    # never to `--json`, which other apps take the rows from.
+    _owners_for_rows(rows, values, attach=not args.json)
     if args.json:
         print(json.dumps({"enabled": balances.settings(root)["enabled"], "cached": from_cache, "providers": rows,
                           "summary": summary, "issues": balances.issues(rows), "alerts": {**alerting, **told},
@@ -3541,9 +3544,9 @@ def cmd_balances(args: argparse.Namespace) -> int:
     return 0
 
 
-def _owners_for_rows(rows: list[dict], values: dict[str, str]) -> None:
+def _owners_for_rows(rows: list[dict], values: dict[str, str], *, attach: bool = True) -> None:
     """Ask who owns the keys this reading already opened, where the provider will say and it was not asked
-    with this very key before, and put each row's account on it as `owner`. Best effort."""
+    with this very key before, and (`attach`) put each row's account on it as `owner`. Best effort."""
     try:
         import passbook_accounts as accounts
         import passbook_balances as balances
@@ -3551,6 +3554,8 @@ def _owners_for_rows(rows: list[dict], values: dict[str, str]) -> None:
         opened = [name for name, value in values.items() if value and balances.owner_provider(name)]
         if opened:
             accounts.lookup(values, opened)
+        if not attach:
+            return
         records = accounts.read()
         for row in rows:
             keys = [*(row.get("accountKeys") or []), *([row["keyName"]] if row.get("keyName") else [])]

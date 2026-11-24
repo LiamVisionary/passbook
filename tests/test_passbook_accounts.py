@@ -127,15 +127,29 @@ def test_deepinfra_says_who_owns_its_key_and_only_the_named_fields_are_kept(mach
     assert "must-not-be-kept" not in kept and "di-one" not in kept and "u-123" not in kept
 
 
-def test_a_lookup_never_wipes_what_was_typed_and_corrects_what_differs(machine):
-    accounts.set_fields("DEEP_INFRA_API_KEY", {"email": "typo@example.com", "via": "google", "note": "Ami"})
-    fetch, _ = _asked(lambda kind, key: (200, {"email": "owner@example.com"}))
+def test_a_lookup_never_wipes_what_was_typed_about_the_same_account(machine):
+    accounts.set_fields("DEEP_INFRA_API_KEY", {"email": "owner@example.com", "via": "github", "note": "Ami"})
+    fetch, _ = _asked(lambda kind, key: (200, {"email": "owner@example.com", "team_display_name": "Team"}))
     [result] = accounts.lookup({"DEEP_INFRA_API_KEY": "di-one"}, ["DEEP_INFRA_API_KEY"], fetch=fetch)
 
     entry = accounts.get("DEEP_INFRA_API_KEY")
-    assert entry["email"] == "owner@example.com" and result["changed"] == ["email"]
-    assert entry["via"] == "google" and entry["note"] == "Ami"  # the provider did not say; typed stays
-    assert entry["from"] == {"email": "DeepInfra's API", "via": "by hand", "note": "by hand"}
+    assert result["changed"] == [] and result["dropped"] == []
+    assert (entry["via"], entry["note"], entry["account"]) == ("github", "Ami", "Team")
+    assert entry["from"] == {"email": "DeepInfra's API", "via": "by hand", "account": "DeepInfra's API",
+                             "note": "by hand"}
+
+
+def test_another_account_drops_what_was_said_about_the_old_one(machine):
+    """The new address beside the old sign-in method is the very mistake this exists to prevent: say
+    nothing rather than the wrong way in."""
+    accounts.set_fields("DEEP_INFRA_API_KEY", {"email": "old@example.com", "via": "google", "note": "Ami"})
+    fetch, _ = _asked(lambda kind, key: (200, {"email": "new@example.com"}))
+    [result] = accounts.lookup({"DEEP_INFRA_API_KEY": "di-two"}, ["DEEP_INFRA_API_KEY"], fetch=fetch)
+
+    entry = accounts.get("DEEP_INFRA_API_KEY")
+    assert entry["email"] == "new@example.com" and result["changed"] == ["email"]
+    assert sorted(result["dropped"]) == ["note", "via"]
+    assert "via" not in entry and "note" not in entry
 
 
 def test_the_same_key_is_asked_once_and_a_replaced_key_again(machine):
@@ -148,6 +162,37 @@ def test_the_same_key_is_asked_once_and_a_replaced_key_again(machine):
     assert len(calls) == 2  # rotated: its account may be another one
     accounts.lookup({"DEEP_INFRA_API_KEY": "di-two"}, ["DEEP_INFRA_API_KEY"], fetch=fetch, fresh=True)
     assert len(calls) == 3
+
+
+def test_a_provider_that_named_nobody_is_not_asked_again_about_the_same_key(machine, monkeypatch):
+    """`balances` asks whenever it holds the key; without this a refusing provider was asked every reading."""
+    fetch, calls = _asked(lambda kind, key: (401, None))
+    for _ in range(3):
+        [result] = accounts.lookup({"DEEP_INFRA_API_KEY": "di-one"}, ["DEEP_INFRA_API_KEY"], fetch=fetch)
+        assert result["status"] == "rejected"
+    assert len(calls) == 1
+    accounts.lookup({"DEEP_INFRA_API_KEY": "di-two"}, ["DEEP_INFRA_API_KEY"], fetch=fetch)
+    assert len(calls) == 2  # a new value is asked about
+    accounts.lookup({"DEEP_INFRA_API_KEY": "di-two"}, ["DEEP_INFRA_API_KEY"], fetch=fetch, fresh=True)
+    assert len(calls) == 3  # and anything, when asked to
+
+    # A provider that did not answer at all is tried again the next day, not before.
+    offline, tries = _asked(lambda kind, key: (_ for _ in ()).throw(TimeoutError()))
+    accounts.lookup({"DEEP_INFRA_API_KEY": "di-three"}, ["DEEP_INFRA_API_KEY"], fetch=offline)
+    accounts.lookup({"DEEP_INFRA_API_KEY": "di-three"}, ["DEEP_INFRA_API_KEY"], fetch=offline)
+    assert len(tries) == 1
+    later = accounts.time.time() + 86400 + 1
+    monkeypatch.setattr(accounts.time, "time", lambda: later)
+    accounts.lookup({"DEEP_INFRA_API_KEY": "di-three"}, ["DEEP_INFRA_API_KEY"], fetch=offline)
+    assert len(tries) == 2
+    # Typed entries are untouched by any of it.
+    assert accounts.get("DEEP_INFRA_API_KEY") is None
+
+
+def test_the_suite_asks_no_real_provider(monkeypatch):
+    monkeypatch.setenv("PASSBOOK_OWNER_LOOKUP", "off")
+    with pytest.raises(ConnectionRefusedError):
+        balances.fetch_owner("deepinfra", "di-one")
 
 
 @pytest.mark.parametrize("answer,status", [((401, None), "rejected"), ((403, None), "not-allowed"),
@@ -219,6 +264,8 @@ def test_rows_say_whose_account_they_are_without_putting_it_in_the_cache(machine
     rows = [{"providerId": "deepinfra", "name": "DeepInfra", "status": "manual", "accountKeys": ["DEEP_INFRA_API_KEY"]},
             {"providerId": "groq", "name": "Groq", "status": "manual", "accountKeys": ["GROQ_API_KEY"]}]
     monkeypatch.setattr(balances, "fetch_owner", lambda kind, key: (_ for _ in ()).throw(AssertionError("asked")))
+    passbook_cli._owners_for_rows(rows, {}, attach=False)
+    assert "owner" not in rows[0]  # `balances --json`: other apps take these rows; the address stays out
     passbook_cli._owners_for_rows(rows, {})
     assert rows[0]["owner"]["line"] == "o@example.com, signs in with GitHub"
     assert rows[1]["owner"] is None

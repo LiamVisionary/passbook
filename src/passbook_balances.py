@@ -254,6 +254,11 @@ def parse_owner(kind: str, payload: Any) -> dict | None:
 
 
 def fetch_owner(kind: str, key: str, *, timeout: float = 12.0) -> tuple[int, Any]:
+    """`PASSBOOK_OWNER_LOOKUP=off` asks no provider (the test suite sets it, as it sets PASSBOOK_FLEET=off)."""
+    import os
+
+    if os.environ.get("PASSBOOK_OWNER_LOOKUP", "").strip().lower() in ("off", "0", "no"):
+        raise ConnectionRefusedError("owner lookups are off")
     url, scheme, *body = OWNERS[kind]
     return _get(url, scheme, key, timeout, 200_000, body[0] if body else None)
 

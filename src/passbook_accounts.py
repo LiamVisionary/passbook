@@ -102,15 +102,31 @@ def _clean(entry: Mapping[str, Any]) -> dict:
     return kept
 
 
-def write(records: Mapping[str, Mapping[str, Any]], root: Path | None = None) -> None:
-    """Owner-only, replaced in one step, so a reader never sees half a file."""
+def asked(root: Path | None = None) -> dict[str, dict]:
+    """Keys whose provider was asked and named nobody (or refused, or did not answer), by key name: the
+    fingerprint of the value asked with, what happened, and when. So `balances` does not ask again on every
+    reading about a key whose provider will not say."""
+    try:
+        data = json.loads(path(root).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    found = data.get("asked") if isinstance(data, dict) else None
+    return {name: item for name, item in found.items() if isinstance(item, dict)} if isinstance(found, dict) else {}
+
+
+def write(records: Mapping[str, Mapping[str, Any]], root: Path | None = None,
+          tried: Mapping[str, Mapping[str, Any]] | None = None) -> None:
+    """Owner-only, replaced in one step, so a reader never sees half a file. `tried` replaces the record of
+    unanswered lookups; left out, it is kept as it was."""
     target = path(root)
     target.parent.mkdir(parents=True, exist_ok=True)
     clean = {name: _clean(entry) for name, entry in sorted(records.items()) if _clean(entry)}
+    tried = asked(root) if tried is None else tried
     temporary = target.with_suffix(".tmp")
     descriptor = os.open(str(temporary), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-        json.dump({"version": VERSION, "accounts": clean}, handle, indent=2, sort_keys=True)
+        json.dump({"version": VERSION, "accounts": clean, "asked": dict(sorted(tried.items()))}, handle,
+                  indent=2, sort_keys=True)
         handle.write("\n")
     os.replace(temporary, target)
     try:
@@ -242,30 +258,47 @@ def public(entry: Mapping[str, Any] | None) -> dict | None:
 
 
 def apply_found(key: str, found: Mapping[str, Any], *, provider: str, label: str, mark: str,
-                root: Path | None = None) -> tuple[dict, list[str]]:
-    """Keep what a provider said about KEY's owner. Returns the entry, and the fields it CHANGED from an
-    earlier, different value (a key that moved to another account, or a typo entered by hand)."""
+                root: Path | None = None) -> tuple[dict, list[str], list[str]]:
+    """Keep what a provider said about KEY's owner. Returns the entry, the fields it CHANGED from an earlier,
+    different value, and the fields it DROPPED.
+
+    When the email changes the key is in another account (or the one typed was wrong), so whatever else was
+    said about the old one and not confirmed now (a sign-in method, a note, typed by a person or an agent) is
+    dropped rather than shown beside the new address: a wrong sign-in method is the mistake this exists to
+    prevent, and a missing one only asks to be entered."""
     records = read(root)
     entry = dict(records.get(key) or {})
     sources = dict(entry.get("from") or {})
-    changed = []
+    clean: dict[str, str] = {}
     for field in ("email", "via", "account"):
-        value = found.get(field)
         try:
-            value = validate(field, value) if value else ""
+            value = validate(field, found.get(field)) if found.get(field) else ""
         except AccountError:
             value = ""
-        if not value:
-            continue
-        if entry.get(field) and entry[field] != value:
-            changed.append(field)
+        if value:
+            clean[field] = value
+    changed = [field for field, value in clean.items() if entry.get(field) and entry[field] != value]
+    dropped = []
+    if "email" in changed:
+        dropped = [field for field in FIELDS if field not in clean and entry.get(field)]
+        for field in dropped:
+            entry.pop(field, None)
+            sources.pop(field, None)
+    for field, value in clean.items():
         entry[field], sources[field] = value, label
     entry["from"] = sources
     entry["found"] = {"provider": provider, "fingerprint": mark, "at": _now()}
     entry["updatedAt"] = _now()
     records[key] = entry
-    write(records, root)
-    return _clean(entry), changed
+    tried = asked(root)
+    tried.pop(key, None)
+    write(records, root, tried)
+    return _clean(entry), changed, dropped
+
+
+#: How long an unanswered lookup is not repeated for the same key value: a timeout is worth trying again the
+#: next day; a refusal, or an answer that names nobody, only changes when the key does.
+RETRY_SECONDS = {"error": 86400}
 
 
 def lookup(values: Mapping[str, str], names: Iterable[str], *, root: Path | None = None, fresh: bool = False,
@@ -273,9 +306,9 @@ def lookup(values: Mapping[str, str], names: Iterable[str], *, root: Path | None
     """Ask each key's provider who owns it, for the keys whose provider will say.
 
     `values` are the opened keys (as `passbook balances` opens them). A key already asked with this very value
-    is not asked again unless `fresh`. Each result is {"key", "provider", "status", "account", "changed"}:
-    status is found, kept (asked before with this value), no-api, locked, rejected, not-allowed, error or
-    unsaid."""
+    is not asked again unless `fresh`, whatever the answer was (a timeout is retried after a day). Providers
+    are asked at once. Each result is {"key", "provider", "status", "account", "changed", "dropped"}: status is
+    found, kept (asked before with this value), no-api, locked, rejected, not-allowed, error or unsaid."""
     import passbook_balances as balances
 
     if root is None:
@@ -284,44 +317,61 @@ def lookup(values: Mapping[str, str], names: Iterable[str], *, root: Path | None
         root = passbook.root()
     fetch = fetch or balances.fetch_owner
     salt = balances.salt_for(root)
-    results = []
+    tried = asked(root)
+    results, pending = [], []
     for name in dict.fromkeys(names):
         entry = balances.owner_provider(name)
         result: dict[str, Any] = {"key": name, "provider": (entry or {}).get("id"), "providerName": (entry or {}).get("name"),
-                                  "status": "no-api", "account": None, "changed": []}
+                                  "status": "no-api", "account": get(name, root), "changed": [], "dropped": []}
         results.append(result)
         if not entry:
-            result["account"] = get(name, root)
             continue
         value = str(values.get(name) or "")
         if not value or value.startswith("hive-sealed:"):
-            result["status"], result["account"] = "locked", get(name, root)
+            result["status"] = "locked"
             continue
         mark = balances.fingerprint(salt, f"{entry['id']}#owner", value)
-        kept = get(name, root)
+        kept, before = result["account"], tried.get(name) or {}
         if not fresh and kept and (kept.get("found") or {}).get("fingerprint") == mark:
-            result["status"], result["account"] = "kept", kept
+            result["status"] = "kept"
             continue
+        if not fresh and before.get("fingerprint") == mark and \
+                time.time() - float(before.get("at") or 0) < RETRY_SECONDS.get(str(before.get("status")), float("inf")):
+            result.update(status=str(before.get("status") or "unsaid"), remembered=True)
+            continue
+        pending.append((result, entry, value, mark))
+
+    def ask(item: tuple) -> tuple[int, Any] | None:
+        _, entry, value, _ = item
         try:
-            status, payload = fetch(entry["owner"], value)
+            return fetch(entry["owner"], value)
         except Exception:  # noqa: BLE001 — offline, a timeout, a refused redirect: nothing is assumed
-            result["status"], result["account"] = "error", kept
-            continue
-        if status in (401, 403):
-            # 401: the key itself was refused. 403: the key works but may not read who owns it (a Cloudflare
-            # token without User Details, a fal key without billing read): nothing is wrong with the key.
-            result["status"], result["account"] = ("rejected" if status == 401 else "not-allowed"), kept
-            result["httpStatus"] = status
-            continue
+            return None
+
+    if len(pending) > 1:
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            answers = list(pool.map(ask, pending))
+    else:
+        answers = [ask(item) for item in pending]
+    for (result, entry, _, mark), answer in zip(pending, answers):
+        status, payload = answer if answer else (0, None)
         found = balances.parse_owner(entry["owner"], payload) if status == 200 else None
-        if not found:
-            result["status"], result["account"] = ("unsaid" if status == 200 else "error"), kept
-            if status != 200:
-                result["httpStatus"] = status
+        if found:
+            account, changed, dropped = apply_found(result["key"], found, provider=entry["id"],
+                                                    label=f"{entry['name']}'s API", mark=mark, root=root)
+            result.update(status="found", account=account, changed=changed, dropped=dropped)
             continue
-        account, changed = apply_found(name, found, provider=entry["id"], label=f"{entry['name']}'s API",
-                                       mark=mark, root=root)
-        result.update(status="found", account=account, changed=changed)
+        # 401: the key itself was refused. 403: the key works but may not read who owns it (a Cloudflare
+        # token without User Details, a fal key without billing read): nothing is wrong with the key.
+        result["status"] = ("rejected" if status == 401 else "not-allowed" if status == 403
+                            else "unsaid" if status == 200 else "error")
+        if status:
+            result["httpStatus"] = status
+        tried = asked(root)
+        tried[result["key"]] = {"fingerprint": mark, "status": result["status"], "at": time.time()}
+        write(read(root), root, tried)
     return results
 
 

@@ -4,6 +4,33 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+### Each key says which provider account it belongs to
+
+Liam, 2026-11-24, during the Ami key rotation: signing in to the wrong account cost time twice. DeepInfra's key
+belongs to an account that signs in with GitHub, so a Google sign-in with the same address made a new, empty
+account; DashScope's key belongs to an Alibaba Cloud account that signs in with Google under another address. "Keep
+track of email accounts, as automatically as possible, with fallback to optionally entering it on your own."
+
+- **`passbook account`** keeps, for each key, the email its provider account signs in with, how it signs in
+  (Google, GitHub, a password...), the account or team name, and a note. `passbook account lookup` asks the
+  providers whose API says who owns a key: DeepInfra (email, sign-in method and team), Vultr, RunPod, Hugging Face,
+  Stripe, Cloudflare (a token with User Details: Read), Vast.ai, Apify, Resemble, GitHub, Anthropic (the
+  organization's name) and fal (the username). Keys are opened the way `balances` opens them, and each read is
+  recorded. For the rest (DashScope, Groq, DeepSeek...) `passbook account set KEY --email … --via google`.
+- **Found and typed fields are kept apart.** A lookup fills what the provider said and leaves the rest, so a
+  sign-in method typed by hand survives. A key already asked is not asked again until its value changes, and a
+  rotation asks about the new key and says so when it is in a different account from the old one.
+- **Shown wherever a key is:** under the key in `passbook check`, in `passbook rotate KEY --status` and before a
+  rotation asks for the new value, in `passbook list --accounts`, under each `passbook balances` row, and on the
+  key's page in the window, where it can be added, changed or asked of the provider. On the window's Rotate
+  steps it says which account to sign in to.
+- **Agents:** the MCP server's `record_account` and `list_accounts`. An entry an agent makes says which agent made it.
+- **Kept on this machine only.** The record is `accounts.json` beside the store, readable by its owner only. It is
+  not a store key, so sync does not carry it to your other machines. The default `passbook list`, the readings
+  cache and balance alerts never contain it.
+- DeepInfra and Alibaba Cloud Model Studio (DashScope) are in the provider catalog, so their keys get a console
+  link on the Rotate steps.
+
 ## [1.10.24] — 2026-11-17
 
 ### A second Runware account's balance is read

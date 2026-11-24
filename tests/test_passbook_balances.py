@@ -35,7 +35,8 @@ NOW_ISO = time.strftime("%Y-%m-%dT00:00:00Z", time.gmtime())
 
 def test_the_catalog_is_whole_and_every_reader_has_an_address():
     ids = [entry["id"] for entry in balances.PROVIDERS]
-    assert len(ids) == len(set(ids)) == 65
+    # 67 since 2026-11-25: DeepInfra and Alibaba Cloud Model Studio (DashScope), for whose account a key is in.
+    assert len(ids) == len(set(ids)) == 67
     readers = {entry["adapter"] for entry in balances.PROVIDERS if entry.get("adapter")}
     readers |= {item["adapter"] for entry in balances.PROVIDERS for item in entry.get("accounts", ()) if item.get("adapter")}
     assert readers == set(balances.REQUESTS) and len(readers) == 28

@@ -271,6 +271,47 @@ TOOLS = [
         },
     },
     {
+        "name": "list_accounts",
+        "title": "Which account each credential belongs to",
+        "description": (
+            "Which provider account each credential was made in: the email it signs in "
+            "with, how it signs in (Google, GitHub, a password...), and the account or "
+            "team name. Check this before signing in to a provider to rotate or top up a "
+            "key, so you sign in to the account that owns it and not a new, empty one. "
+            "Personal data: never send it anywhere but to the owner."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "One credential; omit for all that have one."},
+            },
+        },
+    },
+    {
+        "name": "record_account",
+        "title": "Note which account a credential belongs to",
+        "description": (
+            "Record which provider account a credential belongs to, for a provider whose "
+            "API does not say (`passbook account lookup` asks the ones that do). Give what "
+            "you know; a field left out is kept as it was, and an empty string clears it. "
+            "Kept on this machine only."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "The credential's name."},
+                "email": {"type": "string", "description": "The email the account signs in with."},
+                "via": {"type": "string",
+                        "enum": ["google", "github", "microsoft", "apple", "gitlab", "password",
+                                 "email-link", "sso", "other", ""],
+                        "description": "How the account signs in."},
+                "account": {"type": "string", "description": "The account, organization or team name."},
+                "note": {"type": "string", "description": "Anything else, one line (region, which console)."},
+            },
+            "required": ["name"],
+        },
+    },
+    {
         "name": "vault_status",
         "title": "Is the store unlocked",
         "description": (
@@ -709,6 +750,29 @@ def _tool_record_used_in(arguments: Mapping[str, Any], state: Mapping[str, Any])
     return {"ok": True, "name": name, "where": where}
 
 
+def _tool_list_accounts(arguments: Mapping[str, Any], state: Mapping[str, Any]) -> dict[str, Any]:
+    import passbook_accounts as accounts
+
+    records = accounts.read()
+    wanted = str(arguments.get("name") or "").strip()
+    names = [wanted] if wanted else sorted(records)
+    return {"ok": True, "accounts": {name: accounts.public(records.get(name)) for name in names}}
+
+
+def _tool_record_account(arguments: Mapping[str, Any], state: Mapping[str, Any]) -> dict[str, Any]:
+    """Recorded as the agent's, never as the owner's: the window and `passbook account` say who entered it."""
+    import passbook_accounts as accounts
+
+    name = str(arguments.get("name") or "").strip()
+    fields = {field: (None if arguments.get(field) is None else str(arguments.get(field)))
+              for field in accounts.FIELDS}
+    try:
+        entry = accounts.set_fields(name, fields, source=f"mcp:{_client_name(state)}")
+    except accounts.AccountError as error:
+        return {"ok": False, "error": str(error)}
+    return {"ok": True, "name": name, "account": accounts.public(entry)}
+
+
 def _record_run_sinks(command: list[str], keys: list[str], cwd: str, answer: Mapping[str, Any]) -> list[str]:
     """After a successful `run_with_credentials`, note where it put the keys.
 
@@ -750,6 +814,8 @@ HANDLERS: dict[str, Callable[[Mapping[str, Any], Mapping[str, Any]], dict[str, A
     "get_oauth_token": _tool_get_oauth_token,
     "list_services": _tool_list_services,
     "record_used_in": _tool_record_used_in,
+    "list_accounts": _tool_list_accounts,
+    "record_account": _tool_record_account,
 }
 
 

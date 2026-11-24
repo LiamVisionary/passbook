@@ -533,6 +533,35 @@ fn rotate_verify(provider: String) -> Result<Value, String> {
     }))
 }
 
+// ── whose account a key is in ──────────────────────────────────────────────
+//
+// `passbook account` (passbook_accounts.py): the sign-in email, how the account signs in, and its name, kept
+// on this machine only. Each field goes as `--field=value`, so a value that starts with a dash stays a value.
+
+/// Keep what the owner typed about KEY's account. A field left empty is cleared.
+#[tauri::command(async)]
+fn account_set(key: String, email: String, via: String, account: String, note: String) -> Result<Value, String> {
+    let key = key.trim();
+    if !is_key_name(key) {
+        return Err("Which key?".into());
+    }
+    let fields = [("--email", email), ("--via", via), ("--account", account), ("--note", note)];
+    let given: Vec<String> = fields.iter().map(|(flag, value)| format!("{flag}={}", value.trim())).collect();
+    let mut args = vec!["account", "set", key, "--json", "--app", "passbook-app"];
+    args.extend(given.iter().map(String::as_str));
+    json_or_complaint(run_with_stdin(&args, "")?)
+}
+
+/// Ask the key's provider who owns it, for a provider that will say. Only the key's name leaves here.
+#[tauri::command(async)]
+fn account_lookup(key: String) -> Result<Value, String> {
+    let key = key.trim();
+    if !is_key_name(key) {
+        return Err("Which key?".into());
+    }
+    run_json(&["account", "lookup", key, "--fresh", "--json", "--app", "passbook-app"])
+}
+
 /// Delete a key from the store.
 ///
 /// The one operation here that can break something else on this machine, so it
@@ -2810,6 +2839,7 @@ fn main() {
             github_disconnect, github_targets, github_environments, github_check, github_push,
             balances_state, balances_enable, balances_open, balances_icons, balances_full, balances_known, console_signin, balances_alerts, appearance, set_appearance,
             add_pasted, sync_status, sync_now, rotate_status, rotate_start, rotate_finish, rotate_verify,
+            account_set, account_lookup,
             update_state, update_install
         ])
         .run(tauri::generate_context!())

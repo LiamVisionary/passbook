@@ -2150,6 +2150,8 @@ Use the copy button to put it on the clipboard."
       <div class="drow"><span class="dlabel">On your devices</span>
         <span class="sub">${esc(whereLine(k))}</span></div>
 
+      ${accountRows(k)}
+
       <div class="drow"><span class="dlabel">Replace it</span>
         <button class="act" data-rotate-open="${esc(k)}">${rotateView.key === k ? "Close" : "Rotate…"}</button></div>
       ${rotateView.key === k ? `<div class="dfull">${rotatePanel(k)}</div>` : ""}
@@ -2169,6 +2171,63 @@ Use the copy button to put it on the clipboard."
     const lacking = lackingDevices(k);
     if (!lacking.length) return `This device and ${others.length === 1 ? deviceName(others[0].host) : `all ${others.length} others`}.`;
     return `Not on ${lacking.map(deviceName).join(", ")} yet.`;
+  }
+
+  // ── whose account a key is in ─────────────────────────────────────────
+  //
+  // `passbook account` (passbook_accounts.py): the email the provider account signs in with, how it signs
+  // in, and its name. Signing in the wrong way at a provider makes a new, empty account (Liam, 2026-11-24:
+  // a Google sign-in to DeepInfra, whose account signs in with GitHub), so the key's page says which
+  // account to sign in to. Found by asking the provider where it will say; typed here where it will not.
+  let accountEdit = { key: "", draft: null, busy: "", error: "", said: "" };
+
+  function accountRows(k) {
+    const acc = state.catalog?.accounts || {};
+    const entry = acc.entries?.[k], askable = (acc.askable || []).includes(k), v = accountEdit;
+    const busy = v.key === k && !!v.busy;
+    const ask = askable ? `<button class="act" data-account-lookup="${esc(k)}" ${busy ? "disabled" : ""}>${v.key === k && v.busy === "lookup" ? "Asking…" : "Ask the provider"}</button>` : "";
+    const said = v.key === k && (v.error || v.said) ? `<p class="note flat dfull">${esc(v.error || v.said)}</p>` : "";
+    if (v.key !== k || !v.draft) {
+      return `<div class="drow"><span class="dlabel">Account</span>
+        <div><span class="sub">${entry ? `${esc(entry.line)} <small>(${esc(entry.said)})</small>` : "Not recorded: which account is this key made in?"}</span>
+        <span class="chips inline">${ask}<button class="act" data-account-edit="${esc(k)}">${entry ? "Change" : "Add"}</button></span></div></div>${said}`;
+    }
+    const d = v.draft, vias = Object.entries(acc.via || {});
+    return `<div class="drow"><span class="dlabel">Account</span><span class="sub">The provider account this key was made in. Kept on this device only.</span></div>
+      <div class="dfull addrow two">
+        <input id="acct-email" data-account-field="email" placeholder="Email it signs in with" spellcheck="false" autocomplete="off" value="${esc(d.email)}" />
+        <select id="acct-via" data-account-field="via"><option value="">Signs in with…</option>${vias.map(([id, label]) =>
+          `<option value="${esc(id)}" ${d.via === id ? "selected" : ""}>${esc(label)}</option>`).join("")}</select>
+      </div>
+      <div class="dfull addrow two" style="grid-template-columns: minmax(0,1fr) minmax(0,1fr)">
+        <input id="acct-name" data-account-field="account" placeholder="Account or team name (optional)" spellcheck="false" autocomplete="off" value="${esc(d.account)}" />
+        <input id="acct-note" data-account-field="note" placeholder="Note: region, which console (optional)" spellcheck="false" autocomplete="off" value="${esc(d.note)}" />
+      </div>
+      <div class="dfull chips inline">
+        <button class="act" data-account-save="${esc(k)}" ${busy ? "disabled" : ""}>${v.busy === "save" ? "Saving…" : "Save"}</button>
+        <button class="act" data-account-cancel ${busy ? "disabled" : ""}>Cancel</button>${ask}
+      </div>${said}`;
+  }
+
+  async function accountStep(k, command, args, busyAs) {
+    accountEdit = { ...accountEdit, key: k, busy: busyAs, error: "", said: "" }; paint();
+    try {
+      const answer = await invoke(command, args);
+      if (command === "account_lookup") {
+        const r = (answer?.results || [])[0] || {};
+        accountEdit.said = r.status === "found" ? "Found by asking the provider."
+          : r.status === "kept" ? "The provider was asked about this key before; nothing changed."
+          : r.status === "not-allowed" ? "This key may not read who owns it. Add the account by hand."
+          : r.status === "rejected" ? "The provider rejected the key."
+          : r.status === "unsaid" ? "The provider answered without naming an account."
+          : "The provider could not be asked just now.";
+        if (r.status === "found" && accountEdit.draft) accountEdit.draft = null;
+      } else {
+        accountEdit.draft = null;
+      }
+      state = await invoke("state");
+    } catch (e) { accountEdit.error = String(e?.message || e); }
+    accountEdit.busy = ""; paint();
   }
 
   // ── rotating a key ─────────────────────────────────────────────────────
@@ -2233,7 +2292,8 @@ Use the copy button to put it on the clipboard."
     if (!pending) {
       return `<div class="rotate">
         <div class="rotstep"><span class="stepno">1</span><div class="grow"><strong>Make a new key${provider ? ` at ${esc(provider.name)}` : ""}</strong>
-          <div class="note flat">Create the new one before removing the old, so nothing stops working in between.</div></div>
+          <div class="note flat">Create the new one before removing the old, so nothing stops working in between.</div>
+          ${d.account?.line ? `<div class="note flat">Sign in to the account it belongs to: <strong>${esc(d.account.line)}</strong>.</div>` : ""}</div>
           ${provider ? `<button class="act" data-topup="${esc(provider.id)}">Open ${esc(provider.name)}</button>` : ""}</div>
         <div class="rotstep"><span class="stepno">2</span><div class="grow"><strong>Paste it here</strong>
           <div class="note flat">PassBook replaces the value, sends it to your other devices, and keeps the old one until you say the new one works.</div>
@@ -6025,6 +6085,25 @@ passbook oauth connect google:work</pre>
       syncView.open = syncView.open === b.dataset.syncOpen ? "" : b.dataset.syncOpen; paint();
     });
     main.querySelectorAll("[data-rotate-open]").forEach((b) => b.onclick = () => openRotate(b.dataset.rotateOpen));
+    main.querySelectorAll("[data-account-edit]").forEach((b) => b.onclick = () => {
+      const k = b.dataset.accountEdit, e = state.catalog?.accounts?.entries?.[k] || {};
+      accountEdit = { key: k, busy: "", error: "", said: "",
+        draft: { email: e.email || "", via: e.via || "", account: e.account || "", note: e.note || "" } };
+      paint();
+    });
+    main.querySelectorAll("[data-account-field]").forEach((el) => el.oninput = el.onchange = () => {
+      if (accountEdit.draft) accountEdit.draft[el.dataset.accountField] = el.value;
+    });
+    main.querySelectorAll("[data-account-cancel]").forEach((b) => b.onclick = () => {
+      accountEdit = { key: "", draft: null, busy: "", error: "", said: "" }; paint();
+    });
+    main.querySelectorAll("[data-account-save]").forEach((b) => b.onclick = () => {
+      const d = accountEdit.draft || {};
+      accountStep(b.dataset.accountSave, "account_set", { key: b.dataset.accountSave, email: d.email || "",
+        via: d.via || "", account: d.account || "", note: d.note || "" }, "save");
+    });
+    main.querySelectorAll("[data-account-lookup]").forEach((b) => b.onclick = () =>
+      accountStep(b.dataset.accountLookup, "account_lookup", { key: b.dataset.accountLookup }, "lookup"));
     main.querySelectorAll("[data-rotate-go]").forEach((b) => b.onclick = () => openRotate(b.dataset.rotateGo, true));
     main.querySelectorAll("[data-rotate-start]").forEach((b) => b.onclick = () => {
       const value = String(document.getElementById("rotvalue")?.value || "").trim();

@@ -191,6 +191,7 @@ def cmd_check(args: argparse.Namespace) -> int:
             detail = f" ({len(value)} chars)" if args.length else ""
             if not args.quiet:
                 print(f"{key}: set{detail}")
+                _print_account(key)
         elif key in refused:
             if not args.quiet:
                 print(f"{key}: refused — {refused[key]}")
@@ -204,6 +205,7 @@ def cmd_check(args: argparse.Namespace) -> int:
             sealed_off.append(key)
             if not args.quiet:
                 print(f"{key}: set, never printed here")
+                _print_account(key)
         elif key in held:
             if transport is None:
                 import passbook_broker
@@ -1227,6 +1229,190 @@ def cmd_used_in(args: argparse.Namespace) -> int:
     return 0
 
 
+ACCOUNT_REASON = "look up which account owns a key"
+
+
+def cmd_account(args: argparse.Namespace) -> int:
+    """Which provider account each key belongs to (passbook_accounts.py).
+
+        passbook account [list]                         every key's account
+        passbook account KEY                            one key's account
+        passbook account set KEY --email … --via google [--account …] [--note …]
+        passbook account clear KEY                      forget it
+        passbook account lookup [KEY …] [--fresh]       ask the providers that will say
+    """
+    import passbook_accounts as accounts
+
+    words = list(args.words or [])
+    verbs = {"set", "clear", "forget", "remove", "lookup", "list", "ls", "show"}
+    if len(words) > 1 and words[1] in verbs and words[0] not in verbs:
+        words[0], words[1] = words[1], words[0]  # `account KEY set` reads the same as `account set KEY`
+    verb = words[0] if words and words[0] in verbs else ("show" if words else "list")
+    names = words[1:] if words and words[0] in verbs else words
+    root = passbook.root()
+
+    if verb == "set":
+        if len(names) != 1:
+            return _fail("Say which key:  passbook account set KEY --email you@example.com --via google")
+        key = names[0]
+        fields = {"email": args.email, "via": args.via, "account": args.account, "note": args.note}
+        try:
+            entry = accounts.set_fields(key, fields, source=_entered_by(args))
+        except accounts.AccountError as error:
+            return _fail(str(error), "Sign-in methods: " + ", ".join(accounts.VIA))
+        if key not in set(passbook.key_names()):
+            print(f"note: {key} is not in this store (yet); kept anyway.", file=sys.stderr)
+        if args.json:
+            print(json.dumps({"key": key, "account": accounts.public(entry)}))
+        else:
+            print(f"{key}: {accounts.describe(entry) or 'no account recorded'}")
+        return 0
+    if verb in {"clear", "forget", "remove"}:
+        if len(names) != 1:
+            return _fail("Say which key:  passbook account clear KEY")
+        gone = accounts.forget(names[0])
+        print(json.dumps({"key": names[0], "cleared": gone}) if args.json
+              else (f"{names[0]}: its account is forgotten." if gone else f"{names[0]} had no account recorded."))
+        return 0
+    if verb == "lookup":
+        return _account_lookup(args, names)
+
+    records = accounts.read()
+    keys = names if names else sorted(records)
+    if args.json:
+        print(json.dumps({"accounts": {name: accounts.public(records.get(name)) for name in keys}}))
+        return 0
+    if not keys:
+        print("No account is recorded for any key yet.")
+        print("Ask the providers that will say:  passbook account lookup")
+        print("Or enter one:  passbook account set KEY --email you@example.com --via google")
+        return 0
+    held = set(passbook.key_names())
+    for name in keys:
+        entry = records.get(name)
+        if entry:
+            print(f"{name}: {accounts.describe(entry)}  ({accounts.sources(entry)})")
+        elif name in held:
+            import passbook_balances as balances
+
+            how = ("ask its provider:  passbook account lookup " + name) if balances.owner_provider(name) \
+                else f"enter it:  passbook account set {name} --email … --via google|github|password"
+            print(f"{name}: no account recorded; {how}")
+        else:
+            print(f"{name}: not in this store, and no account recorded")
+    return 0
+
+
+def _entered_by(args: argparse.Namespace) -> str:
+    """Who entered an entry: "by hand" for a person (at the command line or in the window), else the app
+    that says it is calling, so an agent's entry is told apart from the owner's."""
+    import passbook_accounts as accounts
+
+    said = caller("", args)
+    return accounts.BY_HAND if not said or said == "passbook-app" else said
+
+
+def _account_lookup(args: argparse.Namespace, names: list[str]) -> int:
+    """Open the keys whose provider says who owns them, as `balances` opens keys, and ask."""
+    import passbook_accounts as accounts
+
+    who = caller("passbook-account", args)
+    held = passbook.key_names()
+    wanted = accounts.wanted(held, only=names)
+    missing = [name for name in names if name not in set(held)]
+    if not wanted:
+        if args.json:
+            print(json.dumps({"results": [{"key": name, "status": "missing"} for name in missing]}))
+            return 1 if missing else 0
+        return _fail(f"Not in this store: {', '.join(missing)}" if missing
+                     else "No key here belongs to a provider that says who owns it.",
+                     "Enter it instead:  passbook account set KEY --email … --via google")
+    import passbook_balances as balances
+
+    asking = [name for name in wanted if balances.owner_provider(name)]
+    got = _balance_values(who, asking, reason=ACCOUNT_REASON) if asking else ({}, set())
+    if isinstance(got, int):
+        return got
+    values, brokered = got
+    _record_run_reads(who, ACCOUNT_REASON, asking, values, brokered)
+    results = accounts.lookup(values, wanted, fresh=args.fresh)
+    results += [{"key": name, "status": "missing", "account": None, "changed": []} for name in missing]
+    if args.json:
+        print(json.dumps({"results": [{**item, "account": accounts.public(item.get("account"))} for item in results]}))
+        return 0
+    said = {
+        "found": "found", "kept": "already known for this key",
+        "no-api": "its provider does not say who owns a key; enter it:  passbook account set {key} --email … --via …",
+        "locked": "could not be opened here",
+        "rejected": "the provider rejected the key",
+        "not-allowed": "this key may not read who owns it; enter it:  passbook account set {key} --email … --via …",
+        "error": "the provider did not answer; try again",
+        "unsaid": "the provider answered without naming an account",
+        "missing": "not in this store",
+    }
+    for item in results:
+        line = accounts.describe(item.get("account"))
+        status = said.get(item["status"], item["status"]).format(key=item["key"])
+        print(f"{item['key']}: {line}  ({status})" if line else f"{item['key']}: {status}")
+        for field in item.get("changed") or []:
+            print(f"    note: the {field} recorded before was different; the provider's answer replaced it")
+    return 0
+
+
+def _catalog_accounts(names: list[str]) -> dict:
+    """Each held key's account, and whether its provider can be asked, for the window. Never fails it."""
+    try:
+        import passbook_accounts as accounts
+        import passbook_balances as balances
+
+        records = accounts.read()
+        return {"entries": {name: accounts.public(records[name]) for name in names if name in records},
+                "askable": sorted(name for name in names if balances.owner_provider(name)),
+                "via": accounts.VIA}
+    except Exception:  # noqa: BLE001
+        return {"entries": {}, "askable": [], "via": {}}
+
+
+def _note_new_owner(key: str, value: str) -> None:
+    """After a rotation, ask the key's provider who owns the NEW key, when it will say, and say so when that
+    is not the account recorded for the old one. Best effort: a rotation never fails over it."""
+    try:
+        import passbook_accounts as accounts
+        import passbook_balances as balances
+
+        if not balances.owner_provider(key):
+            return
+        before = accounts.describe(accounts.get(key))
+        result = accounts.lookup({key: value}, [key], fresh=True)[0]
+        if result["status"] != "found":
+            return
+        now = accounts.describe(result["account"])
+        if result.get("changed"):
+            print(f"account: {now}  (the old key was recorded as {before}; the new one is in another account)")
+        else:
+            print(f"account: {now}")
+    except Exception:  # noqa: BLE001
+        return
+
+
+def _print_account(key: str) -> None:
+    """The line under a key that says whose account it is, when that is known. Its own line, indented, so
+    the `KEY: set` line a script reads is unchanged."""
+    line = _account_line(key)
+    if line:
+        print(f"    account: {line}")
+
+
+def _account_line(key: str) -> str:
+    """"owned by …" for one key, or "" (for `check`, `rotate`). Never fails the command it is part of."""
+    try:
+        import passbook_accounts as accounts
+
+        return accounts.describe(accounts.get(key))
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def _footprint_lines(key: str) -> list[str]:
     """Where a key has been sent, for `history` and `rotate`. Names only."""
     try:
@@ -1273,8 +1459,13 @@ def rotation_status(key: str) -> dict:
     provider = next((entry for entry in balances.PROVIDERS
                      if key in (*entry.get("keys", ()), *entry.get("reading_keys", ()))), None)
     reads_with = tuple((provider or {}).get("reading_keys") or (provider or {}).get("keys") or ())
+    import passbook_accounts as accounts
+
     return {
         "key": key, "exists": key in set(passbook.key_names()),
+        # Whose account the key is made in, so the new one is made in the same account (sign in as this).
+        "account": accounts.public(accounts.get(key)),
+        "canLookUpAccount": bool(balances.owner_provider(key)),
         "services": [{"service": str(item.get("service")), "lastStatus": item.get("lastStatus"),
                       "lastRunAt": item.get("lastRunAt")} for item in services.bindings(key)],
         "places": [{"where": str(item.get("where", "")), "note": str(item.get("note") or "")}
@@ -1407,6 +1598,11 @@ def _rotate(args: argparse.Namespace) -> int:
     if args.stdin:
         fresh = sys.stdin.read().strip()
     elif sys.stdin.isatty():
+        owner = _account_line(key)
+        if owner:
+            # Make the new key in the account the old one came from (a second account made by signing in
+            # the wrong way holds no credit and none of the old key's settings).
+            print(f"Make the new key in the account it belongs to: {owner}")
         try:
             fresh = hidden_input(f"New value for {key}: ").strip()
             again = hidden_input("Again, to be sure: ").strip()
@@ -1451,6 +1647,7 @@ def _rotate(args: argparse.Namespace) -> int:
         services.write_rotations(state)
         return 1
     print(f"replaced: {key}")
+    _note_new_owner(key, fresh)
     if not getattr(args, "no_sync", False):
         _replicate_write([key], {key: fresh})
 
@@ -2924,8 +3121,21 @@ def cmd_get(args: argparse.Namespace) -> int:
 
 
 def cmd_list(args: argparse.Namespace) -> int:
-    """Key names. Safe to paste anywhere."""
+    """Key names. Safe to paste anywhere. `--accounts` adds whose account each key is in, which is personal
+    data (an email), so it is never part of the default output."""
     names = passbook.key_names()
+    if getattr(args, "accounts", False):
+        import passbook_accounts as accounts
+
+        records = accounts.read()
+        if args.json:
+            print(json.dumps({name: accounts.public(records.get(name)) for name in names}, indent=2))
+            return 0
+        width = max((len(name) for name in names), default=0)
+        for name in names:
+            line = accounts.describe(records.get(name))
+            print(f"{name:<{width}}  {line}".rstrip() if line else name)
+        return 0
     if args.json:
         print(json.dumps(names, indent=2))
     else:
@@ -3299,6 +3509,9 @@ def cmd_balances(args: argparse.Namespace) -> int:
     summary = balances.enrich(root, rows)
     told = alerts.run(root, rows, values.get(bot_key, "")) if bot_key else {"on": alerting["on"], "sent": 0, "failed": 0,
         "error": f"The bot token ({alerting['key']}) is not in this store." if alerting["on"] and not ids else ""}
+    # Whose account each row is (passbook_accounts.py), added after the alerts went out and after the rows were
+    # remembered, so an email is never in a message or the readings cache.
+    _owners_for_rows(rows, values)
     if args.json:
         print(json.dumps({"enabled": balances.settings(root)["enabled"], "cached": from_cache, "providers": rows,
                           "summary": summary, "issues": balances.issues(rows), "alerts": {**alerting, **told},
@@ -3323,7 +3536,27 @@ def cmd_balances(args: argparse.Namespace) -> int:
         print(_balance_line(row))
         if row.get("topUpUrl") and row.get("status") != "missing":
             print(f"    top up: {row['topUpUrl']}")
+        if (row.get("owner") or {}).get("line"):
+            print(f"    account: {row['owner']['line']}")
     return 0
+
+
+def _owners_for_rows(rows: list[dict], values: dict[str, str]) -> None:
+    """Ask who owns the keys this reading already opened, where the provider will say and it was not asked
+    with this very key before, and put each row's account on it as `owner`. Best effort."""
+    try:
+        import passbook_accounts as accounts
+        import passbook_balances as balances
+
+        opened = [name for name, value in values.items() if value and balances.owner_provider(name)]
+        if opened:
+            accounts.lookup(values, opened)
+        records = accounts.read()
+        for row in rows:
+            keys = [*(row.get("accountKeys") or []), *([row["keyName"]] if row.get("keyName") else [])]
+            row["owner"] = accounts.summary(keys, records=records)
+    except Exception:  # noqa: BLE001 — a reading never fails over whose account it is
+        return
 
 
 def cmd_access(args: argparse.Namespace) -> int:
@@ -6588,6 +6821,8 @@ def machine_state(*, verify: bool = False) -> dict:
             # distinguishable from a daemon that asks every minute.
             "agent_activity": passbook_catalog.agent_activity(),
             "modes": list(passbook_access.AUDIENCE_MODES),
+            # Whose provider account each key is in (passbook_accounts.py), for the key's page.
+            "accounts": _catalog_accounts(names),
         }
     except ImportError:
         state["catalog"] = {"available": False, "groups": {}, "group_of": {},
@@ -7952,6 +8187,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     listing = subs.add_parser("list", help="list key names")
     listing.add_argument("--json", action="store_true")
+    listing.add_argument("--accounts", action="store_true",
+                         help="also whose provider account each key is in (an email: keep it to yourself)")
     listing.set_defaults(func=cmd_list)
 
     status = subs.add_parser("status", help="where the store is, how many keys, which apps")
@@ -8234,6 +8471,23 @@ def build_parser() -> argparse.ArgumentParser:
     used_in_cmd.add_argument("--note", default="", help="kept beside the place")
     used_in_cmd.add_argument("--json", action="store_true")
     used_in_cmd.set_defaults(func=cmd_used_in)
+
+    account_cmd = subs.add_parser(
+        "account", help="which provider account each key belongs to: sign-in email, method, name",
+        description="passbook account [list] | passbook account KEY | "
+                    "passbook account set KEY --email … --via google|github|password [--account …] [--note …] | "
+                    "passbook account clear KEY | passbook account lookup [KEY …] [--fresh]")
+    account_cmd.add_argument("words", nargs="*", metavar="set|clear|lookup|list KEY")
+    account_cmd.add_argument("--email", default=None, help="set: the email the account signs in with")
+    account_cmd.add_argument("--via", default=None,
+                             help="set: how it signs in (google, github, microsoft, apple, gitlab, password, "
+                                  "email-link, sso, other)")
+    account_cmd.add_argument("--account", default=None, help="set: the account, organization or team name")
+    account_cmd.add_argument("--note", default=None, help="set: anything else, one line (region, which console)")
+    account_cmd.add_argument("--fresh", action="store_true", help="lookup: ask again even for a key already asked")
+    account_cmd.add_argument("--json", action="store_true")
+    account_cmd.add_argument("--app", default="", help="who is asking; recorded")
+    account_cmd.set_defaults(func=cmd_account)
 
     rotate_cmd = subs.add_parser(
         "rotate", help="replace a key, push it everywhere it lives, keep the old one until "

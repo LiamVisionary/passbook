@@ -4,6 +4,129 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+### Keys: a key can be found, opened and changed without hunting for how, and adding one does not wait on other machines
+
+Liam, 2026-11-24: "our passbook ui feels incredibly unintuitive.. i search a key and there is no way to edit it. i
+even press the right arrow on it and it does nothing when in search wtf. adding a key also has a delay sometimes."
+Each of those was reproduced first, in the real page against a throwaway store and the real command line, in
+Chrome and in WebKit.
+
+- **Every key has a pencil that changes its value.** The only way had been to reveal the value and then click the
+  picture of it, which nothing on the row said, and which a guarded key (never revealed) could not do at all: a
+  guarded key's value can now be replaced from the window, and it stays guarded. The
+  box it opens has **Save** and **Cancel**: Enter saves, Escape cancels. **It no longer saves when it loses
+  focus.** That was deliberate once (it is how the HivemindOS card behaves), and it meant clicking away to check
+  something overwrote a working credential with half a paste. The clock that hides a revealed value no longer
+  closes a box somebody is typing into.
+- **The chevron opens the row whatever is selected.** With a key's name still highlighted from a double-click,
+  every chevron on the page did nothing, press after press: the handler gave way to any selection anywhere, for
+  the sake of the name. Only a click on a name gives way now, and only to a selection of that name.
+- **The list answers the keyboard.** The arrows, Enter and Escape did nothing on it. Now the up and down arrows
+  move a cursor along the rows, Enter or the right arrow opens the key it is on, the left arrow or Escape closes
+  it, Cmd+C copies its value and Cmd+E changes it. Typing anywhere on Keys goes to the search box, and a search
+  puts the cursor on its best match, so "type, Enter" opens a key. The right arrow opens a key in Find anything.
+- **Search takes words and groups, and says how many it found.** It was one substring of the name, so "stripe
+  secret" found nothing, and a key filed under a vendor its name does not carry could not be found by the vendor.
+  The count is beside the box ("6 of 568"). Nothing found offers what to do next: search past a filter that is
+  still on, clear the search, or add a key by that name.
+- **The search box keeps its caret.** Copy a value, then start typing a search: when the "Copied" tick reverted
+  1.4 seconds later the page repainted, rebuilt the search box and left the caret out of it, so "openai_api"
+  arrived as "openai" and the rest went nowhere (reproduced in WebKit and in Chrome). The helper that carries a
+  field across a repaint gave up when the rebuilt field already had text, which the search box always has. The
+  search box, the add form and the value box are now carried across every repaint, whatever caused it.
+- **Adding a key no longer waits for the other machines.** `add --sync` writes the key here and then sends it to
+  every other machine, and the window waited for both with its button grayed. That is the likeliest cause of the
+  delay, and it is inferred: the write takes a tenth of a second, the sending was not timed against Liam's
+  machines, and asking those machines for their status (`passbook sync --status`) took 23 to 48 seconds on his
+  Mac that day. `passbook add` now says what it wrote before it sends anything (it was sitting in a pipe buffer
+  until the command ended), the app answers the window on that, and reports how the sending went afterward
+  (`passbook://sent`: names and machine names). Measured with the sending replaced by a three-second wait: the
+  real command line said "added" after 3.1 seconds before and after 0.1 now, on a plain store and a sealed one.
+  Still one command, still `--sync`. **It needs both halves:** an updated app with an older `passbook` waits as
+  long as it always did.
+- **An add that changed nothing is not called "Added".** `passbook add` leaves an existing key alone and exits 0,
+  and the window answered that with a green tick while the store kept the old value. A name that is already here
+  is said so as it is typed, the button becomes **Replace value**, and it is replaced.
+- **The add form keeps what was typed until the store has it.** Pressing Add emptied both fields at once, so a
+  refused add also cost the paste. A refusal is now shown under the fields, which are as they were. Enter adds
+  from either field (it did nothing). A name the store cannot take ("my key") is said so, with the name it can
+  take, instead of "Nothing on stdin looked like KEY=value". Adding one key no longer grays the rest of the page.
+- **A key added or found is brought on screen.** The add form sat at the top while the new row appeared somewhere
+  below it; the header (search, add, filters) now stays at the top of the window and the list scrolls to the row.
+  Find anything, then Enter on a key in a folded or far-down group, landed on Keys with nothing opened: the row
+  was counted in the wrong order, and a folded group builds no rows.
+- **Two refusals on Settings → Security were shown nowhere.** "Seal reads" and "Open at restart" reported a
+  failure through a function defined inside the lock screen's code, so reporting it threw instead, and the press
+  read as dead. They are shown in the notice bar, and nothing in the window uses a native alert.
+- **A press is not lost to a repaint.** A click is a mouse going down and coming up on the same element, and a
+  repaint replaces every element: one that landed between the two swallowed the click, with nothing on screen to
+  say so. Reproduced in WebKit and in Chrome (copy a value, press another row's chevron as the tick reverts: the
+  row stays shut). The page repaints by itself every five seconds on a machine whose agents are reading keys, so
+  this was the occasional press that did nothing, anywhere in the window. A repaint now waits for a press that is
+  in progress. How often it happened was not measured.
+- **Activity says when its check could not be run.** Pressing Verify when the check itself failed answered "This
+  record has not been verified yet", which is what the page said before the press. Found by pressing every kind
+  of control on all eleven pages against a backend that refuses everything and listing the presses that put
+  nothing on screen: this was the only one that was not simply the option already selected.
+- **A refused press gives back what was typed.** "A vault password must be at least 8 characters" came with both
+  fields emptied, the name back to "Owner". The forms on Security, Sign-ins and the rest that go through the same
+  three calls keep what was in them when the answer is no, and still clear when it is yes.
+- **Checked:** 17 new tests in the Python suite, 16 of them failing on 1.10.24, four of them running the page's own
+  functions in Node; the full suite passes (1647 passed, 3 skipped; 1630 and 3 before). 5 new tests in the crate
+  (`cargo test adding::`), one timing the answer against a stand-in that takes two seconds to send; the crate's
+  46 pass (45, and 1 ignored as before). A 41-step walk of the page with real key presses and clicks passes in
+  WebKit and in Chrome, against the real command line and a throwaway store; the add, the pencil and a guarded
+  key were also walked on a sealed copy of it. At 568 keys a keystroke in the search repaints in 5 to 6 ms.
+  **Not checked:** the built app itself on any platform (it compiles; it was never launched), and the sending
+  against real machines (the suite and the walk keep off the tailnet). The pictures of Keys in the README
+  predate the pencil.
+
+### Security, Sign-ins and Devices: asked on the page, added from a form, and progress you can see
+
+Liam, 2026-11-25, of the pages left alone by the Keys work: "do all this too". The four were what a press on
+every control of the other pages turned up.
+
+- **Nothing asks through the webview's own dialog any more.** Allowing reads again, opening the vault at
+  restart and disconnecting GitHub each stopped the whole page with a confirm() box from outside it. Each now
+  asks on the page, under the button, with the same words, Cancel focused (so Enter is never the yes) and
+  Escape to close. **Forget** on a sign-in, which deletes its tokens and which the command line refuses without
+  `--yes`, asked nothing at all; it asks now too.
+- **A sign-in is added from a form.** The Sign-ins page printed two terminal commands with "<your client id>" to
+  fill in by hand. **Add a sign-in** asks for the provider, an optional name, the client ID and secret, and for
+  another provider its two addresses, then describes it and opens the sign-in in one press. The secret goes to
+  `passbook oauth add` on stdin, never as an argument; every option is written `--name=value` with the
+  positionals after `--`, so a typed name that starts with a dash stays a name. A sign-in waiting on the
+  browser can be stopped instead of hiding its row's buttons for three minutes.
+- **The Devices check says which device it is waiting on.** It asked each other device in turn, so one that
+  did not answer held up the rest for its whole timeout (20 s each), and the page said only "Checking the other
+  devices…" for all of it. `passbook sync --status` now asks them all at once, and with `--progress` writes each
+  step to stderr as it happens (host names and counts, never an address); the app passes each step to the page,
+  which lists the devices being asked, marks each one as it answers, and counts the seconds on the ones still
+  out. An older command line without `--progress` is asked again without it. On this Mac against its two real
+  devices the check took 15 s, the slower device answering after 8.5 s; one after another, the same two had
+  taken 9 s earlier in the day when both answered in about 2.5 s, so the gain is in the case where one is slow
+  or down.
+- **Security asks for a password only where one exists.** With no vault yet it showed three password boxes
+  (open at restart, a recovery code, and the one that creates the vault, fourth on the page); those panels now
+  wait until the device is secured, and what needs doing comes first. With the vault shut, signing in was
+  offered twice and the banner above it offered a third way to the same form. "Turn off encryption" was a
+  password box that was always out; it is a button that opens the box with what turning it off costs. The
+  explanations moved into the fold-outs the page already used, and the three "On screen" rows are one line
+  that names what is missing as missing. On a store with no vault the page went from about 1,890 px to 1,030.
+- **Checked:** 6 new tests in the Python suite (5 in the app contract, 1 timing the status check against two
+  0.6 s devices and reading its progress lines), and the stay-open test now pins the question on the page instead
+  of confirm(); the full suite passes (1697 passed, 3 skipped, with another session's new tests in the same
+  checkout). 4 new tests in the crate (streamed progress, a failed check's reason, and what the sign-in form may
+  pass to the command line); the crate's 49 pass, 1 ignored. Walked in WebKit and Chrome against the real command
+  line: the sign-in form on a throwaway store (add, Stop waiting, Forget asked and done), Security on a sealed
+  throwaway store (sign in, turn off encryption opened and cancelled, Allow reads asked, cancelled with Escape and
+  done, Open at restart asked and refused with the typed password kept), Devices with simulated slow and silent
+  devices, and the earlier 41-step Keys walk again. No native dialog fired in any of them.
+  **Not checked:** the built app on any platform, and the sign-in itself (a real provider's browser sign-in was
+  not run; the form's add went through the real command line on a throwaway store, and the browser step was
+  stubbed). The Devices progress was walked with simulated devices; the command line's progress was run
+  against this Mac's two real devices.
+
 ### A replaced key leaves no stale copy in an env file
 
 Liam, 2026-11-25: "when a key is updated in passbook it must propagate. period... users shouldn't have a stale

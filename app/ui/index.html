@@ -144,7 +144,11 @@
   .navfoot.exposed .navfoot-t { color: var(--warn); }
 
   /* ── content ─────────────────────────────────────────────────────────── */
-  main { flex: 1; overflow-y: auto; padding: 30px 28px 32px; }
+  main { flex: 1; overflow-y: auto; padding: 0 28px 32px; scroll-padding: 12px 0 78px; }
+  /* The space above the page is a block inside it, not padding on the scroller. A header that sticks to
+     the top of a padded scroller stops at the padding in Chromium (the app on Windows), which left a
+     strip above it where the rows scrolling underneath showed through. */
+  main::before { content: ""; display: block; height: 30px; }
   h2 { font-size: 21px; font-weight: 700; letter-spacing: -0.022em; }
   .lede { color: var(--ink2); margin: 3px 0 0; max-width: 62ch; }
   .pagehead { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 18px; }
@@ -510,12 +514,50 @@
     font-size: 12px; color: var(--ink1);
   }
   .confirmstrip .grow { flex: 1; }
+  /* The strip under a settings row lines up with the row's own padding. */
+  .group > .confirmstrip { margin: 0 14px 12px; }
+  .signinform .formgrid { display: grid; grid-template-columns: max-content minmax(0, 1fr);
+    gap: 8px 14px; align-items: center; padding: 4px 14px 2px; }
+  .signinform .formgrid label { font-size: 12.5px; color: var(--ink2); }
+  .signinform .formgrid label .sub { display: inline; margin-left: 4px; }
+  .signinform .formacts { display: flex; justify-content: flex-end; gap: 8px; padding: 0 14px 12px; }
+  .linkbtn { background: none; border: 0; padding: 0; font: inherit; color: var(--accent);
+    cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+  @media (max-width: 560px) {
+    .signinform .formgrid { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+    .signinform .formgrid input, .signinform .formgrid select { margin-bottom: 6px; }
+  }
   /* Search on the left, the two things you do occasionally on the right. */
   .toolbar {
     display: flex; align-items: center; gap: 8px; padding: 10px 12px;
     border-bottom: 1px solid var(--line);
   }
   .toolbar .grow { flex: 1; }
+  /* The search box, the add form and the filters stay in view however far down the list is. Half-way
+     down a few hundred keys the search box was a scroll away, and a key added from the form appeared
+     somewhere off screen while the form sat at the top. `clip` rather than `hidden` on the card, for the
+     reason the Balances list gives: a card that scrolls its own overflow keeps the header to itself. */
+  .group.keys { overflow: clip; }
+  .keyshead {
+    position: sticky; top: 0; z-index: 3; background: var(--card);
+    border-radius: var(--radius) var(--radius) 0 0; box-shadow: 0 1px 0 var(--line);
+  }
+  .searchcount { font-size: 11.5px; color: var(--ink3); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .empty .emptyacts { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+  .addhint .err { font-size: 11.5px; }
+  .addhint .spinner, .addrow .spinner, .valedit .spinner, .note .spinner, .signinform .spinner { display: inline-block; vertical-align: -2px; margin-right: 6px; }
+  button.act.primary .spinner { border-color: rgba(255,255,255,.35); border-top-color: #fff; }
+  /* What the keyboard does here, shown while it is being used here: floating at the foot of the page,
+     where it is in view however long the list is. */
+  .listhint {
+    position: sticky; bottom: 10px; z-index: 4; width: max-content; max-width: 100%; margin: 12px auto 0;
+    display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 14px; padding: 6px 14px;
+    border-radius: 999px; background: var(--card); border: 1px solid var(--line2);
+    box-shadow: 0 6px 22px rgba(0, 0, 0, .14); font-size: 11px; color: var(--ink3);
+  }
+  .listhint { pointer-events: none; }
+  .listhint[hidden] { display: none; }
+  .listhint kbd { margin: 0 4px 0 0; }
   .countnote { text-align: center; margin-top: 12px; }
   .keyrow + .keyrow { border-top: 1px solid var(--line); }
   .keyrow:hover { background: var(--bg2); }
@@ -551,6 +593,19 @@
   .keyrow .val.picture img { display: block; height: 16px; width: auto; max-width: none; }
   .keyrow .val.picture img.measured { height: auto; }
   .keyrow .val.empty { color: var(--ink3); font-style: italic; }
+  /* Changing a value: the box, and the two things you can do with what you typed. Saving used to be
+     "click somewhere else", which is also what somebody does to abandon a field. */
+  .valedit { display: flex; align-items: center; gap: 6px; margin-top: 7px; }
+  .valedit .val { margin-top: 0; flex: 1; min-width: 0; width: auto; }
+  .keyrow .valnote { margin-top: 6px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .keyhints { margin-left: auto; white-space: nowrap; }
+  .keyhints kbd, .listhint kbd {
+    font: inherit; font-size: 10.5px; padding: 0 5px; margin: 0 2px 0 8px; border-radius: 5px;
+    background: var(--chip2); color: var(--ink2);
+  }
+  /* The row the arrow keys are on. A bar down the leading edge, so it reads on an open row too, where a
+     background alone would be the same gray the open row already has. */
+  .keyrow.cursor { background: var(--bg2); box-shadow: inset 3px 0 0 var(--accent); }
   /* Shown from the moment the eye is pressed until the picture is on screen.
      Same box as the value it is standing in for, so the row does not move when
      one becomes the other. */
@@ -1272,7 +1327,7 @@
     return `<div class="val picture" data-picture="${esc(k)}" role="img"
       aria-label="${esc(k)} is shown as a picture so it cannot be read as text. \
 Use the copy button to put it on the clipboard."
-      title="Click to replace this value">
+      title="Click to change this value">
       <img src="${esc(src)}" alt="" draggable="false" data-dpr="${held.dpr}" />
     </div>`;
   }
@@ -1286,7 +1341,6 @@ Use the copy button to put it on the clipboard."
   function hideValue(k) {
     const held = revealed[k];
     delete revealed[k];
-    delete replacing[k];
     delete revealing[k];
     clearTimeout(hideTimers[k]);
     delete hideTimers[k];
@@ -1490,6 +1544,8 @@ Use the copy button to put it on the clipboard."
                  // needs sat under the button that had already run.
                  tab: "export" };
   let addingProfile = false;
+  // Turning encryption off is a press away, not a password box that is always out.
+  let unsealing = false;
   let recoveryCode = "";
   // Which row is mid-edit. The background refresh must not wipe a half-typed
   // value out from under someone, so polling pauses while this is set.
@@ -1528,26 +1584,64 @@ Use the copy button to put it on the clipboard."
   // wrong — the first press looked like it had failed, the second started a
   // *second* reveal, and the value appeared when that one landed.
   let revealing = {};
-  // key -> true while the row is showing an empty box to type a new value into.
+  // key -> { saving, error } while the row is showing an empty box to type a new value into.
   // Replacing rather than editing is deliberate: the old value is never put in
   // an input, so there is nothing to pre-fill and nothing to erase afterwards.
   let replacing = {};
+  // The row the keyboard is on, by name: a paint replaces every node, so a mark set on one of them
+  // would be gone by the next refresh. The arrow keys move it; Enter or the right arrow opens that key.
+  let keyCursor = "";
+  // Whether the cursor was last moved by the keyboard, which is when the strip of what the keys do is shown.
+  let byKeyboard = false;
   // Whether this platform gave the window the protections it claims. Asked
   // rather than assumed — capture exclusion does not exist on Linux, and
   // drawing needs a font the machine might not have.
   let guards = { capture: false, drawing: true };
   let confirming = null;
+  // A press that changes something hard to take back asks first, on the page, beside the button.
+  // These were the webview's own confirm() boxes: a modal from outside the page, unlike anything
+  // else in the window, that stops the whole page until it is answered and reads as the system
+  // asking rather than PassBook. `asking` is which one is open and on which page; leaving the page
+  // closes it.
+  let asking = null;
   let query = "";
   let history = {};   // key -> rows, fetched only when someone opens it
+
+  // `String(error)` on a rejected invoke reads "Error: Wrong password." The
+  // word "Error" in front of a sentence that is already an error is noise.
+  const said = (error) => String(error?.message ?? error ?? "").replace(/^Error:\s*/, "");
 
   /** Run a store command. Answers whether it worked, for the callers that
    *  have something to say afterwards; a failure has already said it in
    *  `notice` by then. */
   async function call(name, args = {}) {
+    const typed = typedNow();
+    let refused = false;
     busy = true; paint();
     try { const next = await invoke(name, args); notice = ""; state = next; return true; }
-    catch (e) { notice = String(e); return false; }
-    finally { busy = false; paint(); }
+    catch (e) { notice = said(e); refused = true; return false; }
+    finally { busy = false; paint(); if (refused) giveBack(typed); }
+  }
+
+  /** What is typed into the page's fields, taken before a press repaints them away.
+   *
+   *  Every one of these commands repaints twice, to gray the page and to un-gray it, and a repaint
+   *  rebuilds every field empty. That is right when the press worked. When it was refused ("a vault
+   *  password must be at least 8 characters") it meant typing the name and the password again to fix
+   *  one of them. A refused press gives back what was in the fields; one that worked still clears them.
+   */
+  function typedNow() {
+    const held = [];
+    main.querySelectorAll("input[id]").forEach((el) => { if (typing(el) && el.value) held.push([el.id, el.value]); });
+    return held;
+  }
+
+  function giveBack(held) {
+    for (const [id, value] of held) {
+      const el = document.getElementById(id);
+      // Over whatever the page put there too: a field it fills in by default ("Owner") had been changed.
+      if (el && typing(el) && el.value !== value) el.value = value;
+    }
   }
 
   function markAdded(name) {
@@ -1558,10 +1652,12 @@ Use the copy button to put it on the clipboard."
 
   /** Vault commands answer with vault state, not store state. */
   async function callVault(name, args = {}) {
+    const typed = typedNow();
+    let refused = false;
     busy = true; paint();
     try { vault = await invoke(name, args); notice = ""; }
-    catch (e) { notice = String(e); }
-    finally { busy = false; paint(); }
+    catch (e) { notice = said(e); refused = true; }
+    finally { busy = false; paint(); if (refused) giveBack(typed); }
   }
 
   /** Approval requests, put in front of you by PassBook itself.
@@ -1731,10 +1827,32 @@ Use the copy button to put it on the clipboard."
     return KEY_FILTERS.map(([id, label, test]) => [id, label, all.filter((k) => test(k, readable, refused)).length]);
   }
 
+  /** How well a key answers what was typed: 0 for not at all.
+   *
+   *  The search was one substring of the name, so "stripe secret" found nothing (names are written with
+   *  underscores) and a key filed under a vendor whose name it does not carry could not be found by the
+   *  vendor at all. Every word has to be there, in the name or in the name of its group, and a space
+   *  also stands for an underscore. The closer the match, the higher it is listed.
+   */
+  function searchScore(k, words, joined) {
+    const name = k.toLowerCase();
+    if (name === joined) return 4;
+    if (name.startsWith(joined)) return 3;
+    if (name.includes(joined)) return 2;
+    const group = String(state?.catalog?.group_of?.[k] || "").toLowerCase();
+    return words.every((w) => name.includes(w) || group.includes(w)) ? 1 : 0;
+  }
+
   function shownKeys() {
     let keys = state?.store?.keys || [];
     const q = query.trim().toLowerCase();
-    if (q) keys = keys.filter((k) => k.toLowerCase().includes(q));
+    if (q) {
+      const joined = q.replace(/\s+/g, "_"), words = q.split(/[\s_]+/).filter(Boolean);
+      const scored = keys.map((k) => [k, searchScore(k, words, joined)]).filter(([, score]) => score > 0);
+      // Best first, in the order they were already in within a score. An order somebody chose still wins.
+      if (keySort === "group") scored.sort((a, b) => b[1] - a[1]);
+      keys = scored.map(([k]) => k);
+    }
     const chosen = KEY_FILTERS.find(([id]) => id === keyFilter);
     if (chosen) {
       const readable = readableSet(), refused = new Set(rejectedKeys().map((r) => r.key));
@@ -1765,8 +1883,69 @@ Use the copy button to put it on the clipboard."
 
   function searchField(id) {
     return `<span class="searchwrap">${icon("search", "tinyicon")}
-      <input class="search" id="${id}" type="search" placeholder="Search keys"
-        value="${esc(query)}" spellcheck="false" autocapitalize="off" /></span>`;
+      <input class="search" id="${id}" data-keep="focus" type="search" placeholder="Search keys"
+        value="${esc(query)}" spellcheck="false" autocapitalize="off" autocomplete="off" /></span>`;
+  }
+
+  /** How many keys the search and the filter leave, beside the box that is doing the narrowing. */
+  function searchCount(shown, all) {
+    if (!query.trim() && keyFilter === "all") return "";
+    return `<span class="searchcount" role="status">${shown} of ${all}</span>`;
+  }
+
+  // ── names ──────────────────────────────────────────────────────────────
+  /** What a key can be called: what the store itself accepts (`_KEY` in passbook.py). */
+  const KEY_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+  /** The key already stored under this name, however it was capitalized when typed. */
+  function storedName(name) {
+    const wanted = String(name).trim().toLowerCase();
+    return (state?.store?.keys || []).find((k) => k.toLowerCase() === wanted) || "";
+  }
+
+  /** What was typed, as a name the store will take: "my stripe-key" becomes MY_STRIPE_KEY. */
+  function tidyName(text) {
+    let name = String(text).trim().replace(/[^A-Za-z0-9_]+/g, "_").replace(/^_+|_+$/g, "");
+    if (!name) return "";
+    if (/^[0-9]/.test(name)) name = "_" + name;
+    return name.toUpperCase().slice(0, 128);
+  }
+
+  /** What the list says when it has nothing to show, and the way out of it.
+   *
+   *  "Nothing matches" used to be the whole of it. A search that finds nothing is usually one of three
+   *  things: a filter still on from earlier, a typo, or a key that is not here yet, and each of those
+   *  has one obvious thing to press next.
+   */
+  function nothingShown(all) {
+    const q = query.trim();
+    const filter = KEY_FILTERS.find(([id]) => id === keyFilter);
+    if (!all) {
+      return `<div class="empty">No keys yet.
+        <div class="emptyacts"><button class="act primary" data-addnamed="">${icon("plus")} Add your first key</button></div></div>`;
+    }
+    if (!q) {
+      return `<div class="empty">No key is ${esc((filter?.[1] || "like that").toLowerCase())}.
+        <div class="emptyacts"><button class="act" data-key-filter="all">Show all keys</button></div></div>`;
+    }
+    let elsewhere = 0;
+    if (filter) { const was = keyFilter; keyFilter = "all"; elsewhere = shownKeys().length; keyFilter = was; }
+    const name = tidyName(q);
+    return `<div class="empty">Nothing matches “${esc(q)}”${filter ? ` in ${esc(filter[1])}` : ""}.
+      <div class="emptyacts">
+        ${elsewhere ? `<button class="act primary" data-key-filter="all">Search all keys · ${elsewhere}</button>` : ""}
+        <button class="act" data-searchclear="1">Clear search</button>
+        ${name && !storedName(name) && !elsewhere ? `<button class="act primary" data-addnamed="${esc(name)}">${icon("plus")} Add ${esc(name)}</button>` : ""}
+      </div></div>`;
+  }
+
+  /** What the keyboard does on the list, said while the keyboard is being used on it. */
+  const MOD_KEY = /Mac|iPhone|iPad/.test(navigator.platform || "") ? "\u2318" : "Ctrl+";
+  function listHint() {
+    return `<div class="listhint" id="listhint" ${keyCursor && byKeyboard && !notice ? "" : "hidden"}>
+      <span><kbd>\u2191</kbd><kbd>\u2193</kbd> move</span><span><kbd>\u21b5</kbd> open</span>
+      <span><kbd>${MOD_KEY}C</kbd> copy value</span><span><kbd>${MOD_KEY}E</kbd> change value</span>
+      <span><kbd>esc</kbd> done</span></div>`;
   }
 
   function ago(iso) {
@@ -2018,7 +2197,9 @@ Use the copy button to put it on the clipboard."
     // someone "Vault locked" in the sidebar while the eye icon beside every key
     // still worked, and the sentence that explained why was below 279 rows.
     const bare = readable ? readable.has(k) : false;
-    return `<div class="keyrow${open ? " open" : ""}${k === justAdded ? " justadded" : ""}"
+    const edit = replacing[k];
+    const saved = copied["edit:" + k];
+    return `<div class="keyrow${open ? " open" : ""}${k === justAdded ? " justadded" : ""}${k === keyCursor ? " cursor" : ""}"
       data-keyrow="${esc(k)}">
       <div class="head">
         ${selectMode ? `<input type="checkbox" class="pick" data-pick="${esc(k)}"
@@ -2044,6 +2225,10 @@ Use the copy button to put it on the clipboard."
         <button class="iconbtn ${copied[k] ? "done" : ""}" data-copy="${esc(k)}"
           title="${copied[k] ? "Copied" : "Copy value"}"
           aria-label="${copied[k] ? "Copied" : "Copy value"}">${icon(copied[k] ? "check" : "copy")}</button>
+        <button class="iconbtn ${saved ? "done" : edit ? "on" : ""}" data-edit="${esc(k)}"
+          title="${saved ? "Saved" : edit ? "Keep the current value" : "Change value"}"
+          aria-label="${saved ? "Saved" : edit ? `Keep the current value of ${esc(k)}` : `Change the value of ${esc(k)}`}"
+          >${icon(saved ? "check" : "pencil")}</button>
         <button class="iconbtn danger" data-remove="${esc(k)}" title="Remove"
           aria-label="Remove ${esc(k)}">${icon("trash")}</button>
         <button class="iconbtn disclose" data-open="${esc(k)}"
@@ -2051,9 +2236,17 @@ Use the copy button to put it on the clipboard."
           aria-expanded="${open}"
           aria-label="Settings for ${esc(k)}">${icon("chevron")}</button>
       </div>
-      ${replacing[k] ? `<input class="val" data-replace="${esc(k)}" value=""
-        spellcheck="false" autocapitalize="off" autocomplete="off"
-        placeholder="Type a new value for ${esc(k)}, or press Escape" />`
+      ${edit ? `<div class="valedit">
+          <input class="val" id="edit-${esc(k)}" data-keep data-replace="${esc(k)}" value=""
+            spellcheck="false" autocapitalize="off" autocomplete="off" ${edit.saving ? "disabled" : ""}
+            aria-label="New value for ${esc(k)}" placeholder="Paste or type the new value for ${esc(k)}" />
+          <button class="act" data-editcancel="${esc(k)}" ${edit.saving ? "disabled" : ""}>Cancel</button>
+          <button class="act primary" data-editsave="${esc(k)}" ${edit.saving ? "disabled" : ""}>${edit.saving
+            ? `<span class="spinner"></span> Saving…` : "Save"}</button>
+        </div>
+        ${edit.error ? `<div class="note flat err valnote" role="alert">${esc(edit.error)}</div>`
+          : `<div class="note flat valnote">The new value replaces the old one for everything that uses this key.
+              <span class="keyhints"><kbd>↵</kbd> save <kbd>esc</kbd> cancel</span></div>`}`
        : revealing[k] ? `<div class="val loading" role="status" aria-live="polite">
            <span class="spinner"></span>Reading ${esc(k)}…</div>`
        : shown ? valuePicture(k) : ""}
@@ -2252,17 +2445,27 @@ Use the copy button to put it on the clipboard."
 
   const scrollToKey = (k, block) => [...main.querySelectorAll("[data-keyrow]")].find((el) => el.dataset.keyrow === k)?.scrollIntoView({ block });
 
-  /** Bring one key's row on screen, opened: the Keys page, past any search or filter that hides it, and
-   *  far enough down the list that its row has been built. */
-  function showKeyRow(k) {
+  /** Bring one key's row on screen: the Keys page, past any search or filter that hides it, its group
+   *  unfolded, and far enough down the list that its row has been built.
+   *
+   *  It used to count how far down the key was in the plain list of names. The page is listed by group,
+   *  which is a different order, and a folded group builds no rows at all: Find anything, then Enter on
+   *  a key in a folded or far-down group, landed on Keys with nothing opened and nothing in view.
+   */
+  function bringKeyRow(k, open = false) {
     page = "keys";
     if (!shownKeys().includes(k)) { query = ""; keyFilter = "all"; }
-    const where = shownKeys().indexOf(k);
+    for (const [group, members] of Object.entries(state?.catalog?.groups || {})) {
+      if (members.includes(k)) delete collapsed[group];
+    }
+    const where = rowOrder(shownKeys()).indexOf(k);
     if (where >= rowLimit) rowLimit = where + ROW_PAGE;
-    expanded[k] = true;
+    if (open) expanded[k] = true;
+    keyCursor = k;
     paint();
-    scrollToKey(k, "center");
+    scrollToKey(k, open ? "center" : "nearest");
   }
+  const showKeyRow = (k) => bringKeyRow(k, true);
 
   async function rotateStep(busyAs, command, args) {
     rotateView.busy = busyAs; rotateView.error = ""; paint();
@@ -2298,7 +2501,7 @@ Use the copy button to put it on the clipboard."
         <div class="rotstep"><span class="stepno">2</span><div class="grow"><strong>Paste it here</strong>
           <div class="note flat">PassBook replaces the value, sends it to your other devices, and keeps the old one until you say the new one works.</div>
           ${where}
-          <div class="alform"><input id="rotvalue" type="password" autocomplete="off" spellcheck="false" placeholder="The new value for ${esc(k)}" size="36" />
+          <div class="alform"><input id="rotvalue" data-keep type="password" autocomplete="off" spellcheck="false" placeholder="The new value for ${esc(k)}" size="36" />
             <button class="act primary" data-rotate-start="${esc(k)}" ${busy ? "disabled" : ""}>${v.busy === "start" ? "Replacing…" : "Replace"}</button></div></div></div>
         ${v.error ? `<p class="note flat err">${esc(v.error)}</p>` : ""}
       </div>`;
@@ -2338,6 +2541,70 @@ Use the copy button to put it on the clipboard."
     return !!chosen.anchorNode && root.contains(chosen.anchorNode);
   }
 
+  /** Whether the text of this key's name is what is selected. Asked of the row as it is now, by name:
+   *  the element that was clicked may have been replaced by a repaint since. */
+  function selectingName(k) {
+    const row = keyRowEl(k);
+    const name = row?.querySelector(".keyname");
+    return !!name && selectionIn(name);
+  }
+
+  const keyRowEl = (k) => [...main.querySelectorAll("[data-keyrow]")].find((el) => el.dataset.keyrow === k) || null;
+
+  // ── changing a value ───────────────────────────────────────────────────
+  //
+  // The only way to change a value used to be: reveal it, then click the picture of it. Nothing on the
+  // row said so, a guarded key (which is never revealed) could not be changed at all, and the box that
+  // opened saved whatever was in it the moment it lost focus — so clicking away to check something
+  // overwrote a working credential with half a paste ("i search a key and there is no way to edit it",
+  // Liam 2026-11-24). Every row has a pencil now. It opens the same empty box, and the box has a Save
+  // and a Cancel: Enter saves, Escape cancels, and clicking elsewhere does neither.
+  function editValue(k) {
+    if (replacing[k]) { cancelEdit(k); return; }
+    replacing[k] = { saving: false, error: "" };
+    keyCursor = k;
+    paint();
+    document.getElementById("edit-" + k)?.focus();
+  }
+
+  function cancelEdit(k) {
+    if (replacing[k]?.saving) return;
+    const box = document.getElementById("edit-" + k);
+    if (box) box.value = "";
+    delete replacing[k];
+    paint();
+  }
+
+  async function saveValue(k) {
+    const edit = replacing[k];
+    const box = document.getElementById("edit-" + k);
+    if (!edit || edit.saving || !box) return;
+    const next = box.value;
+    if (!next.trim()) {
+      edit.error = "Paste or type the new value first.";
+      paint(); document.getElementById("edit-" + k)?.focus();
+      return;
+    }
+    edit.saving = true; edit.error = ""; paint();
+    try { state = await invoke("add_key", { name: k, value: next, replace: true }); notice = ""; }
+    catch (e) {
+      // The box keeps what was typed: a refused save should not cost the paste as well.
+      edit.saving = false; edit.error = said(e);
+      paint(); document.getElementById("edit-" + k)?.focus();
+      return;
+    }
+    // Somebody typed this, so for these few seconds the window does hold a
+    // value — unavoidably, since the typing happened here. It is dropped as
+    // soon as the store has it, rather than left sitting in a field.
+    const typed = document.getElementById("edit-" + k);
+    if (typed) typed.value = "";
+    delete replacing[k];
+    hideValue(k);
+    markCopied("edit:" + k);
+    watchSending([k]);
+    paint();
+  }
+
   /** Open or close a key's settings. */
   function toggleKeyRow(k) {
     if (expanded[k]) delete expanded[k]; else expanded[k] = true;
@@ -2347,6 +2614,20 @@ Use the copy button to put it on the clipboard."
       if (audienceFor === k) { audienceFor = null; audienceDraft = null; }
       if (projectsFor === k) { projectsFor = null; projectsDraft = null; }
     }
+    paint();
+  }
+
+  /** Put a key's value on the clipboard, from its button or from the keyboard. */
+  async function copyValue(k) {
+    // `navigator.clipboard.writeText` takes a string, which is why this does
+    // not happen here: it was the one path that put the value back in this
+    // heap, on the row's most-used button. On a machine that seals reads it is
+    // refused outright, and the refusal says so.
+    try {
+      await invoke("copy_key", { name: k });
+      markCopied(k);
+      notice = "";
+    } catch (e) { notice = said(e); }
     paint();
   }
 
@@ -2419,22 +2700,34 @@ Use the copy button to put it on the clipboard."
       Show ${Math.min(remaining, ROW_PAGE)} more · ${remaining} not shown</button>`;
   }
 
-  function groupedKeys(keys) {
-    if (!keys.length) return "";
+  /** The keys as the groups they are listed under, or null when the list is flat.
+   *  Groups are the default view. A search, a filter or an order is a question about keys, not groups. */
+  function keyBuckets(keys) {
     const cat = state.catalog;
-    const readable = readableSet();
-    const flat = () => keys.slice(0, rowLimit).map((k) => keyRow(k, readable)).join("")
-      + moreRow(keys.length - rowLimit);
-    // Groups are the default view. A search, a filter or an order is a question about keys, not groups.
-    if (!cat?.available || query.trim() || keyFilter !== "all" || keySort !== "group") return flat();
-
+    if (!cat?.available || query.trim() || keyFilter !== "all" || keySort !== "group") return null;
     const shown = new Set(keys);
     const buckets = [];
     for (const [group, members] of Object.entries(cat.groups || {})) {
       const here = members.filter((m) => shown.has(m));
       if (here.length) buckets.push([group, here]);
     }
-    if (buckets.length < 2) return flat();
+    return buckets.length < 2 ? null : buckets;
+  }
+
+  /** The keys in the order their rows are built, which is the order `rowLimit` counts through. */
+  function rowOrder(keys) {
+    const buckets = keyBuckets(keys);
+    return buckets ? buckets.flatMap(([group, members]) => collapsed[group] ? [] : members) : keys;
+  }
+
+  function groupedKeys(keys) {
+    if (!keys.length) return "";
+    const cat = state.catalog;
+    const readable = readableSet();
+    const flat = () => keys.slice(0, rowLimit).map((k) => keyRow(k, readable)).join("")
+      + moreRow(keys.length - rowLimit);
+    const buckets = keyBuckets(keys);
+    if (!buckets) return flat();
 
     // The window ends where the rows run out, headings included. An earlier
     // version kept emitting every group and only withheld their rows, which
@@ -2519,30 +2812,209 @@ Use the copy button to put it on the clipboard."
     const all = (s.keys || []).length;
     return `
       <h2>Keys</h2>
-      <div class="group">
+      <div class="group keys">
+        <div class="keyshead">
         <div class="toolbar">
           ${searchField("q-keys")}
+          ${searchCount(keys.length, all)}
           <span class="grow"></span>
           ${all ? `<button class="act ${selectMode ? "primary" : ""}" data-selectmode="1">
             ${selectMode ? "Done" : "Select"}</button>` : ""}
-          <button class="act ${adding ? "primary" : ""}" data-addopen="1">
-            ${icon("plus")} Add key</button>
+          <button class="act" data-addopen="1" aria-expanded="${adding}"
+            title="${adding ? "Put the form away" : `Add a key (${MOD_KEY}N)`}">
+            ${adding ? "Close" : `${icon("plus")} Add key`}</button>
         </div>
-        ${adding ? (pasted ? pastedPanel() : `<div class="addrow">
-          <input id="k" placeholder="Name" spellcheck="false" autocapitalize="off" />
-          <input id="v" type="password" placeholder="Value" />
-          <button class="act primary${justAdded ? " done" : ""}" id="addgo"
-            ${busy ? "disabled" : ""}>${justAdded
-              ? `${icon("check")} Added` : "Add"}</button>
-        </div>
-        <div class="addhint" id="addhint"><span class="sub">Paste <span class="mono">NAME=value</span> lines, or a whole .env, to add several at once.</span></div>`) : ""}
+        ${adding ? (pasted ? pastedPanel() : addPanel()) : ""}
         ${keyFilterBar()}
         ${selectMode ? bulkBar(keys) : ""}
-        ${groupedKeys(keys)
-          || `<div class="empty">${query.trim()
-                ? `Nothing matches “${esc(query)}”.` : keyFilter !== "all" ? "No key matches that." : "No keys yet."}</div>`}
+        </div>
+        ${groupedKeys(keys) || nothingShown(all)}
       </div>
-      ${query.trim() || !all ? "" : `<p class="note countnote">${countLabel(keys.length, all)}</p>`}`;
+      ${query.trim() || !all ? "" : `<p class="note countnote">${countLabel(keys.length, all)}</p>`}
+      ${listHint()}`;
+  }
+
+  // ── adding a key ───────────────────────────────────────────────────────
+  //
+  // What was wrong with the form, each of them seen in the window (2026-11-24):
+  //   · Enter did nothing in either field. The only way to add was to reach for the button.
+  //   · Pressing Add emptied both fields at once and grayed the button, with no word about what was
+  //     happening, until the key had been sent to the other devices as well as written on this one. If
+  //     the add was then refused, what had been typed was already gone.
+  //   · A name that was already here was answered with a green "Added" while the store kept the old
+  //     value: `passbook add` leaves an existing key alone unless told to replace it, and exits 0.
+  //   · A name the store cannot take ("my key") came back as "Nothing on stdin looked like KEY=value".
+  //
+  // So the form has its own state. `busy` is this form's alone, so the rest of the page keeps working
+  // while a key is being added; what was typed stays where it is until the store has it; and the line
+  // under the fields says, as the name is typed, when it is already here or cannot be a name.
+  let addForm = { busy: false, replacing: false, error: "", did: "", sent: null };
+
+  function addPanel() {
+    const f = addForm;
+    return `<div class="addrow">
+        <input id="k" data-keep placeholder="Name, like OPENAI_API_KEY" spellcheck="false" autocapitalize="off"
+          autocomplete="off" aria-label="Name of the key" ${f.busy ? "disabled" : ""} />
+        <input id="v" data-keep type="password" placeholder="Value" autocomplete="off"
+          aria-label="Value of the key" ${f.busy ? "disabled" : ""} />
+        <button class="act primary${justAdded && !f.busy ? " done" : ""}" id="addgo" ${f.busy ? "disabled" : ""}>${
+          f.busy ? `<span class="spinner"></span> ${f.replacing ? "Replacing…" : "Adding…"}`
+          : justAdded ? `${icon("check")} ${esc(f.did || "Added")}` : "Add"}</button>
+      </div>
+      <div class="addhint" id="addhint"></div>`;
+  }
+
+  /** The line under the two fields: what is wrong, or what pressing Add will do, or nothing much. */
+  function addHint() {
+    const hint = document.getElementById("addhint");
+    const nameBox = document.getElementById("k"), valueBox = document.getElementById("v");
+    const go = document.getElementById("addgo");
+    if (!hint || !nameBox || !valueBox) return;
+    const f = addForm, name = nameBox.value.trim();
+    const held = name ? storedName(name) : "";
+    const tidy = name && !KEY_NAME.test(name) ? tidyName(name) : "";
+    const shape = name ? null : valueShape(valueBox.value);
+    let html;
+    if (f.error) html = `<span class="err" role="alert">${esc(f.error)}</span>`;
+    else if (name && !KEY_NAME.test(name)) {
+      html = `<span class="err">A name is letters, digits and underscores, and does not start with a digit.</span>
+        ${tidy ? `<button class="act" id="usename" data-name="${esc(tidy)}">Use ${esc(tidy)}</button>` : ""}`;
+    } else if (held) {
+      html = `<span class="sub"><span class="mono">${esc(held)}</span> is already here.
+        Saving replaces its value for everything that uses it.</span>`;
+    } else if (shape) {
+      html = `<span class="sub">Looks like a key from ${esc(shape[2])}.</span>
+        <button class="act" id="usename" data-name="${esc(shape[1])}">Name it ${esc(shape[1])}</button>`;
+    } else if (f.sent) {
+      html = `<span class="sub${f.sent.bad ? " err" : ""}">${f.sent.busy ? `<span class="spinner"></span>` : ""}${esc(f.sent.text)}</span>`;
+    } else {
+      html = `<span class="sub">Paste <span class="mono">NAME=value</span> lines, or a whole .env, to add several at once.</span>`;
+    }
+    hint.innerHTML = html;
+    if (go && !f.busy && !(justAdded && !name)) go.textContent = held ? "Replace value" : "Add";
+    const use = document.getElementById("usename");
+    if (use) use.onclick = () => {
+      nameBox.value = use.dataset.name; f.error = ""; addHint();
+      (valueBox.value ? go : valueBox)?.focus();
+    };
+  }
+
+  /** Open the form, with a name already in it when one is known. */
+  function openAdd(name = "") {
+    page = "keys"; adding = true; pasted = null; addForm.error = ""; notice = "";
+    paint();
+    const box = document.getElementById("k");
+    if (!box) return;
+    if (name) box.value = name;
+    addHint();
+    box.focus();
+    try { box.setSelectionRange(box.value.length, box.value.length); } catch { /* refused */ }
+  }
+
+  function closeAdd() {
+    if (addForm.busy) return;
+    for (const id of ["k", "v"]) { const box = document.getElementById(id); if (box) box.value = ""; }
+    adding = false; pasted = null; addForm.error = ""; addForm.sent = null;
+    paint();
+  }
+
+  async function submitAdd() {
+    const f = addForm;
+    const nameBox = document.getElementById("k"), valueBox = document.getElementById("v");
+    if (f.busy || !nameBox || !valueBox) return;
+    const typed = nameBox.value.trim(), value = valueBox.value;
+    const complain = (words, box) => { f.error = words; addHint(); box.focus(); };
+    if (!typed) return complain("Give the key a name.", nameBox);
+    if (!KEY_NAME.test(typed)) return complain("A name is letters, digits and underscores, and does not start with a digit.", nameBox);
+    if (!value.trim()) return complain("Paste or type its value.", valueBox);
+    // A name that is already here is replaced, and the line under the fields has said so. Sent as an
+    // add it would be left alone by the store and reported here as done.
+    const held = storedName(typed);
+    f.busy = true; f.replacing = !!held; f.error = ""; f.sent = null;
+    paint();
+    let next;
+    try { next = await invoke("add_key", { name: held || typed, value, replace: !!held }); }
+    catch (e) {
+      // What was typed is still in the fields: a refused add should not cost the paste as well.
+      f.busy = false; f.error = said(e);
+      paint();
+      document.getElementById("v")?.focus();
+      return;
+    }
+    f.busy = false; state = next; notice = "";
+    // The store answers with the name it actually wrote, which is not always
+    // the one that was typed.
+    const added = storedName(typed) || typed;
+    // Emptied here rather than by the repaint, which carries typed text across.
+    for (const id of ["k", "v"]) { const box = document.getElementById(id); if (box) box.value = ""; }
+    f.did = held ? "Replaced" : "Added";
+    markAdded(added);
+    watchSending([added]);
+    // Somebody who went to another page while the key was being added stays there.
+    if (page === "keys") { bringKeyRow(added); document.getElementById("k")?.focus({ preventScroll: true }); }
+    else paint();
+    // Whether the new key is encrypted is the vault's to say, and the row says it ("readable").
+    refreshVault().then(() => paintKeepingCaret());
+  }
+
+  // ── what became of a key after it was saved here ───────────────────────
+  //
+  // Saving writes the key on this device and then sends it to the others. The window waited for both,
+  // so it waited on the slowest of them. The app now answers as soon
+  // as the key is written, the sending carries on behind it, and `passbook://sent` says how it went.
+  let sending = { keys: [], timer: 0 };
+
+  function saySending(words, how = {}) {
+    addForm.sent = words ? { text: words, ...how } : null;
+    if (document.getElementById("addhint")) addHint();
+    else if (words && how.bad) { notice = words; paint(); }
+  }
+
+  function watchSending(keys) {
+    clearTimeout(sending.timer);
+    sending.keys = keys;
+    addForm.sent = null;
+    // Said only if it is still going after a moment. With nothing to send to it is over before anybody
+    // could have read the words.
+    sending.timer = setTimeout(() => {
+      if (!sending.keys.length) return;
+      saySending("Saved on this device. Sending to your other devices…", { busy: true });
+      // An app too old to say how it went: stop saying it is still going.
+      sending.timer = setTimeout(() => { sending.keys = []; saySending(""); }, 120000);
+    }, 700);
+  }
+
+  /** How the sending went, in the window's words rather than a terminal's. */
+  function sendingDone(report) {
+    const waited = !!addForm.sent?.busy;
+    clearTimeout(sending.timer);
+    sending.keys = [];
+    const out = String(report?.out || ""), problem = String(report?.problem || "");
+    const all = report?.keys || [];
+    const names = all.length > 3 ? `${all.slice(0, 2).join(", ")} and ${all.length - 2} more` : all.join(", ");
+    const are = all.length > 1 ? "are" : "is";
+    const missed = [...problem.matchAll(/not sent to (\S+) \(([^)]*)\)/g)];
+    const services = out.match(/^(\S+) is also on (\d+) service/m);
+    if (services) {
+      // Changing a value here does not reach a Worker or a CI secret that holds a copy of it.
+      notice = `${services[1]} is saved here, but ${services[2] === "1" ? "one service still holds" : `${services[2]} services still hold`} the old value. Open the key and use Rotate to update ${services[2] === "1" ? "it" : "them"}.`;
+      saySending(""); paint();
+      return;
+    }
+    if (missed.length) {
+      return saySending(`${names || "It"} ${are} saved on this device. Not on ${missed.map((m) => m[1]).join(", ")} yet (${missed[0][2]}); PassBook will keep trying.`, { bad: true });
+    }
+    if (/not sent to any other machine/.test(problem)) {
+      return saySending(`${names || "It"} ${are} saved on this device. No other device could be reached, so nothing has been sent yet.`, { bad: true });
+    }
+    // It was written here, and then the sending ended badly in some way this does not have words for.
+    if (report?.ok === false) {
+      return saySending(`${names || "It"} ${are} saved on this device, but the sending to your other devices did not finish. They will pick it up the next time they exchange keys.`, { bad: true });
+    }
+    const sent = out.match(/^sent to (\d+) machine/m);
+    if (!waited) return saySending("");
+    saySending(sent ? `Sent to ${sent[1] === "1" ? "your other device" : `your ${sent[1]} other devices`}.` : "Saved on this device.");
+    sending.timer = setTimeout(() => saySending(""), 4000);
   }
 
   /** Encryption at rest, with the way to fix it in the same box.
@@ -2587,17 +3059,10 @@ Use the copy button to put it on the clipboard."
           <button class="act primary" id="seal-go" ${busy ? "disabled" : ""}>Encrypt everything</button>
         </div>`;
     } else if (!v.unlocked) {
-      action = `
-        <p class="note">Everything is encrypted and the vault is shut, so apps on
-        this device currently have no credentials. Sign in to give them some.</p>
-        <div class="addrow two">
-          <input id="si-pw2" type="password" placeholder="Vault password" />
-          <button class="act primary" id="si-go2" ${busy ? "disabled" : ""}>Sign in</button>
-        </div>`;
-    } else {
-      action = `<p class="note">Signed in as ${esc(profileLabel(v.signed_in_profile))}${
-        v.expires_in ? `, for another ${humanTime(v.expires_in)}` : ""}.
-        <button class="act" data-signout>Lock now</button></p>`;
+      // Signing in is the panel at the top of the page. It was offered here as well, a second
+      // password box for the same act on the same screen.
+      action = `<p class="note">Everything is encrypted and the vault is shut, so apps on
+        this device have no credentials until you sign in above.</p>`;
     }
 
     return `
@@ -2606,18 +3071,22 @@ Use the copy button to put it on the clipboard."
         <div class="row"><div class="grow">${esc(detail)}</div>
           <span class="tag ${sealed ? "on" : "off"}">${sealed ? "Encrypted" : "Readable"}</span></div>
         ${action}
-        ${sealed && v?.unlocked ? `<div class="addrow two">
-          <input id="sl-pw" type="password" placeholder="Vault password" />
-          <button class="act" id="unseal-go" ${busy ? "disabled" : ""}>Turn off encryption</button>
-        </div>` : ""}
+        ${sealed && v?.unlocked ? (unsealing ? `
+          <p class="note err">Turning it off writes every value back to disk in the clear, where
+            anything running as you can read it, signed in or not.</p>
+          <div class="addrow three">
+            <input id="sl-pw" type="password" placeholder="Vault password" aria-label="Vault password" />
+            <button class="act" data-unsealclose="1" ${busy ? "disabled" : ""}>Cancel</button>
+            <button class="act destructive" id="unseal-go" ${busy ? "disabled" : ""}>Turn off encryption</button>
+          </div>` : `<div class="addrow two"><span></span>
+            <button class="act" data-unsealopen="1" ${busy ? "disabled" : ""}>Turn off encryption\u2026</button></div>`) : ""}
         ${aside(`<p>Encryption protects the store on a stolen laptop, a backup, a synced
           home folder, or a copy that ends up in a repo. While you are signed in, code
           running as you can still ask for a key \u2014 that is what Permissions are
           for.</p>${sealed ? `<p>Turning it off puts every value back in the clear on
           disk. The way out is here on purpose \u2014 an encryption you cannot reverse is
           one nobody turns on.</p>` : ""}`)}
-      </div>
-      ${veilGroup()}`;
+      </div>`;
   }
 
   /** What this window does about somebody watching the screen.
@@ -2649,18 +3118,25 @@ Use the copy button to put it on the clipboard."
         + "font here to draw with. Reveal and copy are refused rather than falling "
         + "back. Use a key instead of reading it:  passbook run -- <command>"];
     }
+    // One line for the three facts, and what each means behind it. They are things this window
+    // does rather than settings, and three full rows of them sat between the settings.
+    // What is missing is said as missing: a row's title names the protection, so it cannot stand in
+    // for the sentence that it is absent.
+    const MISSING = { "Hidden from screenshots and screen sharing": "Screenshots and screen sharing can show this window" };
+    const off = rows.filter(([on]) => !on).map(([on, title, why]) => [on, MISSING[title] || title, why]);
     return `
       <div class="group">
         <h3>On screen</h3>
-        ${rows.map(([on, title, why]) => `<div class="row">
-          <div class="grow"><strong>${esc(title)}</strong>
-            <div class="sub">${esc(why)}</div></div>
-          <span class="tag ${on ? "on" : "off"}">${on ? "On" : "No"}</span>
-        </div>`).join("")}
-        ${aside(`<p>This is about somebody \u2014 or something \u2014 watching the
+        <div class="row"><div class="grow">${off.length
+          ? `<strong>${esc(off.map(([, title]) => title).join(". "))}.</strong>
+             <div class="sub">${esc(off.map(([, , why]) => why).join(" "))}</div>`
+          : `<strong>Values are drawn as pictures, hidden from screenshots, and hide themselves after ${HIDE_AFTER / 1000} seconds.</strong>`}</div>
+          <span class="tag ${off.length ? "off" : "on"}">${off.length ? `${rows.length - off.length} of ${rows.length} on` : "All on"}</span></div>
+        ${aside(rows.map(([on, title, why]) => `<p><strong>${esc(title)}${on ? "" : " \u2014 not here"}.</strong>
+          ${esc(why)}</p>`).join("") + `<p>This is about somebody \u2014 or something \u2014 watching the
           screen. It does not cover code running as you, which can ask the store for a
-          key without opening this window at all: that is what Permissions and
-          <code>passbook policy --reads sealed</code> are for.</p>`)}
+          key without opening this window at all: that is what Permissions and sealed
+          reads are for.</p>`, "What this window does about the screen")}
       </div>`;
   }
 
@@ -2834,15 +3310,18 @@ Use the copy button to put it on the clipboard."
           in once afterwards. Until you do, apps get no credentials and adding a
           key is refused.
           ${halves}</div></div>
-        <p class="note">Opening it automatically would put the key in this Mac's
-          keystore, where any program running as you can fetch it \u2014 no password,
-          no prompt. That includes every agent on this machine. What it buys is
-          jobs that start at boot without you.</p>
         <div class="addrow two">
-          <input id="so-pw" type="password" placeholder="Vault password" />
-          <button class="act" data-stayopen="on" ${busy ? "disabled" : ""}>
+          <input id="so-pw" type="password" placeholder="Vault password" data-keep aria-label="Vault password" />
+          <button class="act" data-stayopen="on" ${busy || asking?.id === "stayopen-on" ? "disabled" : ""}>
             ${icon("unlock")} Open at restart</button>
         </div>
+        ${confirmStrip("stayopen-on", `Let this Mac open the vault after a restart? The opening key goes
+          into the keystore, where any program running as you can fetch it with no password and no
+          prompt. That includes every agent on this machine.`, "Open at restart")}
+        ${aside(`<p>Opening it automatically would put the key in this Mac's keystore, where
+          any program running as you can fetch it \u2014 no password, no prompt. That
+          includes every agent on this machine. What it buys is jobs that start at boot
+          without you.</p>`, "What opening at restart costs")}
       </div>`;
   }
 
@@ -2879,8 +3358,7 @@ Use the copy button to put it on the clipboard."
           ${sealed
             ? `credentials go only into processes PassBook starts, so an agent can
                use them and cannot read them.`
-            : `anything running as you can ask for a value and receive it.
-               <code>passbook policy --reads sealed</code> closes that.`}
+            : `anything running as you can ask for a value and receive it.`}
           ${guarded.length
             ? `<div class="sub">${guarded.length} key${guarded.length === 1 ? " is" : "s are"}
                guarded and never printed whatever this is set to:
@@ -2890,12 +3368,60 @@ Use the copy button to put it on the clipboard."
           ${pinnedLine()}
         </div>
         <button class="act" data-reads="${sealed ? "open" : "sealed"}"
-          ${busy ? "disabled" : ""}>${sealed ? "Allow reads" : "Seal reads"}</button></div>
-        ${sealed ? "" : `<p class="note">Sealing refuses a value to any caller PassBook
-          did not start. Apps that read directly keep working while they are on the
-          approved list — see <code>passbook approved</code> — and the list is meant
-          to shrink as each one moves to <code>passbook run</code>.</p>`}
+          ${busy || asking?.id === "reads-open" ? "disabled" : ""}>${sealed ? "Allow reads" : "Seal reads"}</button></div>
+        ${confirmStrip("reads-open", `Allow any program running as you to read credential values again?
+          Every agent on this machine could then read them, not just use them.`, "Allow reads")}
+        ${aside(`<p>Sealing refuses a value to any caller PassBook did not start. Apps that
+          read directly keep working while they are on the approved list \u2014 see
+          <code>passbook approved</code> \u2014 and the list is meant to shrink as each one
+          moves to <code>passbook run</code>.</p><p>From a terminal:
+          <code>passbook policy --reads sealed</code>.</p>`, "What sealing changes")}
       </div>`;
+  }
+
+  /** The question a press asks before it acts, shown in place under the button that asked it. */
+  function confirmStrip(id, sentence, yes) {
+    if (asking?.id !== id) return "";
+    return `<div class="confirmstrip" role="group" aria-label="${esc(yes)}?">
+      <span class="grow">${sentence}</span>
+      <button class="act" data-askno="1">Cancel</button>
+      <button class="act destructive" data-askyes="${esc(id)}" ${busy ? "disabled" : ""}>${esc(yes)}</button>
+    </div>`;
+  }
+
+  async function setReads(mode) {
+    busy = true; paint();
+    try { state = await invoke("set_reads", { mode }) || state; notice = ""; }
+    catch (e) { notice = said(e); }
+    finally { busy = false; paint(); }
+  }
+
+  async function setStayOpen(on) {
+    const password = on ? document.getElementById("so-pw")?.value || "" : "";
+    const typed = typedNow();
+    let refused = false;
+    busy = true; paint();
+    try {
+      vault = await invoke("set_stay_open", { on, password }) || vault;
+      const field = document.getElementById("so-pw");
+      if (field) field.value = "";
+      notice = "";
+    } catch (e) { notice = said(e); refused = true; }
+    finally { busy = false; paint(); if (refused) giveBack(typed); }
+  }
+
+  async function disconnectGithub() {
+    busy = true; paint();
+    try { ghStatus = await invoke("github_disconnect"); notice = ""; }
+    catch (e) { notice = said(e); }
+    finally { busy = false; paint(); }
+  }
+
+  /** Open the question `id` asks, with Cancel focused: Enter on an open question is never the yes. */
+  function askFirst(id) {
+    asking = { id, page };
+    paint();
+    main.querySelector("[data-askno]")?.focus({ preventScroll: true });
   }
 
   function vaultPage() {
@@ -2944,9 +3470,9 @@ Use the copy button to put it on the clipboard."
             ${v.profiles.map((p) => `<option value="${esc(p.id)}"${
               p.id === (vaultForm.profile || v.active) ? " selected" : ""}>${esc(p.label)}</option>`).join("")}
           </select>` : ""}
-        <div class="addrow two">
-          <input id="si-pw" type="password" placeholder="Vault password" />
-          <select id="si-for" title="How long to stay open">
+        <div class="addrow three">
+          <input id="si-pw" type="password" placeholder="Vault password" aria-label="Vault password" />
+          <select id="si-for" title="How long to stay open" aria-label="How long to stay open">
             ${SESSION_LENGTHS.map(([value, label]) => `<option value="${value}"${
               value === vaultForm.duration ? " selected" : ""}>${label}</option>`).join("")}
           </select>
@@ -2997,15 +3523,26 @@ Use the copy button to put it on the clipboard."
     // how to make a profile and seal in a single step.
     const encryption = encryptionPanel(state.sealing || {});
 
+    // What needs doing first, then what can be changed, then what is only being reported. With no
+    // vault yet there is nothing to sign in to, open at restart, recover or add a profile to, and
+    // those panels each asked for a "vault password" that did not exist: three password boxes on
+    // a first-run screen whose one real action was further down.
+    const noVault = !v.profiles.length;
     return settingsBack("Security") + `
-      <div class="group">${openState}</div>
+      ${noVault ? "" : `<div class="group">${openState}</div>`}
+      ${signIn}${encryption}
       ${readsBlock()}
-      ${stayOpenBlock()}
-      ${signIn}${encryption}${profiles}${recoveryPanel()}${backupPanel()}`;
+      ${noVault ? `<p class="note">Opening at restart, a recovery code and profiles come once this
+        device is secured.</p>` : `${stayOpenBlock()}${recoveryPanel()}${profiles}`}
+      ${backupPanel()}
+      ${veilGroup()}`;
   }
 
   function lockBanner() {
     if (!vault?.supported || vault.unlocked || !vault.fully_sealed) return "";
+    // On Security the sign-in form is the first thing on the page; a banner over it offering to go
+    // there said the same thing twice.
+    if (page === "vault") return "";
     return `<div class="banner">
       ${icon("lock")}
       <div class="body"><strong>The vault is locked.</strong>
@@ -3050,17 +3587,142 @@ Use the copy button to put it on the clipboard."
             : "Connect to send keys to your repositories as Actions secrets."}</div>
         </div>
         ${s?.connected
-          ? `<button class="act danger" data-ghdisconnect ${busy ? "disabled" : ""}>Disconnect</button>`
+          ? `<button class="act danger" data-ghdisconnect ${busy || asking?.id === "ghdisconnect" ? "disabled" : ""}>Disconnect</button>`
           : `<button class="act" data-ghconnect ${busy ? "disabled" : ""}>Connect</button>`}
       </div>
+      ${confirmStrip("ghdisconnect", `Disconnect GitHub? Its token is deleted from PassBook. Secrets
+        already sent to GitHub stay there.`, "Disconnect")}
     </div>`;
   }
 
   async function callSignin(name, args = {}) {
+    const typed = typedNow();
+    let refused = false;
     busy = true; paint();
     try { signins = await invoke(name, args); notice = ""; }
-    catch (e) { notice = String(e); }
-    finally { busy = false; paint(); }
+    catch (e) { notice = said(e); refused = true; }
+    finally { busy = false; paint(); if (refused) giveBack(typed); }
+  }
+
+  // Adding a sign-in was two terminal commands printed on this page, with "<your client id>" to fill
+  // in by hand. It is a form now: the provider, the client ID and secret from registering with it, and
+  // one press that describes it and opens the sign-in.
+  const SIGNIN_PROVIDERS = [
+    ["google", "Google", "an OAuth client ID of type \u201cDesktop app\u201d in Google Cloud \u2192 APIs & Services \u2192 Credentials. Google gives desktop clients a secret too; paste it."],
+    ["microsoft", "Microsoft", "an app registration in Microsoft Entra, with a \u201cMobile and desktop\u201d redirect."],
+    ["github", "GitHub", "an OAuth App under GitHub \u2192 Settings \u2192 Developer settings. Paste its client secret too."],
+    ["custom", "Another provider", "a client with the provider, then give its sign-in and token addresses below."],
+  ];
+  let signinForm = { open: false, provider: "google", busy: false, error: "" };
+
+  function signinFormPanel() {
+    const f = signinForm;
+    if (!f.open) {
+      return `<div class="group">
+        <div class="grouphead"><h3>Add a sign-in</h3>
+          <button class="act" data-signinadd="1">${icon("plus")} Add a sign-in</button></div>
+        <p class="note">Sign in to an account with a client you registered with the provider. PassBook
+          keeps the tokens and renews them.</p>
+        ${aside(`<p>No vendor's own client id ships with PassBook. Some tools sign in
+          with a client they registered for themselves, and borrowing one is between
+          you and that vendor's terms \u2014 not something this app should decide for
+          you.</p>`, "Why you need your own client id")}
+      </div>`;
+    }
+    const which = SIGNIN_PROVIDERS.find(([id]) => id === f.provider) || SIGNIN_PROVIDERS[0];
+    const custom = f.provider === "custom";
+    const off = f.busy ? "disabled" : "";
+    return `<div class="group signinform">
+      <h3>Add a sign-in</h3>
+      <div class="formgrid">
+        <label for="sf-provider">Provider</label>
+        <select id="sf-provider" ${off}>${SIGNIN_PROVIDERS.map(([id, name]) =>
+          `<option value="${id}"${id === f.provider ? " selected" : ""}>${esc(name)}</option>`).join("")}</select>
+        <label for="sf-label">Name <span class="sub">optional</span></label>
+        <input id="sf-label" data-keep ${off} spellcheck="false" autocapitalize="off" autocomplete="off"
+          placeholder="${custom ? "e.g. acme" : "e.g. work \u2014 to hold more than one"}" />
+        <label for="sf-client">Client ID</label>
+        <input id="sf-client" data-keep ${off} spellcheck="false" autocapitalize="off" autocomplete="off"
+          placeholder="From registering with ${esc(which[1] === "Another provider" ? "the provider" : which[1])}" />
+        <label for="sf-secret">Client secret <span class="sub">if it has one</span></label>
+        <input id="sf-secret" type="password" data-keep ${off} autocomplete="off"
+          placeholder="Kept in this store, encrypted like any key" />
+        ${custom ? `<label for="sf-auth">Sign-in address</label>
+        <input id="sf-auth" data-keep ${off} spellcheck="false" autocapitalize="off" autocomplete="off"
+          placeholder="https://provider.example/oauth/authorize" />
+        <label for="sf-token">Token address</label>
+        <input id="sf-token" data-keep ${off} spellcheck="false" autocapitalize="off" autocomplete="off"
+          placeholder="https://provider.example/oauth/token" />` : ""}
+        <label for="sf-scope">Scope <span class="sub">optional</span></label>
+        <input id="sf-scope" data-keep ${off} spellcheck="false" autocapitalize="off" autocomplete="off"
+          placeholder="${custom ? "What to ask the provider for" : "The usual sign-in scope"}" />
+      </div>
+      <p class="note">Register ${which[2]} PassBook signs in through
+        <code>http://localhost</code> on a free port, at <code>/auth/callback</code>.</p>
+      ${f.error ? `<div class="note err" role="alert">${esc(f.error)}</div>` : ""}
+      <div class="formacts">
+        <button class="act" data-signincancel="1" ${off}>Cancel</button>
+        <button class="act primary" data-signingo="1" ${off}>${f.busy
+          ? `<span class="spinner"></span> Adding\u2026` : "Add and sign in"}</button>
+      </div>
+    </div>`;
+  }
+
+  function closeSigninForm() {
+    signinForm = { open: false, provider: signinForm.provider, busy: false, error: "" };
+    for (const id of ["sf-label", "sf-client", "sf-secret", "sf-auth", "sf-token", "sf-scope"]) {
+      const el = document.getElementById(id);
+      if (el) el.value = "";
+    }
+    paint();
+  }
+
+  /** Describe the sign-in, then open it in the browser. The fields stay as typed until the CLI has it. */
+  async function submitSigninForm() {
+    if (signinForm.busy) return;
+    const field = (id) => String(document.getElementById(id)?.value || "").trim();
+    const form = { provider: signinForm.provider, label: field("sf-label"), clientId: field("sf-client"),
+                   clientSecret: field("sf-secret"), authorizeUrl: field("sf-auth"), tokenUrl: field("sf-token"),
+                   scope: field("sf-scope") };
+    if (!form.clientId) {
+      signinForm.error = "Paste the client ID you registered with the provider.";
+      paint(); document.getElementById("sf-client")?.focus(); return;
+    }
+    if (form.provider === "custom" && (!form.authorizeUrl || !form.tokenUrl)) {
+      signinForm.error = "A custom provider needs its sign-in address and its token address.";
+      paint(); document.getElementById(form.authorizeUrl ? "sf-token" : "sf-auth")?.focus(); return;
+    }
+    const before = new Set((signins || []).map((s) => s.id));
+    const typed = typedNow();
+    signinForm.busy = true; signinForm.error = ""; paint();
+    try {
+      signins = await invoke("oauth_add", form);
+    } catch (e) {
+      signinForm.busy = false; signinForm.error = said(e); paint(); giveBack(typed);
+      return;
+    }
+    const made = (signins || []).find((s) => !before.has(s.id));
+    closeSigninForm();
+    if (made) connectSignin(made.id);
+  }
+
+  /** Start a browser sign-in and watch for it to finish. */
+  async function connectSignin(id) {
+    connecting[id] = true; paint();
+    try { await invoke("oauth_connect", { id }); notice = ""; }
+    catch (e) { notice = said(e); delete connecting[id]; paint(); return; }
+    // The browser half happens outside this window, so poll rather than wait.
+    const until = Date.now() + 185000;
+    const tick = async () => {
+      if (!connecting[id]) return;   // stopped waiting
+      await refreshSignins();
+      const done = (signins || []).find((s) => s.id === id);
+      if (done?.state === "connected" || Date.now() > until) {
+        delete connecting[id]; paint(); return;
+      }
+      setTimeout(tick, 2000);
+    };
+    setTimeout(tick, 2000);
   }
 
   /** Accounts this machine is signed in to, and whether they still work.
@@ -3087,14 +3749,17 @@ Use the copy button to put it on the clipboard."
         </div>
         <span class="tag ${tone}">${esc(label)}</span>
         ${waiting
-          ? `<span class="note">waiting for the browser…</span>`
+          ? `<span class="note flat"><span class="spinner"></span> Waiting for the browser\u2026</span>
+             <button class="act" data-oastop="${esc(s.id)}">Stop waiting</button>`
           : `${s.has_refresh ? `<button class="act" data-oarefresh="${esc(s.id)}"
                 ${busy ? "disabled" : ""}>Renew</button>` : ""}
              <button class="act" data-oaconnect="${esc(s.id)}" ${busy ? "disabled" : ""}>
                ${s.state === "disconnected" ? "Sign in" : "Sign in again"}</button>
-             <button class="act danger" data-oaforget="${esc(s.id)}" ${busy ? "disabled" : ""}>Forget</button>`}
-      </div>`;
-    }).join("") : `<div class="empty">No sign-ins yet.</div>`;
+             <button class="act danger" data-oaforget="${esc(s.id)}" ${busy || asking?.id === "oaforget:" + s.id ? "disabled" : ""}>Forget</button>`}
+      </div>
+      ${confirmStrip("oaforget:" + s.id, `Forget ${esc(s.id)}? Its tokens are deleted from this store, and
+        anything that uses them is signed out until you sign in again.`, "Forget")}`;
+    }).join("") : `<div class="empty">No sign-ins yet.${signinForm.open ? "" : ` <button class="linkbtn" data-signinadd="1">Add one</button>`}</div>`;
 
     return `<h2>Sign-ins</h2>
       <p class="lede">Accounts this device holds, kept signed in so agents never
@@ -3106,18 +3771,8 @@ Use the copy button to put it on the clipboard."
           clock: it is renewed on the way past when something reads it, so nothing has
           to handle that itself.</p>`, "How these stay alive")}
       </div>
-      ${githubGroup()}
-      <div class="group">
-        <h3>Add a sign-in</h3>
-        <p class="note">Register a client with the provider, then describe it here.
-        Nothing is connected until you sign in.</p>
-        <pre class="snippet">passbook oauth add google work --client-id &lt;your client id&gt;
-passbook oauth connect google:work</pre>
-        ${aside(`<p>No vendor's own client id ships with PassBook. Some tools sign in
-          with a client they registered for themselves, and borrowing one is between
-          you and that vendor's terms \u2014 not something this app should decide for
-          you.</p>`, "Why you need your own client id")}
-      </div>`;
+      ${signinFormPanel()}
+      ${githubGroup()}`;
   }
 
   /** A rejected invoke as a sentence: without the "Error:" in front of one that already is. */
@@ -3241,10 +3896,69 @@ passbook oauth connect google:work</pre>
   async function loadSync(quiet = false) {
     if (syncView.busy || syncView.working) return;
     syncView.busy = true;
+    watchSync();
     if (!quiet) { syncView.error = ""; paint(); }
     try { syncView.data = await invoke("sync_status"); }
     catch (e) { if (!quiet) syncView.error = balanceError(e); }
-    finally { syncView.busy = false; if (!quiet || ["machines", "attention", "keys"].includes(page)) paint(); else paintNav(); }
+    finally {
+      syncView.busy = false; unwatchSync();
+      if (!quiet || ["machines", "attention", "keys"].includes(page)) paint(); else paintNav();
+    }
+  }
+
+  // The check asks every other device and can take most of a minute. The page said only "Checking the
+  // other devices…" for all of it, so it could not be told from a hang. `passbook://sync-progress` says
+  // which devices are being asked and when each answers; the page shows that, and how long the ones
+  // still out have been waited on.
+  let syncTicker = null;
+  function watchSync() {
+    syncView.progress = { stage: "finding", hosts: [], answered: {}, started: Date.now() };
+    clearInterval(syncTicker);
+    // Only the seconds change, so a tick rewrites that one line: a whole repaint each second restarted
+    // every spinner on the page and would drop a selection.
+    syncTicker = setInterval(() => {
+      const line = page === "machines" && syncView.progress && main.querySelector("[data-syncnote]");
+      if (line) line.textContent = line.dataset.syncnote + syncProgressNote();
+    }, 1000);
+  }
+  function unwatchSync() { syncView.progress = null; clearInterval(syncTicker); syncTicker = null; }
+  function syncStep(step) {
+    if (!step) return;
+    // Sync now exchanges keys first and checks after; its progress starts with the check.
+    if (!syncView.progress && step.stage === "finding" && syncView.working) watchSync();
+    const p = syncView.progress;
+    if (!p) return;
+    if (step.stage === "asking") { p.stage = "asking"; p.hosts = step.hosts || []; p.askedAt = Date.now(); }
+    else if (step.stage === "answered" && step.host) p.answered[step.host] = { ok: !!step.ok, seconds: step.seconds };
+    if (page === "machines") paint();
+  }
+
+  /** Where a running check has got to, as one line. */
+  function syncProgressNote() {
+    const p = syncView.progress;
+    if (!p) return "";
+    if (p.stage !== "asking") return "Finding your other devices on the network\u2026";
+    if (!p.hosts.length) return "No other device answered on the network.";
+    const out = p.hosts.filter((h) => !p.answered[h]);
+    const waited = Math.round((Date.now() - (p.askedAt || p.started)) / 1000);
+    if (!out.length) return "Every device answered. Comparing keys\u2026";
+    return `${p.hosts.length - out.length} of ${p.hosts.length} device${p.hosts.length === 1 ? "" : "s"} answered`
+      + ` \u00b7 waiting on ${out.map(deviceName).join(", ")}${waited >= 3 ? ` (${waited} s)` : ""}\u2026`;
+  }
+
+  /** The devices being asked on a first check, each with whether it has answered yet. */
+  function syncProgressRows() {
+    const p = syncView.progress;
+    if (!p || p.stage !== "asking") return "";
+    return p.hosts.map((h) => {
+      const got = p.answered[h];
+      return `<div class="row">
+        <span class="statustile ${got ? (got.ok ? "good" : "warn") : "plain"} sm">${icon("monitor")}</span>
+        <div class="grow"><strong>${esc(deviceName(h))}</strong></div>
+        ${got ? `<span class="tag ${got.ok ? "on" : "off"}">${got.ok ? "Answered" : "Not answering"}</span>`
+              : `<span class="note flat"><span class="spinner"></span> Asking\u2026</span>`}
+      </div>`;
+    }).join("");
   }
 
   async function syncNow() {
@@ -3257,7 +3971,7 @@ passbook oauth connect google:work</pre>
         : (d.devices || []).length ? "Nothing needed to move." : "There is no other device to exchange keys with.";
       state = await invoke("state");
     } catch (e) { syncView.error = balanceError(e); }
-    finally { syncView.working = ""; paint(); }
+    finally { syncView.working = ""; unwatchSync(); paint(); }
   }
 
   /** Seconds since the epoch as "5m ago", or what to say when it never happened. */
@@ -3266,7 +3980,8 @@ passbook oauth connect google:work</pre>
   /** The Devices page's first panel: is every key everywhere, and if not, where is it stuck. */
   function syncPanel() {
     const v = syncView, d = v.data;
-    if (!d) return `<div class="group"><h3>Sync</h3><div class="row"><div class="grow note flat">${v.error ? esc(v.error) : "Checking the other devices…"}</div></div></div>`;
+    if (!d) return `<div class="group"><h3>Sync</h3><div class="row"><div class="grow note flat" role="status" aria-live="polite">${v.error ? esc(v.error)
+      : v.progress ? `<span class="spinner"></span> <span data-syncnote="">${esc(syncProgressNote())}</span>` : "Checking the other devices\u2026"}</div></div>${v.error ? "" : syncProgressRows()}</div>`;
     const devices = d.devices || [];
     if (!devices.length) return `<div class="group"><h3>Sync</h3><div class="row"><div class="grow note flat">No other device on your network is exchanging keys with this one.</div></div></div>`;
     const apart = Object.keys(d.notEverywhere || {}).length;
@@ -3303,7 +4018,11 @@ passbook oauth connect google:work</pre>
       <div class="row">
         <span class="statustile ${fine ? "good" : "plain"}">${icon(fine ? "check" : "history")}</span>
         <div class="grow"><strong>${fine ? "Every key is on every device" : apart ? `${apart} key${apart === 1 ? " is" : "s are"} not on every device` : down ? `${down} device${down === 1 ? " is" : "s are"} not answering` : "Some keys are still on their way"}</strong>
-          <div class="note flat">${esc(v.working ? "Exchanging keys with the other devices…" : v.said || `Checked ${sinceEpoch(d.checkedAt, "just now")}. Devices exchange keys by themselves every ten minutes.`)}</div></div>
+          <div class="note flat" role="status" aria-live="polite">${v.working && v.progress
+            ? `<span data-syncnote="Keys exchanged. ">Keys exchanged. ${esc(syncProgressNote())}</span>`
+            : v.busy && v.progress ? `<span data-syncnote="Checking again: ">Checking again: ${esc(syncProgressNote())}</span>`
+            : esc(v.working ? "Exchanging keys with the other devices\u2026"
+              : v.said || `Checked ${sinceEpoch(d.checkedAt, "just now")}. Devices exchange keys by themselves every ten minutes.`)}</div></div>
         <button class="act" data-sync-check="1" ${v.busy || v.working ? "disabled" : ""}>${v.busy ? "Checking…" : "Check again"}</button>
         <button class="act primary" data-sync-now="1" ${v.busy || v.working ? "disabled" : ""}>${v.working ? "Syncing…" : "Sync now"}</button>
       </div>
@@ -4338,7 +5057,7 @@ passbook oauth connect google:work</pre>
     if (chain.busy) return;
     chain.busy = true; paint();
     try { chain.answer = await invoke("verify_record"); }
-    catch (e) { chain.answer = { intact: null, detail: String(e) }; }
+    catch (e) { chain.answer = { intact: null, detail: said(e) }; }
     finally { chain.busy = false; paint(); }
   }
 
@@ -4353,9 +5072,13 @@ passbook oauth connect google:work</pre>
     const broken = intact === false;
     const tone = broken ? "warn" : intact ? "good" : "plain";
     const word = chain.busy ? "Checking…" : broken ? "Tampered" : intact ? "Verified" : "Not checked";
+    // A check that could not be run is not a record that has not been checked: pressing Verify and being
+    // told "not verified yet" again read as a button that did nothing.
+    const failed = !chain.busy && checked && intact === null && checked.detail;
     const detail = chain.busy ? "Checking every entry."
       : broken ? (checked.detail || "This record has been altered.")
       : intact ? "Nothing in this record has been altered."
+      : failed ? `The check could not be run: ${checked.detail}`
       : "This record has not been verified yet.";
     // Tamper-evidence belongs at the top only when it has something to say.
     // A green "Intact" badge above every visit is a badge nobody reads; the
@@ -4538,6 +5261,8 @@ passbook oauth connect google:work</pre>
     // still worked.
     Object.keys(revealed).forEach(hideValue);
     revealed = {}; history = {}; picked = {}; expanded = {}; replacing = {};
+    for (const box of main.querySelectorAll("input[data-keep]")) box.value = "";
+    adding = false; pasted = null; keyCursor = ""; addForm.error = ""; addForm.sent = null;
     gateView = { mode: "pick", chosen: null, error: "", busy: false, hint: "" };
     paintGate();
   }
@@ -4998,9 +5723,6 @@ passbook oauth connect google:work</pre>
   }
 
   function wireGate() {
-    // `String(error)` on a rejected invoke reads "Error: Wrong password." The
-    // word "Error" in front of a sentence that is already an error is noise.
-    const said = (error) => String(error?.message ?? error ?? "").replace(/^Error:\s*/, "");
     const fail = (error) => { gateView.error = said(error); gateView.busy = false; paintGate(); };
 
     gate.querySelectorAll("[data-gpick]").forEach((b) => b.onclick = () => {
@@ -6060,8 +6782,78 @@ passbook oauth connect google:work</pre>
     try { again.setSelectionRange(at, to); } catch { /* refused */ }
   }
 
+  /** What is typed into the fields marked `data-keep`, and where the caret was, so a repaint can put it
+   *  back.
+   *
+   *  A paint replaces every node. The callers that repaint on a clock learned to carry the focused
+   *  field across (`paintKeepingCaret`), but any other repaint still emptied whatever was being typed:
+   *  pressing Add repainted to gray the button, and the name and the value went with it. A field that
+   *  asks to be kept is kept by every paint. `data-keep="focus"` keeps only the focus and the caret, for
+   *  a field whose text the page already supplies (the search box). Whatever wants one of these fields
+   *  empty empties it before it paints.
+   */
+  function heldTyping() {
+    const kept = [];
+    main.querySelectorAll("input[data-keep][id]").forEach((el) => {
+      const focused = el === document.activeElement;
+      if (!el.value && !focused) return;
+      let at = null, to = null;
+      try { at = el.selectionStart; to = el.selectionEnd; } catch { /* refused */ }
+      kept.push({ id: el.id, value: el.value, focused, at, to });
+    });
+    return kept;
+  }
+
+  function restoreTyping(kept) {
+    for (const was of kept) {
+      const el = document.getElementById(was.id);
+      if (!el || !el.matches("input[data-keep]")) continue;
+      if (el.dataset.keep !== "focus" && !el.value && was.value) el.value = was.value;
+      if (!was.focused || el.disabled) continue;
+      el.focus({ preventScroll: true });
+      try { el.setSelectionRange(was.at ?? el.value.length, was.to ?? el.value.length); } catch { /* refused */ }
+    }
+  }
+
+  // ── a press that is in progress ────────────────────────────────────────
+  //
+  // A click is a mouse going down and coming up on the same element, and a paint replaces every
+  // element. So a paint that lands between the two takes the button away from under the pointer, and
+  // the click never happens: no error, nothing on screen, a press that did nothing. The page repaints
+  // for its own reasons (the five-second refresh when anything has changed, a "Copied" tick reverting,
+  // a status arriving); how often one lands inside a press was not measured. Reproduced in WebKit and
+  // in Chrome: copy one
+  // value, then press another row's chevron as the tick reverts, and the row stays shut.
+  //
+  // While a press is in progress a paint waits for it to end. Only a press on something there is to
+  // press: the mouse going down on a scrollbar, or on the page itself to drag the window, is not always
+  // followed by word of it coming back up, and a list being scrolled has to keep building its rows. A
+  // dropdown is left out for the same reason: its menu belongs to the system.
+  const PRESSABLE = "button, a, summary, label, [role=button], [role=option], [data-open], [data-picture], input[type=checkbox], input[type=radio]";
+  let pressHeld = false, paintOwed = false, pressTimer = 0;
+  function pressOver() {
+    clearTimeout(pressTimer);
+    if (!pressHeld) return;
+    pressHeld = false;
+    // After the click this release is part of, which usually paints anyway.
+    setTimeout(() => { if (paintOwed) paint(); }, 0);
+  }
+  document.addEventListener("mousedown", (event) => {
+    if (event.button !== 0 || event.target?.closest?.("select") || !event.target?.closest?.(PRESSABLE)) return;
+    pressHeld = true;
+    clearTimeout(pressTimer);
+    // A mouse let go somewhere this window never hears about does not hold the page still for good.
+    pressTimer = setTimeout(pressOver, 3000);
+  }, true);
+  for (const over of ["mouseup", "click", "change", "dragstart", "contextmenu", "keydown"]) document.addEventListener(over, pressOver, true);
+  window.addEventListener("blur", pressOver);
+
   function paint() {
     if (!state) return;
+    if (pressHeld) { paintOwed = true; return; }
+    paintOwed = false;
+    if (asking && asking.page !== page) asking = null;
+    const typed = heldTyping();
     paintNav();
     const body = { keys: keysPage, vault: vaultPage, signins: signinsPage,
                    access: accessPage, apps: appsPage, settings: settingsPage,
@@ -6072,12 +6864,19 @@ passbook oauth connect google:work</pre>
     paintGate();
     paintSheet();
     dressPage();
+    restoreTyping(typed);
+    const pinned = main.querySelector(".keyshead");
+    main.style.scrollPaddingTop = pinned ? `${pinned.offsetHeight + 8}px` : "";
 
     main.querySelectorAll("[data-goto]").forEach((b) => b.onclick = () => {
       page = b.dataset.goto; notice = ""; paint();
       if (page === "updates" && Date.now() - updatesView.checked > 60000) loadUpdates();
     });
-    main.querySelectorAll("[data-key-filter]").forEach((b) => b.onclick = () => { keyFilter = b.dataset.keyFilter; resetRows(); paint(); });
+    main.querySelectorAll("[data-key-filter]").forEach((b) => b.onclick = () => {
+      keyFilter = b.dataset.keyFilter; resetRows();
+      if (keyCursor && !shownKeys().includes(keyCursor)) keyCursor = query.trim() ? (shownKeys()[0] || "") : "";
+      paint();
+    });
     main.querySelectorAll("[data-key-sort]").forEach((b) => b.onchange = () => { keySort = b.value; resetRows(); paint(); });
     main.querySelectorAll("[data-sync-check]").forEach((b) => b.onclick = () => loadSync());
     main.querySelectorAll("[data-sync-now]").forEach((b) => b.onclick = () => syncNow());
@@ -6137,12 +6936,7 @@ passbook oauth connect google:work</pre>
       // does not ask twice. Un-sealing is the direction worth a beat: it hands
       // values back to every caller on the machine.
       const wanted = b.dataset.reads;
-      if (wanted === "open" &&
-          !confirm("Allow any program running as you to read credential values again?")) return;
-      busy = true; paint();
-      try { state = await invoke("set_reads", { mode: wanted }) || state; }
-      catch (e) { alert(said(e)); }
-      finally { busy = false; paint(); }
+      if (wanted === "open") askFirst("reads-open"); else setReads(wanted);
     });
     main.querySelectorAll("[data-stayopen]").forEach((b) => b.onclick = async () => {
       const wanted = b.dataset.stayopen;
@@ -6156,21 +6950,24 @@ passbook oauth connect google:work</pre>
       if (wanted === "on") {
         password = document.getElementById("so-pw")?.value || "";
         if (!password) {
-          alert("The vault password is needed once, to wrap the key for the keystore.");
+          notice = "Type the vault password first. It is needed once, to wrap the key for the keystore.";
+          paint();
+          document.getElementById("so-pw")?.focus();
           return;
         }
-        if (!confirm("Let this Mac open the vault after a restart?\n\n"
-            + "The opening key goes into the OS keystore, where any program running "
-            + "as you can fetch it \u2014 no password, no prompt. That includes every "
-            + "agent on this machine.")) return;
+        askFirst("stayopen-on");
+        return;
       }
-      busy = true; paint();
-      try {
-        vault = await invoke("set_stay_open", { on: wanted === "on", password }) || vault;
-        const field = document.getElementById("so-pw");
-        if (field) field.value = "";
-      } catch (e) { alert(said(e)); }
-      finally { busy = false; paint(); }
+      setStayOpen(false);
+    });
+    main.querySelectorAll("[data-askno]").forEach((b) => b.onclick = () => { asking = null; paint(); });
+    main.querySelectorAll("[data-askyes]").forEach((b) => b.onclick = () => {
+      const id = b.dataset.askyes;
+      asking = null;
+      if (id === "reads-open") setReads("open");
+      else if (id === "stayopen-on") setStayOpen(true);
+      else if (id === "ghdisconnect") disconnectGithub();
+      else if (id.startsWith("oaforget:")) callSignin("oauth_disconnect", { id: id.slice("oaforget:".length) });
     });
     main.querySelectorAll("[data-verify]").forEach((b) => b.onclick = () => checkChain());
     main.querySelectorAll("[data-balances-on]").forEach((b) => b.onclick = async () => {
@@ -6375,33 +7172,26 @@ passbook oauth connect google:work</pre>
 
     main.querySelectorAll("[data-ghconnect]").forEach((b) => b.onclick = () => ghOpen([]));
     main.querySelectorAll("[data-ghdisconnect]").forEach((b) => b.onclick = async () => {
-      if (!confirm("Disconnect GitHub? Its token is deleted from PassBook. Secrets already on GitHub stay.")) return;
-      busy = true; paint();
-      try { ghStatus = await invoke("github_disconnect"); notice = ""; }
-      catch (e) { notice = String(e); }
-      finally { busy = false; paint(); }
+      askFirst("ghdisconnect");
     });
     main.querySelectorAll("[data-bulkgithub]").forEach((b) => b.onclick = () => ghOpen(chosen()));
     main.querySelectorAll("[data-oarefresh]").forEach((b) => b.onclick = () =>
       callSignin("oauth_refresh", { id: b.dataset.oarefresh }));
-    main.querySelectorAll("[data-oaforget]").forEach((b) => b.onclick = () =>
-      callSignin("oauth_disconnect", { id: b.dataset.oaforget }));
-    main.querySelectorAll("[data-oaconnect]").forEach((b) => b.onclick = async () => {
-      const id = b.dataset.oaconnect;
-      connecting[id] = true; paint();
-      try { await invoke("oauth_connect", { id }); notice = ""; }
-      catch (e) { notice = String(e); connecting[id] = false; paint(); return; }
-      // The browser half happens outside this window, so poll rather than wait.
-      const until = Date.now() + 185000;
-      const tick = async () => {
-        await refreshSignins();
-        const done = (signins || []).find((s) => s.id === id);
-        if (done?.state === "connected" || Date.now() > until) {
-          delete connecting[id]; paint(); return;
-        }
-        setTimeout(tick, 2000);
-      };
-      setTimeout(tick, 2000);
+    main.querySelectorAll("[data-oaforget]").forEach((b) => b.onclick = () => askFirst("oaforget:" + b.dataset.oaforget));
+    main.querySelectorAll("[data-oaconnect]").forEach((b) => b.onclick = () => connectSignin(b.dataset.oaconnect));
+    main.querySelectorAll("[data-signinadd]").forEach((b) => b.onclick = () => {
+      signinForm = { open: true, provider: signinForm.provider, busy: false, error: "" };
+      paint();
+      document.getElementById("sf-client")?.focus();
+    });
+    main.querySelectorAll("[data-oastop]").forEach((b) => b.onclick = () => { delete connecting[b.dataset.oastop]; paint(); });
+    main.querySelectorAll("[data-signincancel]").forEach((b) => b.onclick = () => closeSigninForm());
+    main.querySelectorAll("[data-signingo]").forEach((b) => b.onclick = () => submitSigninForm());
+    const sfProvider = document.getElementById("sf-provider");
+    if (sfProvider) sfProvider.onchange = () => { signinForm.provider = sfProvider.value; signinForm.error = ""; paint(); };
+    main.querySelectorAll(".signinform input").forEach((el) => el.onkeydown = (e) => {
+      if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); submitSigninForm(); }
+      else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeSigninForm(); }
     });
 
     main.querySelectorAll("[data-group]").forEach((b) => {
@@ -6422,25 +7212,39 @@ passbook oauth connect google:work</pre>
     // opening the row and the selection gone ("when I do it deselects right away", Liam 2026-10-13); a
     // double-click to take the whole name toggled the row twice. So a click that leaves text selected
     // opens nothing, and a click on the name waits a moment to see whether it is the first of two.
+    //
+    // Only the name gives way to a selection, and only to a selection in that name. This used to ask
+    // whether anything at all in the page was selected, and the chevron asked too: with a name still
+    // highlighted from a double-click, or text selected in the search box, every chevron on the page did
+    // nothing, press after press ("i even press the right arrow on it and it does nothing when in
+    // search", Liam 2026-11-24). The chevron is a button; it opens the row whatever is selected.
     main.querySelectorAll("[data-open]").forEach((b) => b.onclick = (event) => {
       const k = b.dataset.open;
-      if (selectionIn(main)) return;
       if (b.classList.contains("named")) {
+        if (selectingName(k)) return;
         clearTimeout(openTimer);
         if (event.detail > 1) return;
-        openTimer = setTimeout(() => { if (!selectionIn(main)) toggleKeyRow(k); }, 240);
+        openTimer = setTimeout(() => { if (!selectingName(k)) { keyCursor = k; toggleKeyRow(k); } }, 240);
         return;
       }
+      keyCursor = k;
       toggleKeyRow(k);
     });
+    main.querySelectorAll("[data-edit]").forEach((b) => b.onclick = () => editValue(b.dataset.edit));
+    main.querySelectorAll("[data-editsave]").forEach((b) => b.onclick = () => saveValue(b.dataset.editsave));
+    main.querySelectorAll("[data-editcancel]").forEach((b) => b.onclick = () => cancelEdit(b.dataset.editcancel));
     main.querySelectorAll("[data-selectmode]").forEach((b) => b.onclick = () => {
       selectMode = !selectMode;
       if (!selectMode) { picked = {}; bulkConfirm = false; }
       paint();
     });
     main.querySelectorAll("[data-addopen]").forEach((b) => b.onclick = () => {
-      adding = !adding; paint();
-      if (adding) document.getElementById("k")?.focus();
+      if (adding) closeAdd(); else openAdd();
+    });
+    main.querySelectorAll("[data-addnamed]").forEach((b) => b.onclick = () => openAdd(b.dataset.addnamed));
+    main.querySelectorAll("[data-searchclear]").forEach((b) => b.onclick = () => {
+      query = ""; keyCursor = ""; resetRows(); paint();
+      document.querySelector("main input.search")?.focus();
     });
 
     main.querySelectorAll("[data-pick]").forEach((b) => b.onchange = () => {
@@ -6658,9 +7462,12 @@ passbook oauth connect google:work</pre>
     });
     wire("si-go", () => signIn("si-pw", "si-profile"));
     wire("sw-go", () => signIn("sw-pw", "sw-profile"));
-    wire("si-go2", () => signIn("si-pw2", null));
     wire("seal-go", () => callVault("vault_seal", { password: pwd("seal-pw") }));
-    wire("unseal-go", () => callVault("vault_unseal", { password: pwd("sl-pw") }));
+    wire("unseal-go", async () => { await callVault("vault_unseal", { password: pwd("sl-pw") }); if (!vault?.fully_sealed) unsealing = false; paint(); });
+    main.querySelectorAll("[data-unsealopen]").forEach((b) => b.onclick = () => {
+      unsealing = true; paint(); document.getElementById("sl-pw")?.focus();
+    });
+    main.querySelectorAll("[data-unsealclose]").forEach((b) => b.onclick = () => { unsealing = false; paint(); });
     wire("sec-go", () => callVault("vault_secure",
       { label: document.getElementById("sec-label")?.value ?? "", password: pwd("sec-pw") }));
     wire("np-create", () => callVault("vault_create_profile",
@@ -6668,7 +7475,7 @@ passbook oauth connect google:work</pre>
 
     // Enter submits the password field it is in, because a password field that
     // needs a mouse to submit is one people retype.
-    [["si-pw", "si-go"], ["si-pw2", "si-go2"], ["seal-pw", "seal-go"],
+    [["si-pw", "si-go"], ["sl-pw", "unseal-go"], ["rc-pw", "rc-go"], ["seal-pw", "seal-go"],
      ["sec-pw", "sec-go"], ["np-pw", "np-create"], ["sw-pw", "sw-go"]].forEach(([field, button]) => {
       const input = document.getElementById(field);
       if (input) input.onkeydown = (e) => { if (e.key === "Enter") document.getElementById(button)?.click(); };
@@ -6729,19 +7536,7 @@ passbook oauth connect google:work</pre>
       catch (e) { notice = String(e); }
       paint();
     });
-    main.querySelectorAll("[data-copy]").forEach((b) => b.onclick = async () => {
-      const k = b.dataset.copy;
-      // `navigator.clipboard.writeText` takes a string, which is why this no
-      // longer happens here: it was the one path that put the value back in
-      // this heap, on the row's most-used button. On a machine that seals reads
-      // it is refused outright, and the refusal says so.
-      try {
-        await invoke("copy_key", { name: k });
-        markCopied(k);
-        notice = "";
-      } catch (e) { notice = String(e); }
-      paint();
-    });
+    main.querySelectorAll("[data-copy]").forEach((b) => b.onclick = () => copyValue(b.dataset.copy));
     main.querySelectorAll("[data-remove]").forEach((b) => b.onclick = () => {
       confirming = b.dataset.remove; paint();
     });
@@ -6750,7 +7545,8 @@ passbook oauth connect google:work</pre>
     });
     main.querySelectorAll("[data-rmgo]").forEach((b) => b.onclick = async () => {
       const k = b.dataset.rmgo;
-      confirming = null; hideValue(k);
+      confirming = null; hideValue(k); delete replacing[k];
+      if (keyCursor === k) keyCursor = "";
       await call("remove_key", { name: k });
     });
     // Clicking the picture asks to replace the value.
@@ -6761,8 +7557,7 @@ passbook oauth connect google:work</pre>
     // avoid — and it was never much of an edit anyway: nobody amends the
     // fourteenth character of an API key, they paste a new one.
     main.querySelectorAll("[data-picture]").forEach((el) => el.onclick = () => {
-      replacing[el.dataset.picture] = true;
-      paint();
+      if (!replacing[el.dataset.picture]) editValue(el.dataset.picture);
     });
     // A picture drawn at `12 * dpr` belongs on screen at a dpr-th of its own
     // size. Done from the loaded image rather than in CSS because the height a
@@ -6777,26 +7572,13 @@ passbook oauth connect google:work</pre>
       };
       if (img.complete) fit(); else img.onload = fit;
     });
-    // Saving on blur is how the HivemindOS card behaves; Escape abandons it.
+    // Enter saves and Escape abandons. Losing focus does neither: see `editValue`.
     main.querySelectorAll("[data-replace]").forEach((input) => {
       const k = input.dataset.replace;
       input.onkeydown = (e) => {
-        if (e.key === "Enter") input.blur();
-        if (e.key === "Escape") { input.value = ""; input.blur(); }
+        if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); saveValue(k); }
+        if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); cancelEdit(k); }
       };
-      input.onblur = async () => {
-        const next = input.value;
-        input.value = "";
-        delete replacing[k];
-        if (!next.trim()) { paint(); return; }
-        // Somebody typed this, so for these few seconds the window does hold a
-        // value — unavoidably, since the typing happened here. Hiding the row
-        // ends that as soon as the store has it, rather than leaving it sitting
-        // in a field behind whatever the person does next.
-        hideValue(k);
-        await call("add_key", { name: k, value: next, replace: true });
-      };
-      input.focus();
     });
     // innerHTML is replaced on every paint, so typing would lose focus after
     // each keystroke without restoring it here.
@@ -6831,12 +7613,16 @@ passbook oauth connect google:work</pre>
       box.oninput = () => {
         query = box.value;
         resetRows();
+        // The best match is the one the keyboard is on, so Enter (or the right arrow) opens it without
+        // a trip to the pointer. No search, no row picked out.
+        if (id === "q-keys") { keyCursor = query.trim() ? (shownKeys()[0] || "") : ""; byKeyboard = !!keyCursor; }
         const at = box.selectionStart;
         paint();
         const again = document.getElementById(id);
         if (again) { again.focus(); again.setSelectionRange(at, at); }
       };
-      box.onkeydown = (e) => {
+      // On Keys, Escape and the arrows are the list's: see `keysKey`.
+      if (id !== "q-keys") box.onkeydown = (e) => {
         if (e.key === "Escape" && query) {
           query = ""; resetRows(); paint(); document.getElementById(id)?.focus();
         }
@@ -6856,6 +7642,7 @@ passbook oauth connect google:work</pre>
           event.preventDefault();
           document.getElementById("k").value = found.names[0];
           document.getElementById("v").value = found.text.slice(found.names[0].length + 1);
+          addForm.error = ""; addHint();
           document.getElementById("addgo")?.focus();
           return;
         }
@@ -6863,16 +7650,24 @@ passbook oauth connect google:work</pre>
         pasted = found; paint();
       });
     }
-    const valueField = document.getElementById("v"), nameField = document.getElementById("k"), hint = document.getElementById("addhint");
-    if (valueField && nameField && hint) {
-      const quiet = hint.innerHTML;
-      valueField.addEventListener("input", () => {
-        const shape = nameField.value.trim() ? null : valueShape(valueField.value);
-        hint.innerHTML = shape ? `<span class="sub">Looks like a key from ${esc(shape[2])}.</span>
-          <button class="act" id="usename">Name it ${esc(shape[1])}</button>` : quiet;
-        const use = document.getElementById("usename");
-        if (use) use.onclick = () => { nameField.value = shape[1]; hint.innerHTML = quiet; document.getElementById("addgo")?.focus(); };
-      });
+    // Enter adds. From the name it goes on to the value first, when there is none yet. Escape empties
+    // the field it is in, and puts the form away once both are empty.
+    const valueField = document.getElementById("v"), nameField = document.getElementById("k");
+    if (valueField && nameField) {
+      for (const field of [nameField, valueField]) {
+        field.oninput = () => { addForm.error = ""; addHint(); };
+        field.onkeydown = (e) => {
+          if (e.key === "Enter") {
+            e.preventDefault(); e.stopPropagation();
+            if (field === nameField && !valueField.value) valueField.focus(); else submitAdd();
+          } else if (e.key === "Escape") {
+            e.preventDefault(); e.stopPropagation();
+            if (field.value) { field.value = ""; addForm.error = ""; addHint(); }
+            else if (!nameField.value && !valueField.value) closeAdd();
+          }
+        };
+      }
+      addHint();
     }
     main.querySelectorAll("[data-pasted-cancel]").forEach((b) => b.onclick = () => { pasted = null; paint(); });
     main.querySelectorAll("[data-pasted-add]").forEach((b) => b.onclick = async () => {
@@ -6886,30 +7681,7 @@ passbook oauth connect google:work</pre>
       paint(); loadSync(true);
     });
     const go = document.getElementById("addgo");
-    if (go) go.onclick = async () => {
-      const name = document.getElementById("k").value;
-      const value = document.getElementById("v").value;
-      if (!name.trim() || !value.trim()) { notice = "A key needs a name and a value."; paint(); return; }
-      if (!await call("add_key", { name, value, replace: false })) return;
-      // The store answers with the name it actually wrote, which is not always
-      // the one that was typed.
-      const wanted = name.trim().toLowerCase();
-      const added = (state?.store?.keys || []).find((k) => k.toLowerCase() === wanted)
-        || name.trim();
-      // A search that does not match the new key would hide the row this is
-      // about to point at, leaving the tick as the only evidence.
-      if (query.trim() && !added.toLowerCase().includes(query.trim().toLowerCase())) {
-        query = ""; resetRows();
-      }
-      markAdded(added);
-      paint();
-      [...main.querySelectorAll("[data-keyrow]")]
-        .find((el) => el.dataset.keyrow === added)
-        ?.scrollIntoView({ block: "nearest" });
-      // The fields are empty again after the repaint, so the next one can be
-      // typed straight away.
-      document.getElementById("k")?.focus();
-    };
+    if (go) go.onclick = () => submitAdd();
   }
 
   const authorization = window.createPassbookAuthorization({ invoke, container: ask, esc, repaint: paint });
@@ -6965,6 +7737,8 @@ passbook oauth connect google:work</pre>
         events.listen("passbook://authorize", () => authorization.load());
         events.listen("passbook://weblink", () => webLink.load());
         events.listen("passbook://signin", () => loadAgentAsk());
+        events.listen("passbook://sent", (e) => sendingDone(e?.payload));
+        events.listen("passbook://sync-progress", (e) => syncStep(e?.payload));
         events.listen("passbook://ask-refused", (e) => {
           notice = String(e?.payload || "That link could not be read.");
           paint();
@@ -6985,7 +7759,7 @@ passbook oauth connect google:work</pre>
   palette.innerHTML = `<div class="palbox" role="dialog" aria-label="Find anything">
     <input id="palq" type="text" placeholder="Find a key, a page or something to do" spellcheck="false" autocomplete="off" autocapitalize="off" />
     <div id="pallist" role="listbox"></div>
-    <div class="palfoot"><span><b>\u2191\u2193</b> move</span><span><b>\u21b5</b> open</span><span><b>\u2318\u21b5</b> copy a key's name</span><span><b>esc</b> close</span></div></div>`;
+    <div class="palfoot"><span><b>\u2191\u2193</b> move</span><span><b>\u21b5</b> or <b>\u2192</b> open</span><span><b>${MOD_KEY}\u21b5</b> copy a key's name</span><span><b>esc</b> close</span></div></div>`;
   document.body.appendChild(palette);
   let palRows = [], palAt = 0;
 
@@ -7007,7 +7781,7 @@ passbook oauth connect google:work</pre>
     return [
       go("attention", "Attention", "bell"), ...PAGES.map(([id, label, glyph]) => go(id, label, glyph)),
       go("settings", "Settings", "sliders"), ...SETTINGS.map(([id, label, glyph]) => go(id, label, glyph)),
-      { kind: "Do", label: "Add a key", glyph: "plus", run: () => { page = "keys"; adding = true; pasted = null; paint(); document.getElementById("k")?.focus(); } },
+      { kind: "Do", label: "Add a key", glyph: "plus", run: () => openAdd() },
       { kind: "Do", label: "Sync with my other devices now", glyph: "monitor", run: () => { page = "machines"; paint(); syncNow(); } },
       { kind: "Do", label: "Check for updates", glyph: "download", run: () => { page = "updates"; paint(); loadUpdates(); } },
       { kind: "Do", label: "Lock this window", glyph: "lock", run: () => lockWindow() },
@@ -7020,7 +7794,11 @@ passbook oauth connect google:work</pre>
     const keys = typed.trim() ? (state?.store?.keys || []).map((k) => ({ kind: "Key", label: k, glyph: "key", key: k, score: palScore(k, typed) }))
       .filter((row) => row.score > 0).sort((a, b) => b.score - a.score).slice(0, 9) : [];
     const ranked = typed.trim() ? [...keys, ...actions].sort((a, b) => b.score - a.score || (a.kind === "Key" ? -1 : 1)) : actions;
-    return ranked.slice(0, 12);
+    // Looked for a key that is not here: the next thing is to add it, with the name already typed.
+    const name = tidyName(typed);
+    const offer = name && !storedName(name) && /[A-Za-z]/.test(name)
+      ? [{ kind: "Do", label: `Add a key named ${name}`, glyph: "plus", run: () => openAdd(name) }] : [];
+    return [...ranked.slice(0, 12 - offer.length), ...offer];
   }
 
   function palPaint() {
@@ -7066,18 +7844,125 @@ passbook oauth connect google:work</pre>
       else if (event.key === "ArrowDown") { event.preventDefault(); palAt = Math.min(palAt + 1, palRows.length - 1); palPaint(); }
       else if (event.key === "ArrowUp") { event.preventDefault(); palAt = Math.max(palAt - 1, 0); palPaint(); }
       else if (event.key === "Enter") { event.preventDefault(); palRun(palAt, mod); }
+      else if (event.key === "ArrowRight" && !mod && !event.shiftKey && !event.altKey) {
+        // The right arrow opens a key, as it does on the list. Only from the end of what was typed:
+        // anywhere else it is still how the caret moves.
+        const box = document.getElementById("palq");
+        if (palRows[palAt]?.kind === "Key" && box.selectionStart === box.value.length && box.selectionEnd === box.value.length) {
+          event.preventDefault(); palRun(palAt, false);
+        }
+      }
       return;
     }
-    if (!state || appLocked) return;
+    // A press something on the page has already answered is not answered again here.
+    if (!state || appLocked || !gate.hidden || !ask.hidden || event.defaultPrevented) return;
     const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || "") || document.activeElement?.isContentEditable;
-    if (mod && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "n") {
-      event.preventDefault(); page = "keys"; adding = true; pasted = null; paint(); document.getElementById("k")?.focus();
+    if (event.key === "Escape" && asking) {
+      event.preventDefault(); asking = null; paint();
+    } else if (mod && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "n") {
+      event.preventDefault(); openAdd();
     } else if (event.key === "/" && !mod && !typing) {
       const box = document.querySelector("main input.search");
       if (!box) { page = "keys"; paint(); }
       event.preventDefault(); document.querySelector("main input.search")?.focus();
-    }
+    } else if (page === "keys") keysKey(event, mod);
   });
+
+  // ── the keyboard, on the list of keys ──────────────────────────────────
+  //
+  // The list answered no key at all: with a search typed and its one result on screen, the arrows and
+  // Enter did nothing, and the only way to a key was the pointer ("i even press the right arrow on it
+  // and it does nothing when in search", Liam 2026-11-24). Now the arrows move a cursor down the rows
+  // and Enter or the right arrow opens the one it is on, the left arrow or Escape closes it, and typing
+  // anywhere on the page goes to the search box. The caret can stay in the search box throughout, so
+  // narrowing the list and walking it are one motion.
+  const rowNames = () => [...main.querySelectorAll("[data-keyrow]")].map((el) => el.dataset.keyrow);
+
+  /** Put the cursor on a row. Done to the two rows concerned rather than by repainting: the arrow keys
+   *  repeat, and a repaint of a long list on every repeat is the lag this page already had once. */
+  function setKeyCursor(k, scroll = true) {
+    if (keyCursor && keyCursor !== k) keyRowEl(keyCursor)?.classList.remove("cursor");
+    keyCursor = k;
+    const row = k ? keyRowEl(k) : null;
+    row?.classList.add("cursor");
+    if (row && scroll) row.scrollIntoView({ block: "nearest" });
+    showListHint();
+  }
+
+  function showListHint() {
+    const hint = document.getElementById("listhint");
+    if (hint) hint.hidden = !(keyCursor && byKeyboard && !notice);
+  }
+
+  function moveKeyCursor(step) {
+    let rows = rowNames();
+    if (!rows.length) return;
+    let at = rows.indexOf(keyCursor);
+    at = at < 0 ? (step > 0 ? 0 : rows.length - 1) : at + step;
+    // Past the last row that has been built: build the next page of them.
+    if (at >= rows.length && main.querySelector("[data-more]")) { rowLimit += ROW_PAGE; paint(); rows = rowNames(); }
+    setKeyCursor(rows[Math.max(0, Math.min(rows.length - 1, at))]);
+  }
+
+  function keysKey(event, mod) {
+    const el = document.activeElement;
+    const inSearch = el?.id === "q-keys";
+    // Any other field being typed into, and a dropdown, keep their keys.
+    if (!inSearch && (typing(el) || el?.tagName === "SELECT")) return;
+    const key = event.key, plain = !mod && !event.altKey && !event.shiftKey;
+    const row = keyCursor && keyRowEl(keyCursor) ? keyCursor : "";
+    const atEnd = inSearch && el.selectionStart === el.value.length && el.selectionEnd === el.value.length;
+
+    if ((key === "ArrowDown" || key === "ArrowUp") && plain) {
+      event.preventDefault();
+      byKeyboard = true;
+      moveKeyCursor(key === "ArrowDown" ? 1 : -1);
+    } else if (key === "Enter" && plain) {
+      // On a button, Enter is that button's.
+      if (!inSearch && el && el !== document.body && el.matches?.("button, a, summary, [role=button], input")) return;
+      const target = row || (inSearch ? rowNames()[0] : "");
+      if (!target) return;
+      event.preventDefault();
+      byKeyboard = true;
+      setKeyCursor(target);
+      toggleKeyRow(target);
+    } else if (key === "ArrowRight" && plain && row && !expanded[row]) {
+      // In the search box the arrows still move the caret through what was typed. At the end of it
+      // there is nowhere further right to go, so the press is the row's.
+      if (inSearch && !atEnd) return;
+      event.preventDefault();
+      byKeyboard = true;
+      toggleKeyRow(row);
+    } else if (key === "ArrowLeft" && plain && row && expanded[row]) {
+      if (inSearch && !atEnd) return;
+      event.preventDefault();
+      byKeyboard = true;
+      toggleKeyRow(row);
+    } else if (key === "Escape") {
+      // One step back at a time: the open row, then the search, then the cursor.
+      if (row && expanded[row]) { event.preventDefault(); toggleKeyRow(row); }
+      else if (query) {
+        event.preventDefault();
+        query = ""; keyCursor = ""; resetRows(); paint();
+        if (inSearch) document.getElementById("q-keys")?.focus();
+      } else if (keyCursor) { event.preventDefault(); setKeyCursor(""); }
+      else if (inSearch) el.blur();
+    } else if (mod && !event.altKey && !event.shiftKey && row && byKeyboard && key.toLowerCase() === "c") {
+      // Only for a cursor the keyboard put there, with the strip that says so on screen: a value does
+      // not go to the clipboard for a row somebody merely clicked on.
+      // Copy means the selection first: a name being copied, or text in the search box.
+      if (selectionIn(document.body) || (inSearch && el.selectionStart !== el.selectionEnd)) return;
+      event.preventDefault();
+      copyValue(row);
+    } else if (mod && !event.altKey && !event.shiftKey && row && byKeyboard && key.toLowerCase() === "e") {
+      event.preventDefault();
+      editValue(row);
+    } else if (!inSearch && plain && key.length === 1 && /\S/.test(key)) {
+      // Typing anywhere on the page is a search. The box takes the focus now and the letter with it.
+      if (el && el !== document.body && !el.matches?.("button, [role=button]")) return;
+      document.getElementById("q-keys")?.focus();
+    }
+  }
 
   // ── tooltips ───────────────────────────────────────────────────────────
   // One tooltip for the whole window. Markup keeps saying `title="…"`, which is where a description of
@@ -7161,6 +8046,7 @@ passbook oauth connect google:work</pre>
   document.addEventListener("focusout", hideTip);
   for (const gone of ["mousedown", "keydown", "wheel"]) document.addEventListener(gone, hideTip, { passive: true });
   document.addEventListener("scroll", hideTip, { capture: true, passive: true });
+  document.addEventListener("mousedown", () => { if (byKeyboard) { byKeyboard = false; showListHint(); } }, { passive: true });
   window.addEventListener("blur", hideTip);
   // Back from a provider's console (a key made, an organization converted): Balances reads again by itself.
   window.addEventListener("focus", () => {

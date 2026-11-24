@@ -1144,7 +1144,8 @@ def test_turning_it_on_carries_the_warning_rather_than_a_bare_switch():
 
     for phrase in ("keystore", "running as you can fetch it", "no password", "agent"):
         assert phrase in block, f"the block does not say {phrase!r}"
-    # And again at the moment of pressing it, not only as page text.
+    # And again at the moment of pressing it, not only as page text: the press opens a question on
+    # the page (it was the webview's own confirm()), and the question carries the cost.
     #
     # Bounded to the handler itself. A fixed-size window after the selector
     # passed even with the warning deleted, because the slice ran on into the
@@ -1152,9 +1153,15 @@ def test_turning_it_on_carries_the_warning_rather_than_a_bare_switch():
     # than none, since it reads as coverage.
     start = ui.index('main.querySelectorAll("[data-stayopen]")')
     handler = ui[start:ui.index("\n    });", start)]
-    assert "confirm(" in handler, "turning it on must ask"
-    assert "keystore" in handler, "the confirm must carry the cost, not just ask"
-    assert "no password" in handler
+    assert 'askFirst("stayopen-on")' in handler, "turning it on must ask"
+    asked = block[block.index('confirmStrip("stayopen-on"'):]
+    asked = asked[:asked.index('"Open at restart")')]
+    assert "keystore" in asked, "the question must carry the cost, not just ask"
+    assert "no password" in asked
+    # Only a yes to that question turns it on.
+    yes = ui[ui.index('main.querySelectorAll("[data-askyes]")'):]
+    yes = yes[:yes.index("\n    });")]
+    assert 'id === "stayopen-on") setStayOpen(true)' in yes
 
 
 def test_the_key_list_keeps_refreshing_while_the_search_box_has_the_caret():
@@ -1209,8 +1216,12 @@ def test_a_key_name_can_be_selected_and_copied_and_no_tooltip_is_the_systems():
     assert "iconbtn namecopy" in row and 'data-copytext="${esc(k)}" data-copymark="name:${esc(k)}"' in row, \
         "the copy button beside a key's name"
     assert "Copy key name" in row
-    # Opening a row gives way to a selection, and so does the background refresh.
-    assert page.count("selectionIn(main)") >= 3
+    # Opening a row from its name gives way to a selection of that name, and the background refresh
+    # gives way to a selection anywhere. (The chevron gives way to nothing: see the test below.)
+    opener = page[page.index('main.querySelectorAll("[data-open]")'):page.index('main.querySelectorAll("[data-edit]")')]
+    assert opener.count("selectingName(k)") == 2, "the click on a name, and the moment after it"
+    poll = page[page.index("let polling = false;"):]
+    assert "if (selectionIn(main)) return;" in poll[:poll.index("}, 5000);")]
     # Every title is taken over as it appears; nothing is left for the operating system to show.
     assert 'attributeFilter: ["title"]' in page and "function adoptTitles(" in page
     assert page.count("<title>") == 1, "only the document's own; an SVG <title> is a system tooltip too, use data-tip"
@@ -1230,3 +1241,513 @@ def test_the_balances_list_names_its_columns_in_a_header_that_stays_in_view():
     assert "balanceHeader(span) + shownLive.map" in source
     for word in ("Service", "How full", "Left", "Spent"):
         assert word in source.split("function balanceHeader(span)")[1].split("function balanceRow")[0], word
+
+
+# ── the Keys page: finding a key, opening it, changing it, adding one ───────
+#
+# Liam, 2026-11-24: "i search a key and there is no way to edit it. i even press the right arrow on it
+# and it does nothing when in search wtf. adding a key also has a delay sometimes." Each of those was
+# reproduced in the real page against a real store before anything was changed, and each test below
+# is one of the things that was wrong.
+
+
+def _window_source(*names: str) -> str:
+    """The source of these top-level functions and constants of the window, to run outside it."""
+    page = UI.read_text(encoding="utf-8")
+    parts = []
+    for name in names:
+        found = (re.search(rf"^  (?:async )?function {name}\(.*?^  \}}$", page, re.S | re.M)
+                 or re.search(rf"^  const {name} = .*?;$", page, re.M))
+        assert found, f"{name} is no longer a top-level function or constant of the window"
+        parts.append(found.group(0))
+    return "\n".join(parts)
+
+
+def _run_in_node(script: str):
+    import shutil
+    import tempfile
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not on PATH")
+    # From a file: a script this long on a command line is at the mercy of how Windows quotes it.
+    with tempfile.TemporaryDirectory() as folder:
+        target = Path(folder) / "window.cjs"
+        target.write_text(script, encoding="utf-8")
+        done = subprocess.run([node, str(target)], capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stderr[-800:]
+    return json.loads(done.stdout)
+
+
+def test_the_chevron_opens_a_row_whatever_is_selected():
+    """With a key's name still highlighted from a double-click, every chevron on the page did nothing.
+
+    The handler that opens a row began `if (selectionIn(main)) return;`, for the sake of the name: a
+    drag across a name ends in a click, and opening the row would drop the selection. But the chevron
+    shares that handler, so any selection anywhere in the page (a name, text in the search box in
+    WebKit) made the one control whose only job is opening the row refuse to. Reproduced in the page:
+    double-click a name, press its chevron twice, the row stays shut.
+    """
+    page = UI.read_text(encoding="utf-8")
+    opener = page[page.index('main.querySelectorAll("[data-open]")'):page.index('main.querySelectorAll("[data-edit]")')]
+    assert "selectionIn(main)" not in opener, "a selection somewhere else must not stop a row opening"
+    # The name's own wait-and-see is inside its branch; what is left for the chevron asks nothing.
+    name_branch, chevron = opener.split("return;\n      }\n", 1)
+    assert 'classList.contains("named")' in name_branch
+    assert "toggleKeyRow(k);" in chevron and "selecting" not in chevron and "if (" not in chevron
+
+
+def test_every_key_row_can_change_its_value_and_clicking_away_saves_nothing():
+    """The only way to change a value was to reveal it and then click the picture of it.
+
+    Nothing on the row said so, and a guarded key, which is never revealed, could not be changed in the
+    window at all. The box that opened then saved on blur: clicking anywhere else, which is also how a
+    person abandons a field, overwrote a working credential with whatever was in it.
+    """
+    page = UI.read_text(encoding="utf-8")
+    row = page[page.index("function keyRow("):page.index("function keyDetail(")]
+    assert 'data-edit="${esc(k)}"' in row and "Change value" in row and 'icon(saved ? "check" : "pencil")' in row
+    # Offered on every row: not inside the branch that draws the eye, which a guarded key does not get.
+    assert row.index('data-edit="${esc(k)}"') > row.index('data-copy="${esc(k)}"')
+    assert 'data-editsave="${esc(k)}"' in row and 'data-editcancel="${esc(k)}"' in row
+    wiring = page[page.index('main.querySelectorAll("[data-replace]")'):]
+    wiring = wiring[:wiring.index("});") + 3]
+    assert "onblur" not in wiring, "losing focus must neither save nor discard what was typed"
+    assert 'e.key === "Enter"' in wiring and "saveValue(k)" in wiring
+    assert 'e.key === "Escape"' in wiring and "cancelEdit(k)" in wiring
+    # The clock that hides a revealed value does not close a box somebody is typing into.
+    hide = page[page.index("function hideValue(k) {"):]
+    assert "delete replacing" not in hide[:hide.index("\n  }\n")]
+
+
+def test_the_list_of_keys_answers_the_keyboard():
+    """With a search typed and its result on screen, the arrows and Enter did nothing at all."""
+    page = UI.read_text(encoding="utf-8")
+    keys = page[page.index("function keysKey(event, mod)"):]
+    keys = keys[:keys.index("\n  }\n") + 5]
+    for press in ('"ArrowDown"', '"ArrowUp"', '"Enter"', '"ArrowRight"', '"ArrowLeft"', '"Escape"'):
+        assert press in keys, f"{press} does nothing on the list of keys"
+    assert 'else if (page === "keys") keysKey(event, mod);' in page
+    # The cursor is a name, not a class on a node: a paint replaces every node.
+    assert '${k === keyCursor ? " cursor" : ""}' in page
+    # Typing in the search box puts the cursor on the best match, so Enter opens it.
+    assert 'keyCursor = query.trim() ? (shownKeys()[0] || "") : ""; byKeyboard = !!keyCursor;' in page
+    # A value goes to the clipboard from the keyboard only for a cursor the keyboard put on the row,
+    # which is when the strip naming the shortcut is on screen: not for a row somebody clicked on.
+    copy = keys[keys.index('key.toLowerCase() === "c"') - 120:keys.index('key.toLowerCase() === "c"')]
+    assert "row && byKeyboard" in copy
+    assert "keyCursor && byKeyboard && !notice" in page[page.index("function listHint()"):page.index("function listHint()") + 300]
+    # A key a field has already answered is not answered again by the page.
+    assert "event.defaultPrevented" in page
+
+
+def test_search_takes_words_and_groups_and_lists_the_best_match_first():
+    """The search was one substring of the name: "stripe secret" found nothing, because names are
+    written with underscores, and a key filed under a vendor its name does not carry could not be found
+    by the vendor."""
+    script = _window_source("searchScore", "shownKeys") + """
+      let query = "", keyFilter = "all", keySort = "group";
+      const KEY_FILTERS = [];
+      const state = { store: { keys: ["AZURE_OPENAI_KEY", "OPENAI_API_KEY", "OPENAI_ORG_ID", "SK_LIVE_MAIN",
+                                      "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "UNRELATED"] },
+                      catalog: { group_of: { SK_LIVE_MAIN: "Stripe", OPENAI_API_KEY: "OpenAI" } } };
+      const ask = (q) => { query = q; return shownKeys(); };
+      console.log(JSON.stringify({ words: ask("stripe secret"), best: ask("openai"), group: ask("stripe"),
+                                   spaced: ask("api key"), none: ask("zzz"), all: ask("  ").length }));
+    """
+    found = _run_in_node(script)
+    assert found["words"] == ["STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET"]
+    assert found["best"] == ["OPENAI_API_KEY", "OPENAI_ORG_ID", "AZURE_OPENAI_KEY"], "names that start with it come first"
+    assert "SK_LIVE_MAIN" in found["group"], "found by the group it is filed under"
+    assert found["spaced"] == ["OPENAI_API_KEY"], "a space stands for the underscore"
+    assert found["none"] == [] and found["all"] == 7
+
+
+def test_a_key_in_a_folded_or_far_group_is_brought_on_screen():
+    """Find anything, then Enter on a key, landed on Keys with nothing opened and nothing in view.
+
+    `showKeyRow` counted how far down the key was in the plain list of names. The page is listed by
+    group, which is a different order, and a folded group builds no rows at all.
+    """
+    script = _window_source("searchScore", "shownKeys", "keyBuckets", "rowOrder", "bringKeyRow") + """
+      let query = "", keyFilter = "all", keySort = "group", page = "settings", rowLimit = 60, keyCursor = "";
+      const ROW_PAGE = 60, KEY_FILTERS = [], expanded = {}, collapsed = { Zed: true };
+      const painted = [];
+      const paint = () => painted.push(rowOrder(shownKeys()).slice(0, rowLimit));
+      const scrollToKey = () => {};
+      const names = (group, n) => Array.from({ length: n }, (_, i) => `${group.toUpperCase()}_${String(i).padStart(3, "0")}`);
+      // The store lists Zed's keys first; the page lists the groups in the catalog's order, Zed last.
+      const groups = { Alpha: names("Alpha", 70), Beta: names("Beta", 70), Zed: names("Zed", 5) };
+      const state = { store: { keys: [...groups.Zed, ...groups.Alpha, ...groups.Beta] }, catalog: { available: true, groups } };
+      bringKeyRow("ZED_003", true);
+      console.log(JSON.stringify({ page, built: painted[0].includes("ZED_003"), folded: !!collapsed.Zed,
+                                   open: !!expanded.ZED_003, cursor: keyCursor }));
+    """
+    found = _run_in_node(script)
+    assert found == {"page": "keys", "built": True, "folded": False, "open": True, "cursor": "ZED_003"}
+
+
+def test_a_name_is_checked_and_tidied_the_way_the_store_would():
+    """`my key` came back from the store as "Nothing on stdin looked like KEY=value"."""
+    page = UI.read_text(encoding="utf-8")
+    pattern = re.search(r"const KEY_NAME = /(.+?)/;", page)
+    assert pattern and pattern.group(1) == passbook._KEY.pattern, "the window and the store disagree on what a name is"
+    script = _window_source("KEY_NAME", "storedName", "tidyName") + """
+      const state = { store: { keys: ["OPENAI_API_KEY", "lower_case"] } };
+      console.log(JSON.stringify({
+        tidy: ["my stripe-key", "9lives", "  ", "ok_already"].map(tidyName),
+        held: ["openai_api_key", " OPENAI_API_KEY ", "LOWER_CASE", "NEW_ONE"].map(storedName),
+        valid: ["A_1", "_x", "1a", "a b", "a-b", ""].map((n) => KEY_NAME.test(n)),
+      }));
+    """
+    found = _run_in_node(script)
+    assert found["tidy"] == ["MY_STRIPE_KEY", "_9LIVES", "", "OK_ALREADY"]
+    assert found["held"] == ["OPENAI_API_KEY", "OPENAI_API_KEY", "lower_case", ""]
+    assert found["valid"] == [True, True, False, False, False, False]
+    for name in found["tidy"]:
+        assert not name or passbook._KEY.match(name), f"{name} is offered as a name the store would refuse"
+
+
+def test_adding_a_name_that_is_already_here_is_never_reported_as_added(machine):
+    """`passbook add` leaves an existing key alone unless told to replace it, and exits 0.
+
+    The window sent every add without `--replace` and answered every exit 0 with a green "Added": type
+    the name of a key you already have and a new value for it, press Add, and the store kept the old
+    value while the window said it was done.
+    """
+    kept = _cli("add", "--stdin", "--sync", home=machine, stdin="DEMO_KEY=a-newer-value\n")
+    assert kept.returncode == 0
+    # The words the app reads to tell "left alone" from "written".
+    assert kept.stdout.startswith("already set, unchanged: DEMO_KEY")
+    assert passbook.load()["DEMO_KEY"] == "a-value"
+
+    page = UI.read_text(encoding="utf-8")
+    submit = page[page.index("async function submitAdd()"):page.index("// ── what became of a key after it was saved here")]
+    assert "const held = storedName(typed);" in submit
+    assert 'invoke("add_key", { name: held || typed, value, replace: !!held })' in submit
+    assert 'held ? "Replaced" : "Added"' in submit
+    hint = page[page.index("function addHint()"):page.index("function openAdd(")]
+    assert "is already here" in hint and '"Replace value"' in hint
+
+    source = RUST.read_text(encoding="utf-8")
+    add = source[source.index("fn add_key("):source.index("/// A key's name as the store spells one")]
+    assert 'line.starts_with("already set, unchanged:")' in add and "return Err(" in add
+
+
+def test_the_add_form_keeps_what_was_typed_until_the_store_has_it():
+    """Pressing Add emptied both fields at once, so a refused add also cost the paste.
+
+    A paint replaces every node, and pressing Add repainted to gray the button. Fields marked
+    `data-keep` are carried across every paint; whatever wants one empty empties it first.
+    """
+    page = UI.read_text(encoding="utf-8")
+    panel = page[page.index("function addPanel()"):page.index("function addHint()")]
+    assert '<input id="k" data-keep' in panel and '<input id="v" data-keep type="password"' in panel
+    paint = page[page.index("  function paint() {"):]
+    assert paint.index("const typed = heldTyping();") < paint.index("main.innerHTML =") < paint.index("restoreTyping(typed);")
+    submit = page[page.index("async function submitAdd()"):page.index("// ── what became of a key after it was saved here")]
+    # Emptied only once the store has answered, and not when it refused.
+    refused = submit[submit.index("catch (e) {"):submit.index("f.busy = false; state = next;")]
+    assert 'box.value = ""' not in refused and "f.error = said(e);" in refused
+    assert 'box.value = ""' in submit[submit.index("f.busy = false; state = next;"):]
+    # The form has its own busy: adding one key does not gray every control on the page.
+    assert "busy = true" not in submit.replace("f.busy = true", "")
+    # Enter adds, from either field.
+    wiring = page[page.index("const valueField = document.getElementById(\"v\"), nameField"):]
+    wiring = wiring[:wiring.index("const go = document.getElementById(\"addgo\");")]
+    assert 'e.key === "Enter"' in wiring and "submitAdd()" in wiring
+
+
+def test_the_search_box_keeps_its_caret_through_a_repaint():
+    """Copy a value, then type a search: 1.4 seconds in, the caret left the box mid-word.
+
+    The "Copied" tick reverts by repainting. `paintKeepingCaret` carried the focused field across, but
+    returned as soon as it saw the rebuilt field had text in it, before putting the caret back, and the
+    search box always has text in it (the page supplies it). "openai_api" arrived as "openai" in both
+    engines. Every paint now puts the caret back in a field marked `data-keep`; `="focus"` for one whose
+    text is the page's to supply.
+    """
+    page = UI.read_text(encoding="utf-8")
+    field = page[page.index("function searchField(id)"):page.index("function searchCount(")]
+    assert 'data-keep="focus"' in field
+    restore = page[page.index("function restoreTyping(kept)"):]
+    restore = restore[:restore.index("\n  }\n")]
+    # The text is put back only where the page left the field empty, and never into the search box...
+    assert 'el.dataset.keep !== "focus" && !el.value && was.value' in restore
+    # ...and the caret is put back whether or not there was text to put back.
+    assert restore.index("if (!was.focused || el.disabled) continue;") < restore.index("el.focus(")
+    assert "setSelectionRange(" in restore
+    paint = page[page.index("  function paint() {"):]
+    assert "restoreTyping(typed);" in paint[:paint.index('main.querySelectorAll("[data-goto]")')]
+
+
+def test_add_says_what_it_wrote_before_it_sends_it_anywhere(machine, monkeypatch):
+    """Into a pipe, "added: NAME" sat in a buffer until the command ended.
+
+    So the window could not tell "written" from "written and sent to every machine", and waited for the
+    slowest machine on the tailnet to learn that a key was in the store on this one. `add` flushes what
+    it wrote before it sends anything.
+    """
+    import io
+
+    import passbook_cli
+
+    pipe = io.BytesIO()
+    seen = {}
+    monkeypatch.setattr(passbook_cli, "_replicate_write",
+                        lambda keys, values: seen.update(on_the_pipe=pipe.getvalue().decode(), keys=list(keys)))
+    # Block-buffered, as stdout is when it is a pipe: nothing reaches `pipe` until a flush.
+    monkeypatch.setattr(sys, "stdout", io.TextIOWrapper(pipe, encoding="utf-8", write_through=False))
+    monkeypatch.setattr(sys, "stdin", io.StringIO("FLUSHED_FIRST=a-secret-value\n"))
+
+    assert passbook_cli.main(["add", "--stdin", "--sync"]) == 0
+    assert seen["keys"] == ["FLUSHED_FIRST"]
+    assert seen["on_the_pipe"].startswith("added: FLUSHED_FIRST"), "the sending began before the write was said"
+    assert "a-secret-value" not in seen["on_the_pipe"]
+
+
+def test_the_window_answers_an_add_when_the_key_is_written_not_when_it_is_sent():
+    """Every add the window made waited for the push to every other machine before the key appeared.
+
+    `add --sync` writes the key and then sends it to every other machine, so the window's Add button
+    sat grayed until the slowest of them had answered. (Asking the same machines for their status took
+    23 to 48 seconds on Liam's Mac on 2026-11-24; the sending itself was not timed against them.) The
+    app answers on the first thing the CLI says (that the keys are written), leaves the process to
+    finish, and reports the sending in `passbook://sent`.
+    """
+    source = RUST.read_text(encoding="utf-8")
+    helper = source[source.index("fn add_then_send("):source.index("/// An `add` that has said what it wrote")]
+    assert "add_written(command, input)?" in helper
+    spawned = helper[helper.index("std::thread::spawn"):]
+    assert "sending.finish()" in spawned and 'app.emit("passbook://sent"' in spawned
+    assert helper.rstrip().endswith("Ok(wrote)\n}"), "the answer does not wait for the thread"
+    written = source[source.index("fn add_written("):source.index("#[cfg(all(test, unix))]\nmod adding")]
+    assert "stdout.read(&mut first)" in written, "answer on the first thing the CLI prints"
+    # Having read that, the only process it waits for is one that had already ended (it said nothing).
+    assert written.count("wait_with_output()") == 1
+    assert written.index("if got == 0 {") < written.index("wait_with_output()") < written.index("return Ok((String::new(), None));")
+    # Timed, against a stand-in CLI that takes two seconds to send: `cargo test adding::`.
+    assert "fn an_add_answers_when_the_key_is_written_and_not_when_it_has_been_sent()" in source
+    # All three ways the window adds a key go through it, each still asking for the keys to be sent.
+    assert source.count("add_then_send(&app, &args,") == 3
+    assert len(re.findall(r'vec!\["add", "--stdin", "--sync"\]', source)) == 3
+    # The event carries names and what the CLI said. The CLI never says a value.
+    payload = spawned[spawned.index("serde_json::json!"):spawned.index("}));")]
+    assert set(re.findall(r'"(\w+)":', payload)) == {"keys", "ok", "out", "problem"}
+    page = UI.read_text(encoding="utf-8")
+    assert 'events.listen("passbook://sent", (e) => sendingDone(e?.payload));' in page
+
+
+def test_nothing_add_prints_is_a_value(machine):
+    """What `add` prints is shown in the window, as it goes. None of it may be what was added."""
+    said = []
+    for args, text in ((("add", "--stdin", "--sync"), "PRINTED_KEY=never-print-me-1\n"),
+                       (("add", "--stdin", "--sync"), "PRINTED_KEY=never-print-me-2\n"),
+                       (("add", "--stdin", "--sync", "--replace"), "PRINTED_KEY=never-print-me-3\n")):
+        done = _cli(*args, home=machine, stdin=text)
+        assert done.returncode == 0, done.stderr[-400:]
+        said.append(done.stdout + done.stderr)
+    assert "never-print-me" not in "".join(said)
+    assert "PRINTED_KEY" in said[0] and "PRINTED_KEY" in said[2]
+
+
+def test_a_refusal_on_the_security_page_is_shown():
+    """`said` was defined inside the lock screen's wiring and called from outside it.
+
+    A refused "Seal reads" or "Open at restart" ran `alert(said(e))`, which threw a ReferenceError
+    inside the handler: nothing was shown, and the press read as dead.
+    """
+    page = UI.read_text(encoding="utf-8")
+    assert page.count("const said = (error) =>") == 1
+    assert page.index("const said = (error) =>") < page.index("async function call(name, args = {})")
+    gate = page[page.index("function wireGate()"):page.index("function wireGate()") + 400]
+    assert "const said" not in gate
+    assert "alert(" not in page, "a native alert is not how this window reports anything"
+
+
+def test_a_refused_press_gives_back_what_was_typed():
+    """"A vault password must be at least 8 characters", and then the name and the password to type again.
+
+    The commands behind most of the window's forms repaint twice, to gray the page and to un-gray it,
+    and a repaint rebuilds every field empty. Right when the press worked; when it was refused, the
+    fields are given back as they were, including one the page fills in by default ("Owner").
+    """
+    page = UI.read_text(encoding="utf-8")
+    for name in ("call", "callVault", "callSignin"):
+        body = page[page.index(f"async function {name}(name, args = {{}})"):]
+        body = body[:body.index("\n  }\n")]
+        assert body.index("const typed = typedNow();") < body.index("busy = true; paint();"), name
+        assert "refused = true" in body[body.index("catch (e)"):body.index("finally")], name
+        assert "if (refused) giveBack(typed);" in body[body.index("finally"):], name
+    give = page[page.index("function giveBack(held)"):]
+    assert "el.value !== value" in give[:give.index("\n  }\n")]
+
+
+def test_a_repaint_waits_for_a_press_that_is_in_progress():
+    """A paint between the mouse going down and coming up took the button away, and the click never happened.
+
+    Reproduced in WebKit and in Chrome: copy one value, then press another row's chevron as the "Copied"
+    tick reverts (which repaints), and the row stays shut. The five-second refresh repaints too, whenever
+    anything has changed; how often one landed inside a press was not measured.
+    """
+    page = UI.read_text(encoding="utf-8")
+    paint = page[page.index("  function paint() {"):]
+    assert paint.index("if (pressHeld) { paintOwed = true; return; }") < paint.index("main.innerHTML =")
+    held = page[page.index("const PRESSABLE ="):page.index("  function paint() {")]
+    assert 'document.addEventListener("mousedown"' in held and "pressHeld = true;" in held
+    # It ends with the mouse coming up, and with anything else that means the press is over.
+    for over in ('"mouseup"', '"click"', '"change"', '"keydown"'):
+        assert over in held
+    assert "if (paintOwed) paint();" in held
+    # A dropdown's menu is the system's, and its mouse-up is not always reported: never held for one.
+    assert 'closest?.("select")' in held
+    # Nor for a press on a scrollbar or on the page itself, which is how a list being scrolled would stop
+    # building its rows: only for a press on something there is to press.
+    assert "!event.target?.closest?.(PRESSABLE)" in held and 'const PRESSABLE = "button, a, ' in held
+    # And never for good.
+    assert "pressTimer = setTimeout(pressOver," in held
+
+
+def test_the_window_reads_how_the_sending_went_in_words_the_cli_still_says():
+    """`passbook://sent` carries what `add` printed, and the window picks four things out of it.
+
+    They are sentences written for a terminal. Reworded there, the window would stop saying which machine
+    a key did not reach, and nothing else would notice.
+    """
+    cli = (PACKAGE / "passbook_cli.py").read_text(encoding="utf-8")
+    page = UI.read_text(encoding="utf-8")
+    done = page[page.index("function sendingDone(report)"):]
+    done = done[:done.index("\n  }\n")]
+    said_and_read = [
+        ("""print(f"sent to {len(outcome['sent'])} machine(s): """, r"/^sent to (\d+) machine/m"),
+        ('print(f"  not sent to {host} ({why}); queued for', r"/not sent to (\S+) \(([^)]*)\)/g"),
+        ('print(f"not sent to any other machine: {where}. "', "/not sent to any other machine/"),
+        (r'print(f"\n{key} is also on {len(items)} service(s):")', r"/^(\S+) is also on (\d+) service/m"),
+    ]
+    for said, read in said_and_read:
+        assert said in cli, f"the command line no longer says: {said}"
+        assert read in done, f"the window no longer reads: {read}"
+    # And a paste of a whole .env does not become a notice of every name in it.
+    assert "all.length > 3" in done
+
+
+def test_a_check_of_the_record_that_could_not_be_run_says_so():
+    """Pressing Verify when the check itself failed answered "This record has not been verified yet".
+
+    Which is what the page said before the press, so the press read as dead. Found by pressing every kind
+    of control on every page against a backend that refuses everything, and listing the ones that put
+    nothing on screen: this was the only one of 11 pages' worth that was not simply already selected.
+    """
+    body = re.search(r"function recordPage\(\) \{(.*?)\n  \}\n", UI.read_text(encoding="utf-8"), re.S).group(1)
+    assert "const failed = !chain.busy && checked && intact === null && checked.detail;" in body
+    assert "The check could not be run: ${checked.detail}" in body
+    # And it is still not called verified.
+    assert 'intact ? "Verified" : "Not checked"' in body
+
+
+
+# ── the other pages (2026-11-25) ──────────────────────────────────────────────
+
+
+def test_nothing_in_the_window_asks_through_the_webviews_own_dialogs():
+    """Allowing reads again, opening at restart and disconnecting GitHub each asked through the
+    webview's confirm(): a modal from outside the page that stops it until answered. Each now asks on
+    the page, beside the button, and Forget on a sign-in (which deletes its tokens, and which the CLI
+    itself will not do without --yes) asks too. Walked in WebKit and Chrome: no native dialog fired."""
+    ui = UI.read_text(encoding="utf-8")
+    script = ui[ui.index("<script>"):]
+    code = "\n".join(line.split("//")[0] for line in script.splitlines())   # comments may name them
+    assert not re.search(r"(?<![\w.])(confirm|alert|prompt)\(", code), "a native dialog is still called"
+    for asked in ('askFirst("reads-open")', 'askFirst("stayopen-on")', 'askFirst("ghdisconnect")',
+                  'askFirst("oaforget:" + b.dataset.oaforget)'):
+        assert asked in ui, f"{asked} does not ask first"
+    for strip in ('confirmStrip("reads-open"', 'confirmStrip("stayopen-on"', 'confirmStrip("ghdisconnect"',
+                  'confirmStrip("oaforget:" + s.id'):
+        assert strip in ui, f"{strip} is asked but never shown"
+    # Enter on an open question is never the yes, and Escape closes it.
+    ask = ui[ui.index("function askFirst("):]
+    ask = ask[:ask.index("\n  }\n")]
+    assert '[data-askno]")?.focus(' in ask
+    assert 'event.key === "Escape" && asking' in ui
+
+
+def test_a_sign_in_is_added_from_a_form_and_its_secret_never_rides_an_argument():
+    """Adding a sign-in was two terminal commands printed on the page with a placeholder to fill in.
+    It is a form now, and the client secret goes to the CLI on stdin like every other value."""
+    ui = UI.read_text(encoding="utf-8")
+    assert "passbook oauth add google work --client-id" not in ui, "the terminal recipe is still the way in"
+    assert 'invoke("oauth_add", form)' in ui
+    assert 'id="sf-secret" type="password"' in ui
+    page = ui[ui.index("function signinsPage()"):]
+    page = page[:page.index("\n  }\n")]
+    assert "${signinFormPanel()}" in page
+
+    rust = (REPO / "app/src-tauri/src/main.rs").read_text(encoding="utf-8")
+    command = rust[rust.index("fn oauth_add("):]
+    command = command[:command.index("\n}\n")]
+    assert "--client-secret-stdin" in rust[rust.index("fn oauth_add_args("):rust.index("fn oauth_add(")]
+    assert "Zeroizing::new(client_secret)" in command
+    assert "stdin.write_all(" in command
+    block = re.search(r"tauri::generate_handler!\[(.*?)\]", rust, re.S)
+    assert block and "oauth_add" in block.group(1)
+    granted = set(json.loads(
+        (REPO / "app/src-tauri/capabilities/default.json").read_text(encoding="utf-8"))["permissions"])
+    assert "allow-oauth-add" in granted
+
+
+def test_the_cli_takes_a_sign_in_the_way_the_window_writes_it(tmp_path):
+    """The window writes options as --name=value and the positionals after --, so a typed label that
+    starts with a dash is a label. This is the CLI accepting exactly that, with the secret on stdin."""
+    env = {**os.environ, "HIVE_HOME": str(tmp_path / "hive"), "HOME": str(tmp_path),
+           "PYTHONPATH": str(REPO / "src"), "PASSBOOK_FLEET": "off", "PASSBOOK_NO_BRIEF": "1",
+           "PASSBOOK_KEYSTORE": "off", "PASSBOOK_NO_NOTIFY": "1"}
+    for gone in ("HIVE_ENV_FILES", "HIVE_WORKSPACE"):
+        env.pop(gone, None)
+    (tmp_path / "hive").mkdir()
+    done = subprocess.run([sys.executable, "-m", "passbook_cli", "oauth", "add", "--client-id=-an-id",
+                           "--client-secret-stdin", "--", "google", "-work"],
+                          input="a-client-secret\n", capture_output=True, text=True, env=env, cwd=str(tmp_path))
+    assert done.returncode == 0, done.stderr
+    listed = subprocess.run([sys.executable, "-m", "passbook_cli", "oauth", "--json"],
+                            capture_output=True, text=True, env=env, cwd=str(tmp_path))
+    ids = [g["id"] for g in json.loads(listed.stdout)]
+    assert ids == ["google:-work"]
+    assert "a-client-secret" not in done.stdout + done.stderr + listed.stdout
+
+
+def test_the_devices_check_says_which_device_it_is_waiting_on():
+    """The check asks every other device and took up to 48 s with nothing on screen but "Checking the
+    other devices…". The CLI reports each step, the app passes each one on, and the page shows each
+    device as it answers and how long the rest have been waited on."""
+    cli = (REPO / "src/passbook_cli.py").read_text(encoding="utf-8")
+    status = cli[cli.index("def _sync_status("):cli.index("def cmd_sync(")]
+    assert '"@progress "' in status and "file=sys.stderr" in status, "progress must stay off stdout"
+    assert "ThreadPoolExecutor" in status, "devices are asked together, not one after another"
+
+    rust = (REPO / "app/src-tauri/src/main.rs").read_text(encoding="utf-8")
+    command = rust[rust.index("fn sync_status("):rust.index("fn status_watched(")]
+    assert '"--progress"' in command and '"passbook://sync-progress"' in command
+    assert "unrecognized arguments: --progress" in command, "an older CLI must still answer"
+
+    ui = UI.read_text(encoding="utf-8")
+    assert 'events.listen("passbook://sync-progress", (e) => syncStep(e?.payload))' in ui
+    panel = ui[ui.index("function syncPanel()"):]
+    panel = panel[:panel.index("\n  }\n")]
+    assert "syncProgressNote()" in panel and "syncProgressRows()" in panel
+
+
+def test_the_security_page_asks_for_a_password_only_where_one_exists():
+    """With no vault yet, opening at restart, a recovery code and profiles each asked for a "vault
+    password" that did not exist: three password boxes on a first-run screen whose one real action was
+    fourth on the page. And with the vault shut, signing in was offered twice."""
+    ui = UI.read_text(encoding="utf-8")
+    page = ui[ui.index("function vaultPage()"):]
+    page = page[:page.index("\n  }\n")]
+    shown = page[page.index("const noVault"):]
+    assert "${noVault ? `<p" in shown and "${stayOpenBlock()}${recoveryPanel()}${profiles}" in shown
+    assert shown.index("${signIn}${encryption}") < shown.index("${readsBlock()}"), "what needs doing comes first"
+    assert 'id="si-pw2"' not in ui, "signing in is offered once"
+    # Turning encryption off is a press away, with what it costs, not a password box that is always out.
+    panel = ui[ui.index("function encryptionPanel("):]
+    panel = panel[:panel.index("\n  }\n")]
+    assert "data-unsealopen" in panel and panel.index("unsealing ?") < panel.index('id="sl-pw"')

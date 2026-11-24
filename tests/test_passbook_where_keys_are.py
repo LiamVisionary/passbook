@@ -90,7 +90,7 @@ def test_status_leaves_this_machine_out_of_its_own_peers_and_opens_nothing(home,
     args = argparse.Namespace(status=True, json=True)
     assert cli.cmd_sync(args) == 0
     said = json.loads(capsys.readouterr().out)
-    assert asked == ["m2", "asleep"], "the machine's own link node is not one of its peers"
+    assert sorted(asked) == ["asleep", "m2"], "the machine's own link node is not one of its peers"
     hosts = {row["host"]: row for row in said["devices"]}
     assert set(hosts) == {"m2", "asleep"} and hosts["asleep"]["reachable"] is False
     assert hosts["m2"]["missingThere"] == ["ONLY_HERE"] and said["notEverywhere"] == {"ONLY_HERE": ["m2"]}
@@ -151,3 +151,33 @@ def test_a_sync_asked_for_as_json_answers_in_json_even_with_nobody_to_sync_with(
     said = json.loads(capsys.readouterr().out)
     assert said["peers"] == [] and said["pulled"] == [] and said["sent"] == {}
 
+
+
+def test_status_asks_every_machine_at_once_and_says_so_as_each_answers(home, monkeypatch, capsys):
+    """One machine that did not answer held the rest up for its whole timeout before the next was asked,
+    and the window could show nothing for the length of it (up to 48 s on 2026-11-24). Now they are asked
+    together, and with --progress each step is a line on stderr while stdout stays the one answer."""
+    import time as clock
+
+    import passbook_fleet
+
+    peers = [{"host": h, "address": a, "port": "8787"} for h, a in (("slow-a", "10.9.0.1"), ("slow-b", "10.9.0.2"))]
+    monkeypatch.setattr(passbook_fleet, "reachable", lambda: list(peers))
+    monkeypatch.setattr(passbook_fleet, "collector_health", lambda address, port: {"machineId": "another"})
+
+    def fetch(host, port, address=""):
+        clock.sleep(0.6)
+        return None if host == "slow-b" else _payload(serves=["SHARED"])
+    monkeypatch.setattr(sync, "fetch", fetch)
+    started = clock.time()
+    assert cli.cmd_sync(argparse.Namespace(status=True, json=True, progress=True)) == 0
+    took = clock.time() - started
+    said = capsys.readouterr()
+    assert took < 1.1, f"asked one after another: {took:.1f}s for two 0.6 s answers"
+    answer = json.loads(said.out)
+    assert {row["host"]: row["reachable"] for row in answer["devices"]} == {"slow-a": True, "slow-b": False}
+    steps = [json.loads(line[len("@progress "):]) for line in said.err.splitlines() if line.startswith("@progress ")]
+    assert [s["stage"] for s in steps[:2]] == ["finding", "asking"] and steps[1]["hosts"] == ["slow-a", "slow-b"]
+    assert {s["host"]: s["ok"] for s in steps[2:]} == {"slow-a": True, "slow-b": False}
+    assert "10.9.0" not in said.err + said.out, "an address never leaves this machine's check"
+    assert "a-value-that-must-not-travel" not in said.err + said.out

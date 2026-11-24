@@ -94,6 +94,7 @@
     "allow-add-pasted",
     "allow-sync-status",
     "allow-sync-now",
+    "allow-oauth-add",
     "allow-rotate-status",
     "allow-rotate-start",
     "allow-rotate-finish",

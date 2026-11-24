@@ -322,14 +322,247 @@ fn revoke(did: String) -> Result<Value, String> {
     state()
 }
 
+/// Run `passbook add --stdin --sync`, answer as soon as the keys are written, and say afterward how
+/// sending them to the other machines went.
+///
+/// `add --sync` does two things: it writes the keys to this machine's store, and then it sends them to
+/// every other machine on the tailnet. The first takes a tenth of a second. The second takes as long as
+/// the slowest machine takes to answer, or to time out. The window waited for both, with its Add button
+/// grayed and nothing else to look at: the likeliest reading of "adding a key also has a delay
+/// sometimes" (Liam, 2026-11-24). The sending itself was not timed against his machines; asking the same
+/// machines for their status (`passbook sync --status`) took 23 to 48 seconds that day.
+///
+/// The CLI prints what it wrote and flushes before it sends anything, so the first thing readable on its
+/// stdout means the store has the keys. This returns then, with what was printed. The process is left
+/// to finish on a thread of its own, and what it went on to say goes to the window as `passbook://sent`
+/// (names and machine names, never a value). Still one command and still `--sync`: nothing about what
+/// is sent, or to which machines, is decided here.
+///
+/// A CLI from before the flush says nothing until it has finished, so with one of those this waits as
+/// long as it always did and reports the same things.
+fn add_then_send(app: &tauri::AppHandle, args: &[&str], input: &str, keys: Vec<String>) -> Result<String, String> {
+    let mut command = passbook_command();
+    command.args(args);
+    let (wrote, sending) = add_written(command, input)?;
+    if let Some(sending) = sending {
+        let said = wrote.clone();
+        let app = app.clone();
+        std::thread::spawn(move || {
+            let (ok, rest, problem) = sending.finish();
+            let _ = app.emit("passbook://sent", serde_json::json!({
+                "keys": keys,
+                "ok": ok,
+                "out": format!("{said}{rest}").trim(),
+                "problem": problem,
+            }));
+        });
+    }
+    Ok(wrote)
+}
+
+/// An `add` that has said what it wrote and has not finished: whatever it is still doing (sending the
+/// keys to the other machines), and whatever it has yet to say about it.
+struct Sending {
+    child: std::process::Child,
+    stdout: std::process::ChildStdout,
+}
+
+impl Sending {
+    /// Wait for it to end: whether it ended well, the rest of what it printed, and what it complained of.
+    fn finish(mut self) -> (bool, String, String) {
+        use std::io::Read;
+
+        let mut rest = String::new();
+        let _ = self.stdout.read_to_string(&mut rest);
+        match self.child.wait_with_output() {
+            Ok(output) => (output.status.success(), rest, String::from_utf8_lossy(&output.stderr).trim().to_string()),
+            Err(error) => (false, rest, format!("PassBook did not finish: {error}")),
+        }
+    }
+}
+
+/// Start an `add`, hand it its keys on stdin, and return as soon as it says it has written them: what
+/// it said, and the rest of the run to wait for elsewhere. `None` for the rest when it had already ended.
+fn add_written(mut command: Command, input: &str) -> Result<(String, Option<Sending>), String> {
+    use std::io::{Read, Write};
+    use std::process::Stdio;
+
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("Could not run PassBook: {error}"))?;
+    {
+        // Taken, so that it closes here: the CLI reads stdin to its end before it writes anything.
+        let mut stdin = child.stdin.take().ok_or("Could not write to PassBook")?;
+        stdin
+            .write_all(input.as_bytes())
+            .map_err(|error| format!("Could not write to PassBook: {error}"))?;
+    }
+    let mut stdout = child.stdout.take().ok_or("Could not read from PassBook")?;
+    let mut first = [0u8; 4096];
+    let got = stdout.read(&mut first).unwrap_or(0);
+    if got == 0 {
+        // It ended without saying it wrote anything: a refusal, and stderr has the reason.
+        let output = child
+            .wait_with_output()
+            .map_err(|error| format!("PassBook did not finish: {error}"))?;
+        if !output.status.success() {
+            let detail = String::from_utf8_lossy(&output.stderr);
+            let detail = detail.trim();
+            return Err(if detail.is_empty() { "PassBook could not add that.".into() } else { detail.to_string() });
+        }
+        return Ok((String::new(), None));
+    }
+    Ok((String::from_utf8_lossy(&first[..got]).to_string(), Some(Sending { child, stdout })))
+}
+
+#[cfg(test)]
+mod describing_a_sign_in {
+    use super::*;
+
+    #[test]
+    fn nothing_typed_into_the_form_is_read_as_an_option() {
+        let args = oauth_add_args("Google", "--keep-tokens", " id-123 ", true, "", "", "").unwrap();
+        assert_eq!(args, ["oauth", "add", "--client-id=id-123", "--client-secret-stdin", "--", "google", "--keep-tokens"]);
+        let args = oauth_add_args("custom", "", "-x", false, "https://a.example/auth", "https://a.example/token", "read").unwrap();
+        assert_eq!(args, ["oauth", "add", "--client-id=-x", "--authorize-url=https://a.example/auth",
+                          "--token-url=https://a.example/token", "--scope=read", "--", "custom"]);
+    }
+
+    #[test]
+    fn a_form_missing_what_the_provider_needs_is_refused_with_what_is_missing() {
+        assert!(oauth_add_args("myspace", "", "id", false, "", "", "").unwrap_err().contains("provider"));
+        assert!(oauth_add_args("google", "", "  ", false, "", "", "").unwrap_err().contains("client ID"));
+        assert!(oauth_add_args("custom", "", "id", false, "https://a", "", "").unwrap_err().contains("token address"));
+        assert!(oauth_add_args("google", "work\nx", "id", false, "", "", "").unwrap_err().contains("line break"));
+    }
+}
+
+#[cfg(all(test, unix))]
+mod checking_devices {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+
+    fn cli(script: &str) -> Command {
+        let mut command = Command::new("sh");
+        command.args(["-c", script]);
+        command
+    }
+
+    /// Each step reaches the window while the check is still running, not all at once at the end.
+    #[test]
+    fn each_step_arrives_as_it_happens_and_stdout_is_the_answer() {
+        let started = Instant::now();
+        let seen: Arc<Mutex<Vec<(String, Duration)>>> = Arc::default();
+        let log = seen.clone();
+        let answer = status_watched(
+            cli(r#"echo '@progress {"stage":"asking","hosts":["a","b"]}' >&2
+                   echo '@progress {"stage":"answered","host":"a","ok":true}' >&2
+                   sleep 1
+                   echo '@progress {"stage":"answered","host":"b","ok":false}' >&2
+                   echo '{"devices":[]}'"#),
+            move |step| log.lock().unwrap().push((step.to_string(), started.elapsed())),
+        ).expect("the check answers");
+        assert_eq!(answer, serde_json::json!({ "devices": [] }));
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 3);
+        assert!(seen[1].0.contains("\"host\":\"a\""));
+        assert!(seen[1].1 < Duration::from_millis(900), "the first answer waited for the last: {:?}", seen[1].1);
+        assert!(seen[2].1 >= Duration::from_secs(1));
+    }
+
+    /// A failure says why, without the progress lines mixed into the reason.
+    #[test]
+    fn a_failed_check_fails_with_the_reason_alone() {
+        let failed = status_watched(
+            cli(r#"echo '@progress {"stage":"finding"}' >&2; echo 'No tailnet here.' >&2; exit 1"#),
+            |_| {},
+        );
+        assert_eq!(failed.err().as_deref(), Some("No tailnet here."));
+    }
+}
+
+#[cfg(all(test, unix))]
+mod adding {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    /// A stand-in for `passbook add --stdin --sync`: a shell script, given the keys on stdin.
+    fn cli(script: &str) -> Command {
+        let mut command = Command::new("sh");
+        command.args(["-c", script]);
+        command
+    }
+
+    /// The reason this exists. The store has the key in a tenth of a second; the other machines take as
+    /// long as the slowest of them. The window is answered after the first and told about the second.
+    #[test]
+    fn an_add_answers_when_the_key_is_written_and_not_when_it_has_been_sent() {
+        let started = Instant::now();
+        let (wrote, sending) = add_written(
+            cli("cat >/dev/null; echo 'added: SLOW_PEERS'; sleep 2; echo 'sent to 1 machine(s): other-mac'"),
+            "SLOW_PEERS=a-value\n",
+        ).expect("the add starts");
+        let answered = started.elapsed();
+        assert_eq!(wrote.trim(), "added: SLOW_PEERS");
+        assert!(answered < Duration::from_millis(1500), "answered after {answered:?}: it waited for the sending");
+
+        let (ok, rest, problem) = sending.expect("still sending").finish();
+        assert!(started.elapsed() >= Duration::from_secs(2), "the sending was not waited for at all");
+        assert!(ok);
+        assert_eq!(rest.trim(), "sent to 1 machine(s): other-mac");
+        assert_eq!(problem, "");
+    }
+
+    /// A machine that did not take the key is a complaint about the sending, not a failed add.
+    #[test]
+    fn a_machine_that_was_not_reached_is_reported_after_the_add_has_answered() {
+        let (wrote, sending) = add_written(
+            cli("cat >/dev/null; echo 'replaced: KEY'; echo '  not sent to mac-mini (timed out); queued' >&2"),
+            "KEY=a-value\n",
+        ).expect("the add starts");
+        assert_eq!(wrote.trim(), "replaced: KEY");
+        let (ok, _, problem) = sending.expect("still sending").finish();
+        assert!(ok);
+        assert_eq!(problem, "not sent to mac-mini (timed out); queued");
+    }
+
+    /// Nothing written: the reason comes back as the failure, as it always did.
+    #[test]
+    fn a_refused_add_fails_with_the_reason() {
+        let refused = add_written(cli("cat >/dev/null; echo 'The vault is locked.' >&2; exit 1"), "KEY=a-value\n");
+        assert_eq!(refused.err().as_deref(), Some("The vault is locked."));
+    }
+
+    /// A CLI from before the flush says nothing until it has finished. Then everything arrives at once,
+    /// the wait is what it always was, and nothing is lost.
+    #[test]
+    fn an_older_cli_that_says_everything_at_the_end_still_works() {
+        let (wrote, sending) = add_written(
+            cli("cat >/dev/null; sleep 1; printf 'added: OLD\\nsent to 2 machine(s): a, b\\n'"),
+            "OLD=a-value\n",
+        ).expect("the add starts");
+        assert!(wrote.starts_with("added: OLD") && wrote.contains("sent to 2 machine(s)"));
+        let (ok, rest, _) = sending.expect("it had printed, so there is a run to finish").finish();
+        assert!(ok && rest.is_empty());
+    }
+
+    /// The keys go in on stdin and the pipe is closed, or a CLI that reads to the end never starts.
+    #[test]
+    fn the_keys_arrive_on_stdin_and_stdin_is_closed() {
+        let (wrote, _) = add_written(cli("wc -l | tr -d ' '"), "A=1\nB=2\n").expect("the add starts");
+        assert_eq!(wrote.trim(), "2");
+    }
+}
+
 /// Adding a key is the one action that carries a secret, so it is passed to the
 /// CLI on stdin rather than as an argument — an argument would be visible to
 /// `ps` for as long as the process lived.
 #[tauri::command(async)]
-fn add_key(name: String, value: String, replace: bool) -> Result<Value, String> {
-    use std::io::Write;
-    use std::process::Stdio;
-
+fn add_key(app: tauri::AppHandle, name: String, value: String, replace: bool) -> Result<Value, String> {
     if name.trim().is_empty() || value.trim().is_empty() {
         return Err("A key needs a name and a value.".into());
     }
@@ -341,24 +574,14 @@ fn add_key(name: String, value: String, replace: bool) -> Result<Value, String> 
     if replace {
         args.push("--replace");
     }
-    let mut child = passbook_command()
-        .args(&args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| format!("Could not run PassBook: {error}"))?;
-    {
-        let stdin = child.stdin.as_mut().ok_or("Could not write to PassBook")?;
-        writeln!(stdin, "{}={}", name.trim(), value.trim())
-            .map_err(|error| format!("Could not write to PassBook: {error}"))?;
-    }
-    let output = child
-        .wait_with_output()
-        .map_err(|error| format!("PassBook did not finish: {error}"))?;
-    if !output.status.success() {
-        let detail = String::from_utf8_lossy(&output.stderr);
-        return Err(detail.trim().to_string());
+    let wrote = add_then_send(&app, &args, &format!("{}={}\n", name.trim(), value.trim()), vec![name.trim().to_string()])?;
+    // An add of a name that is already here changes nothing and exits 0, and the window used to answer
+    // it with a green "Added". The window now asks to replace when it can see the name is taken; this is
+    // for the name that was taken in the moment between its looking and its asking.
+    let kept = wrote.lines().any(|line| line.starts_with("already set, unchanged:"));
+    let written = wrote.lines().any(|line| line.starts_with("added:") || line.starts_with("replaced:"));
+    if !replace && kept && !written {
+        return Err(format!("{} is already here, and its value was left as it was. Choose Replace value to change it.", name.trim()));
     }
     state()
 }
@@ -415,8 +638,9 @@ fn json_or_complaint(ran: (bool, String, String)) -> Result<Value, String> {
 /// like any key added here. Every line is checked first: one that is not a name and a value stops the
 /// whole paste, so half of a block is never added.
 #[tauri::command(async)]
-fn add_pasted(text: String, replace: bool) -> Result<Value, String> {
+fn add_pasted(app: tauri::AppHandle, text: String, replace: bool) -> Result<Value, String> {
     let mut lines = String::new();
+    let mut names: Vec<String> = Vec::new();
     let mut count = 0usize;
     for raw in text.lines() {
         let line = raw.trim();
@@ -435,6 +659,7 @@ fn add_pasted(text: String, replace: bool) -> Result<Value, String> {
             return Err(format!("{name} has no value."));
         }
         lines.push_str(&format!("{name}={value}\n"));
+        names.push(name.to_string());
         count += 1;
     }
     if count == 0 {
@@ -444,27 +669,76 @@ fn add_pasted(text: String, replace: bool) -> Result<Value, String> {
     if replace {
         args.push("--replace");
     }
-    let (ok, _, complaint) = run_with_stdin(&args, &lines)?;
-    if !ok {
-        return Err(if complaint.is_empty() { "PassBook could not add those keys.".into() } else { complaint });
-    }
+    add_then_send(&app, &args, &lines, names)?;
     state()
 }
 
 // ── where keys are, between machines ───────────────────────────────────────
 
 /// Which machines have which keys, and when keys last moved (`passbook sync --status`). Names and counts.
+///
+/// The check asks every other machine and can take most of a minute, and the Devices page said only
+/// "Checking the other devices…" for all of it. So the CLI is asked to report each step as it happens,
+/// and each step is passed on as `passbook://sync-progress`: which machines are being asked, and when
+/// each answers. A CLI too old to know `--progress` is asked again without it.
 #[tauri::command(async)]
-fn sync_status() -> Result<Value, String> {
-    run_json(&["sync", "--status", "--json"])
+fn sync_status(app: tauri::AppHandle) -> Result<Value, String> {
+    let mut command = passbook_command();
+    command.args(["sync", "--status", "--json", "--progress"]);
+    match status_watched(command, |step| {
+        let _ = app.emit("passbook://sync-progress", step);
+    }) {
+        Err(problem) if problem.contains("unrecognized arguments: --progress") => {
+            run_json(&["sync", "--status", "--json"])
+        }
+        answer => answer,
+    }
+}
+
+/// Run a status command that reports its steps as `@progress {json}` lines on stderr: each step goes
+/// to `step` as it arrives, the rest of stderr is the error if it fails, and stdout is the answer.
+fn status_watched(mut command: Command, step: impl Fn(Value)) -> Result<Value, String> {
+    use std::io::{BufRead, Read};
+    use std::process::Stdio;
+
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("Could not run PassBook: {error}"))?;
+    let mut stdout = child.stdout.take().ok_or("Could not read PassBook")?;
+    // stdout is read on its own thread: a large answer must not fill its pipe while stderr is read.
+    let answer = std::thread::spawn(move || {
+        let mut raw = String::new();
+        let _ = stdout.read_to_string(&mut raw);
+        raw
+    });
+    let mut detail = Vec::new();
+    if let Some(stderr) = child.stderr.take() {
+        for line in std::io::BufReader::new(stderr).lines().map_while(Result::ok) {
+            match line.strip_prefix("@progress ").map(serde_json::from_str::<Value>) {
+                Some(Ok(said)) => step(said),
+                _ => detail.push(line),
+            }
+        }
+    }
+    let raw = answer.join().unwrap_or_default();
+    let status = child.wait().map_err(|error| format!("PassBook did not finish: {error}"))?;
+    if !status.success() {
+        let detail = detail.join("\n");
+        let detail = detail.trim();
+        return Err(if detail.is_empty() { format!("PassBook exited with status {status}") } else { detail.to_string() });
+    }
+    serde_json::from_str(&raw).map_err(|error| format!("PassBook returned something unreadable: {error}"))
 }
 
 /// Exchange keys with the other machines now: what the collectors do by themselves every ten minutes,
 /// done at once (`passbook sync --maintenance --apply`). Answers with where things stand afterwards.
 #[tauri::command(async)]
-fn sync_now() -> Result<Value, String> {
+fn sync_now(app: tauri::AppHandle) -> Result<Value, String> {
     let ran = run_json(&["sync", "--maintenance", "--apply", "--json"])?;
-    let mut status = sync_status()?;
+    let mut status = sync_status(app)?;
     if let Some(map) = status.as_object_mut() {
         map.insert("ran".into(), serde_json::json!({
             "pulled": ran.get("pulled").cloned().unwrap_or(Value::Null),
@@ -1235,6 +1509,75 @@ fn oauth_disconnect(id: String) -> Result<Value, String> {
         return Err("Which sign-in?".into());
     }
     run(&["oauth", "remove", id.trim(), "--yes"])?;
+    oauth_state()
+}
+
+/// The arguments for `passbook oauth add`, from what the window's form held. Every option is written
+/// `--name=value` and the positionals come after `--`, so nothing typed into the form (a label that
+/// starts with a dash, say) is ever read as an option.
+fn oauth_add_args(provider: &str, label: &str, client_id: &str, has_secret: bool,
+                  authorize_url: &str, token_url: &str, scope: &str) -> Result<Vec<String>, String> {
+    let provider = provider.trim().to_lowercase();
+    if !["google", "github", "microsoft", "custom"].contains(&provider.as_str()) {
+        return Err("Choose a provider.".into());
+    }
+    let (label, client_id) = (label.trim(), client_id.trim());
+    if client_id.is_empty() {
+        return Err("Paste the client ID you registered with the provider.".into());
+    }
+    let fields = [label, client_id, authorize_url.trim(), token_url.trim(), scope.trim()];
+    if fields.iter().any(|f| f.chars().any(char::is_control)) {
+        return Err("A field has a line break or another control character in it.".into());
+    }
+    if provider == "custom" && (authorize_url.trim().is_empty() || token_url.trim().is_empty()) {
+        return Err("A custom provider needs its sign-in address and its token address.".into());
+    }
+    let mut args = vec!["oauth".to_string(), "add".into(), format!("--client-id={client_id}")];
+    if has_secret {
+        args.push("--client-secret-stdin".into());
+    }
+    for (flag, value) in [("--authorize-url", authorize_url), ("--token-url", token_url), ("--scope", scope)] {
+        if !value.trim().is_empty() {
+            args.push(format!("{flag}={}", value.trim()));
+        }
+    }
+    args.push("--".into());
+    args.push(provider);
+    if !label.is_empty() {
+        args.push(label.to_string());
+    }
+    Ok(args)
+}
+
+/// Describe a sign-in from the window's form (`passbook oauth add`). A client secret goes in on stdin,
+/// never as an argument, and the CLI files it in the store like any other credential.
+#[tauri::command(async)]
+fn oauth_add(provider: String, label: String, client_id: String, client_secret: String,
+             authorize_url: String, token_url: String, scope: String) -> Result<Value, String> {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let secret = Zeroizing::new(client_secret);
+    let args = oauth_add_args(&provider, &label, &client_id, !secret.trim().is_empty(),
+                              &authorize_url, &token_url, &scope)?;
+    let mut child = passbook_command()
+        .args(&args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("Could not run PassBook: {error}"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        if !secret.trim().is_empty() {
+            let line = Zeroizing::new(format!("{}\n", secret.trim()));
+            stdin.write_all(line.as_bytes()).map_err(|error| format!("Could not write to PassBook: {error}"))?;
+        }
+    }
+    let output = child.wait_with_output().map_err(|error| format!("PassBook did not finish: {error}"))?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if detail.is_empty() { format!("PassBook exited with status {}", output.status) } else { detail });
+    }
     oauth_state()
 }
 
@@ -2576,10 +2919,7 @@ fn decide_authorization(id: String, decision: String, workspace: String, create_
 /// single line in the ledger, and a half-applied request cannot happen.
 /// Values go down stdin and never appear in an argument list.
 #[tauri::command(async)]
-fn apply_ask(id: String, typed: Vec<(String, String)>, replace: bool) -> Result<Value, String> {
-    use std::io::Write;
-    use std::process::Stdio;
-
+fn apply_ask(app: tauri::AppHandle, id: String, typed: Vec<(String, String)>, replace: bool) -> Result<Value, String> {
     // Values the page handed over never went to the window, so they are read
     // back from here. `typed` fills only the keys nobody supplied.
     let wanted = {
@@ -2622,27 +2962,7 @@ fn apply_ask(id: String, typed: Vec<(String, String)>, replace: bool) -> Result<
     if replace {
         args.push("--replace");
     }
-    let mut child = passbook_command()
-        .args(&args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| format!("Could not run PassBook: {error}"))?;
-    {
-        let stdin = child.stdin.as_mut().ok_or("Could not write to PassBook")?;
-        stdin
-            .write_all(lines.as_bytes())
-            .map_err(|error| format!("Could not write to PassBook: {error}"))?;
-    }
-    let output = child
-        .wait_with_output()
-        .map_err(|error| format!("PassBook did not finish: {error}"))?;
-    if !output.status.success() {
-        let detail = String::from_utf8_lossy(&output.stderr);
-        let detail = detail.trim();
-        return Err(if detail.is_empty() { "Those keys were not added.".into() } else { detail.to_string() });
-    }
+    add_then_send(&app, &args, &lines, wanted.iter().map(|key| key.name.clone()).collect())?;
     dismiss_ask();
     state()
 }
@@ -2838,7 +3158,7 @@ fn main() {
             github_state, github_connect_token, github_connect_gh, github_connect_device,
             github_disconnect, github_targets, github_environments, github_check, github_push,
             balances_state, balances_enable, balances_open, balances_icons, balances_full, balances_known, console_signin, balances_alerts, appearance, set_appearance,
-            add_pasted, sync_status, sync_now, rotate_status, rotate_start, rotate_finish, rotate_verify,
+            add_pasted, sync_status, sync_now, oauth_add, rotate_status, rotate_start, rotate_finish, rotate_verify,
             account_set, account_lookup,
             update_state, update_install
         ])

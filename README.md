@@ -913,6 +913,11 @@ somewhere else entirely.
 
 ![Accounts this device holds, and whether each is still live](docs/app-signins.png)
 
+In the app, **Add a sign-in** on the Sign-ins page asks for the provider, the
+client ID and secret you registered, and opens the sign-in in your browser. The
+secret goes to the command line on stdin and is kept in the store like any other
+key. From a terminal:
+
 ```bash
 passbook oauth add google work --client-id <the client you registered>
 passbook oauth connect google:work      # opens the browser, catches the callback
@@ -1444,12 +1449,32 @@ From a terminal, `passbook update` updates the command line alone
 (`passbook update --check` only looks).
 
 **Finding things.** Cmd+K (Ctrl+K on Windows and Linux) opens a palette that
-finds any key, page or action; Enter opens it and Cmd+Enter copies a key's name.
-"/" jumps to the search box and Cmd+N opens Add key. **Attention**, first in the
-sidebar, lists whatever wants a decision from you, each with the one thing to
-press. On **Keys**, chips under the search box filter to what is new, not on
-every device, not encrypted, guarded, refused by its service or never used, and
-the list can be ordered by group, age, last use or name. **Devices** opens on a
+finds any key, page or action; Enter or the right arrow opens it and Cmd+Enter
+copies a key's name. "/" jumps to the search box and Cmd+N opens Add key.
+**Attention**, first in the sidebar, lists whatever wants a decision from you,
+each with the one thing to press. On **Keys**, chips under the search box filter
+to what is new, not on every device, not encrypted, guarded, refused by its
+service or never used, and the list can be ordered by group, age, last use or
+name.
+
+**Keys, from the keyboard.** Typing anywhere on Keys searches. The search takes
+several words and the name of a key's group ("stripe secret"), says how many it
+found, and puts a cursor on the best match. The up and down arrows move the
+cursor, Enter or the right arrow opens that key, the left arrow or Escape closes
+it, Cmd+C copies its value and Cmd+E changes it. The search box, the add form
+and the filters stay at the top of the window while the list scrolls.
+
+**Changing a value.** Every key has a pencil. It opens an empty box for the new
+value: Enter or **Save** keeps it, Escape or **Cancel** does not, and clicking
+somewhere else does neither. The old value is never put in the box. A key that
+other services hold a copy of is better changed with **Rotate…**, which updates
+them too.
+
+**Adding a key.** Enter adds from either field. A name that is already here is
+said so as you type it and the button becomes **Replace value**; a name the
+store cannot take is said so too, with the nearest name it can. The key is in
+the list as soon as this device has it. Sending it to your other devices carries
+on behind that, and the form says how it went. **Devices** opens on a
 Sync panel: which devices have which keys, what is held up and where, and a
 **Sync now** button (`passbook sync --status` from a terminal). Paste a `.env`
 into Add key to add several at once. **Rotate…** in a key's settings walks

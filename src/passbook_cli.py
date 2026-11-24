@@ -521,6 +521,11 @@ def cmd_add(args: argparse.Namespace) -> int:
     if result["kept"] and not args.replace:
         sys.stdout.flush()
         print("\nPass --replace to overwrite a key another app may be using.", file=sys.stderr)
+    # What was written is said now, before any of it is sent anywhere. Into a pipe these lines sat in a
+    # buffer until the command ended, so whatever was reading (the PassBook window) could not tell
+    # "written" from "written and sent", and waited on the slowest machine on the tailnet to learn that
+    # a key was in the store on this one.
+    sys.stdout.flush()
     # Tell the other machines now rather than waiting for them to ask: a pull
     # can only be answered while this vault is open. Piped writes stay local
     # unless asked, because that is how a peer applies OUR push, and a peer that
@@ -5898,12 +5903,18 @@ def _other_machines(peers: list[dict]) -> list[dict]:
         return peers
     if not mine:
         return peers
-    kept = []
-    for peer in peers:
+    if not peers:
+        return []
+    # Asked together: one at a time, each machine's health read waited for the one before it.
+    from concurrent.futures import ThreadPoolExecutor
+
+    def whose(peer: dict) -> str:
         health = passbook_fleet.collector_health(peer.get("address", ""), peer.get("port", "")) or {}
-        if str(health.get("machineId") or "") != mine:
-            kept.append(peer)
-    return kept
+        return str(health.get("machineId") or "")
+
+    with ThreadPoolExecutor(max_workers=min(8, len(peers))) as pool:
+        owners = list(pool.map(whose, peers))
+    return [peer for peer, owner in zip(peers, owners) if owner != mine]
 
 
 def _sync_status(args: argparse.Namespace) -> int:
@@ -5911,15 +5922,39 @@ def _sync_status(args: argparse.Namespace) -> int:
     import passbook_fleet
     import passbook_sync
 
+    # `--progress` is for the window, which had nothing to show for the length of this check but
+    # "Checking the other devices…": up to 48 s on 2026-11-24. Each step is a line on stderr, so stdout
+    # stays the one JSON answer. Host names and counts only, never an address.
+    def progress(**said: object) -> None:
+        if getattr(args, "progress", False):
+            print("@progress " + json.dumps(said), file=sys.stderr, flush=True)
+
+    progress(stage="finding")
     peers = _other_machines(passbook_fleet.reachable())
-    payloads, unreachable = [], []
-    for peer in peers:
+    progress(stage="asking", hosts=[peer["host"] for peer in peers])
+
+    # Every machine is asked at once. They were asked one after another, so one that did not answer
+    # held the rest up for its whole timeout (20 s each) before the next was even asked.
+    def ask(peer: dict) -> dict | None:
+        started = time.time()
         got = passbook_sync.fetch(peer["host"], peer["port"], address=peer["address"])
-        if got is None:
-            unreachable.append(peer["host"])
-        else:
-            # Names and lists of names only: the values a peer sent are dropped here, unread.
-            payloads.append((peer["host"], {**got, "values": dict.fromkeys(got.get("values") or {}, "")}))
+        # Names and lists of names only: the values a peer sent are dropped here, unread.
+        kept = None if got is None else {**got, "values": dict.fromkeys(got.get("values") or {}, "")}
+        progress(stage="answered", host=peer["host"], ok=kept is not None,
+                 seconds=round(time.time() - started, 1))
+        return kept
+
+    payloads, unreachable = [], []
+    if peers:
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=min(8, len(peers))) as pool:
+            answers = list(pool.map(ask, peers))
+        for peer, got in zip(peers, answers):
+            if got is None:
+                unreachable.append(peer["host"])
+            else:
+                payloads.append((peer["host"], got))
     policy = _access().read_policy() if _access() is not None else None
     said = passbook_sync.summarize(passbook.key_names(), payloads, unreachable=unreachable, policy=policy,
                                    exchanges=passbook_sync.read_exchanges())
@@ -9146,6 +9181,9 @@ def build_parser() -> argparse.ArgumentParser:
     sync_cmd.add_argument("--status", action="store_true",
                           help="which machines have which keys, and when keys last moved; "
                                "names and counts only, nothing is opened or changed")
+    sync_cmd.add_argument("--progress", action="store_true",
+                          help="with --status: say on stderr, one JSON line each, which machines are "
+                               "being asked and when each answers")
     sync_cmd.add_argument("--push-missing", dest="push_missing", action="store_true",
                           help="seed peers with keys they are entirely missing; never "
                                "overwrites a value a peer already holds")

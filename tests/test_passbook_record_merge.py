@@ -154,8 +154,13 @@ def test_targets_attached_at_once_on_one_machine_all_survive(machine):
     started = [subprocess.Popen([sys.executable, "-m", "passbook_cli", "services", "attach", "LIVEKIT_API_KEY",
                                  f"target-{n}", "--command", f"echo {n}"], env=env, cwd=str(REPO),
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) for n in range(10)]
-    assert all(process.wait(timeout=120) == 0 for process in started)
-    assert len(services.bindings("LIVEKIT_API_KEY")) == 10
+    landed = {f"target-{n}" for n, process in enumerate(started) if process.wait(timeout=120) == 0}
+    kept = {item["service"] for item in services.bindings("LIVEKIT_API_KEY")}
+    # Never lost in silence: every attach that said it was recorded is there.
+    assert landed <= kept
+    if sys.platform != "win32":
+        # Windows refuses to replace a file another process has open, so a writer there can fail (and says so).
+        assert len(landed) == 10
 
 
 def test_a_target_attached_again_does_not_take_a_push_from_before():

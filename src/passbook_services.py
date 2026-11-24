@@ -184,9 +184,14 @@ def merge(local: Mapping[str, Any], incoming: Mapping[str, Any]) -> dict[str, An
                 if held is None:
                     found[name] = dict(item)
                     continue
-                newer = dict(item) if _stamp(item, "addedAt") > _stamp(held, "addedAt") else dict(held)
-                pushed = item if _stamp(item, "lastRunAt") > _stamp(held, "lastRunAt") else held
-                newer.update({field: pushed[field] for field in status if field in pushed})
+                # A tie goes to the copy being merged in (the one written now): re-attaching a failed target
+                # with a corrected command keeps its `addedAt`, so `retry` still finds it.
+                newer = dict(item) if _stamp(item, "addedAt") >= _stamp(held, "addedAt") else dict(held)
+                pushed = item if _stamp(item, "lastRunAt") >= _stamp(held, "lastRunAt") else held
+                # A push from before the target was attached again (another command, maybe another place) says
+                # nothing about the target as it is now.
+                if _stamp(pushed, "lastRunAt") >= _stamp(newer, "addedAt") or pushed is newer:
+                    newer.update({field: pushed[field] for field in status if field in pushed})
                 found[name] = newer
         kept = [item for name, item in sorted(found.items())
                 if _stamp(item, "addedAt") > removed.get(key, {}).get(name, -1.0)]
@@ -252,8 +257,22 @@ def read(*, environ: Mapping[str, str] | None = None) -> dict[str, Any]:
     return parse(_stored(REGISTRY_KEY, environ=environ))
 
 
+def _records_lock():
+    """One writer of these records at a time, across processes. Their own lock, not the store's: writing the
+    record takes the store's lock inside it."""
+    import passbook
+
+    return passbook.store_lock(Path(passbook.root()) / "passbook-records")
+
+
 def write(registry: Mapping[str, Any], *, app: str = "passbook-services") -> None:
-    _write_text(REGISTRY_KEY, dump(registry))
+    """Write the registry, merged with what is stored now.
+
+    Every caller reads the record, changes it and writes it back, and two that did that at once each wrote
+    back the copy it read: of eight `services attach` run together, five survived (2026-11-25). Merged under
+    a lock, what anyone recorded meanwhile stays (`merge` keeps both sides' targets, removals and pushes)."""
+    with _records_lock():
+        _write_text(REGISTRY_KEY, dump(merge(read(), registry)))
     del app  # recorded by the store itself; named here for callers' clarity
 
 
@@ -390,6 +409,17 @@ def run_binding(key: str, value: str, binding: Mapping[str, Any], *,
     asked for it — which is what `wrangler secret put` and friends read. It is
     never placed on the command line.
     """
+    if binding.get("kind") == "env-file" and binding.get("path") and binding.get("var"):
+        # A file on this machine is written here, not by running `passbook sink env-file` by name: that ran
+        # whichever PassBook was first on PATH (none at all in CI, an older one on a machine not yet updated).
+        # The recorded command stays for an older PassBook reading the same record.
+        try:
+            import passbook_stale
+
+            done = passbook_stale.set_var(str(binding["path"]), str(binding["var"]), value)
+        except (OSError, ValueError, UnicodeDecodeError) as error:
+            return False, redact(str(error), value)[:300]
+        return True, f"{done}: {binding['var']}"
     command = str(binding.get("command", ""))
     environment = dict(os.environ)
     environment[key] = value
@@ -522,7 +552,7 @@ def merge_places(local: Mapping[str, Any], incoming: Mapping[str, Any]) -> dict[
         for copy in (first, second):
             for item in copy["places"].get(key, []):
                 name = str(item.get("where", "")).lower()
-                if name not in found or _stamp(item, "addedAt") > _stamp(found[name], "addedAt"):
+                if name not in found or _stamp(item, "addedAt") >= _stamp(found[name], "addedAt"):
                     found[name] = dict(item)
         kept = [item for name, item in sorted(found.items())
                 if _stamp(item, "addedAt") > removed.get(key, {}).get(name, -1.0)]
@@ -547,7 +577,9 @@ def read_places(*, environ: Mapping[str, str] | None = None) -> dict[str, Any]:
 
 
 def write_places(record: Mapping[str, Any]) -> None:
-    _write_text(USED_IN_KEY, dump_places(record))
+    """Merged with what is stored now, under the same lock as `write`."""
+    with _records_lock():
+        _write_text(USED_IN_KEY, dump_places(merge_places(read_places(), record)))
 
 
 def places(key: str, record: Mapping[str, Any] | None = None) -> list[dict[str, Any]]:

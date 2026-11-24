@@ -1700,6 +1700,9 @@ def _rotate(args: argparse.Namespace) -> int:
     # Every copy of the old value in an env file on this machine, found by value (passbook_stale.py).
     if replaced.get(key):
         _stale_after_replace(replaced, sweep=True, news={key: fresh}, app=who)
+    elif "passbook_stale" in sys.modules and not sys.modules["passbook_stale"].off():
+        print(f"note: the old value of {key} could not be read here, so its copies are found only if an earlier "
+              f"`passbook stale` saw it", file=sys.stderr)
     if not getattr(args, "no_sync", False):
         _replicate_write([key], {key: fresh})
 
@@ -1871,8 +1874,7 @@ def _stale_in_background(*extra: str) -> None:
 
         if passbook_stale.off():
             return
-        log = Path(passbook.root()) / "stale.log"
-        descriptor = os.open(str(log), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        descriptor = passbook_stale.log_handle()
         # Started from `sync`, this process is the broker's child and its environment holds every key: none of
         # that goes to a process that outlives it. The sweep opens what it needs itself.
         held = set(passbook.key_names())
@@ -1894,8 +1896,6 @@ def cmd_stale(args: argparse.Namespace) -> int:
         passbook stale --fix        put the current value in each, keep a backup, and make each a push target
         passbook stale --watch PATH also look at PATH (a file, or a folder to walk) from now on
     """
-    import fcntl
-
     import passbook_stale
 
     root = Path(passbook.root())
@@ -1927,16 +1927,18 @@ def cmd_stale(args: argparse.Namespace) -> int:
         return got  # a guarded key: the broker ran this command again, holding the values, and it did the work
     # Only the process that does the work holds the lock: taken before the values were open, it was held by the
     # parent while the broker's child (above) found it taken and stopped, so nothing was ever swept.
-    lock = open(root / passbook_stale.LOCK, "a+")  # noqa: SIM115 — held for the whole run
-    try:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
+    lock = passbook_stale.try_lock(root)  # held for the whole run
+    if lock is None:
         print("A sweep is already running.")
         return 0
     record = passbook_stale.read()
     values, brokered = got
     _record_run_reads(who, STALE_REASON, wanted, values, brokered)
     passbook_stale.notice(record, values, raw)
+    # A key this command may not open (one limited to other apps, say) is never noticed, so a copy of its old
+    # value would never be found: said, never passed over.
+    unopened = sorted(key for key in wanted if key not in passbook_stale.RECORDS
+                      and (not values.get(key) or str(values[key]).startswith("hive-sealed:")))
     for key, old in previous.items():
         if old and old != values.get(key, _plain(key, raw.get(key, ""))):
             passbook_stale.retire(record, key, old)
@@ -1969,15 +1971,17 @@ def cmd_stale(args: argparse.Namespace) -> int:
                           "copies": [{field: item.get(field) for field in ("file", "var", "key", "status", "why", "attached")}
                                      for item in report],
                           "unreadable": [passbook_stale.display(item) for item in unreadable],
-                          "needsRestart": holding}))
+                          "notOpened": unopened, "needsRestart": holding}))
         return 0
+    for item in unreadable[:20]:
+        print(f"could not look in: {passbook_stale.display(item)}")
+    if unopened:
+        print(f"could not open here, so copies of their old values are not looked for: {', '.join(unopened)}")
     if not record["retired"]:
         if not args.quiet:
             print("No replaced value is remembered yet. From now on, every key replaced on this machine is.")
         return 0
     _stale_report(report, holding, quiet=args.quiet)
-    for item in unreadable[:20]:
-        print(f"could not look in: {passbook_stale.display(item)}")
     if any(item["status"] == "found" for item in report):
         print("\nFix them:  passbook stale --fix")
     return 0

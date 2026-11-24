@@ -146,3 +146,23 @@ def test_a_key_limited_to_another_agent_says_so_instead_of_asking_to_sign_in(tmp
         assert "sign in first" not in refused.stderr.lower() and "encrypted and locked" not in refused.stderr
     finally:
         cli("broker", "stop")
+
+
+def test_targets_attached_at_once_on_one_machine_all_survive(machine):
+    """Every writer read the record, changed it and wrote it back; eight attaches run together kept five."""
+    env = {**os.environ, "PYTHONPATH": str(REPO / "src"), "PASSBOOK_APP": ""}
+    started = [subprocess.Popen([sys.executable, "-m", "passbook_cli", "services", "attach", "LIVEKIT_API_KEY",
+                                 f"target-{n}", "--command", f"echo {n}"], env=env, cwd=str(REPO),
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) for n in range(10)]
+    assert all(process.wait(timeout=120) == 0 for process in started)
+    assert len(services.bindings("LIVEKIT_API_KEY")) == 10
+
+
+def test_a_target_attached_again_does_not_take_a_push_from_before():
+    old = services.attach("KEY_A", "box", "old-command", registry=services.parse(None))
+    old = services.record("KEY_A", "box", ok=True, registry=old)
+    time.sleep(0.01)
+    again = services.attach("KEY_A", "box", "new-command", registry=old)
+    merged = services.merge(old, again)
+    [target] = services.bindings("KEY_A", merged)
+    assert target["command"] == "new-command" and target["lastStatus"] == "never"

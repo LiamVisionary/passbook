@@ -25,6 +25,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import passbook_stale as stale  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
+# Files' permission bits, the single-run lock and a detached sweep are POSIX here; Windows has none of the three
+# in this shape.
+pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes, flock and detached sweeps")
 OLD = "sk-or-v1-old-0123456789abcdefABCDEF"
 NEW = "sk-or-v1-new-fedcba9876543210FEDCBA"
 OTHER = "eleven-ami-key-aaaaaaaaaaaaaaaaaaaa"
@@ -38,7 +41,9 @@ class Machine:
         self.env = {**os.environ, "HIVE_HOME": str(base / "hive"), "HOME": str(self.home), "PASSBOOK_APP": "",
                     "PASSBOOK_NO_BRIEF": "1", "PASSBOOK_KEYSTORE": "off", "PASSBOOK_NO_NOTIFY": "1",
                     "PASSBOOK_FLEET": "off", "PASSBOOK_STALE": "on", "PASSBOOK_STALE_ROOTS": str(self.home),
-                    "PYTHONPATH": str(REPO / "src")}
+                    "PYTHONPATH": str(REPO / "src"),
+                    # No `passbook` on PATH, as in CI: nothing here may depend on whichever one is installed.
+                    "PATH": os.pathsep.join(("/usr/bin", "/bin"))}
         for leaked in ("HIVE_ENV_FILES", "HIVE_WORKSPACE", "APP_SANDBOX_CONTAINER_ID", "PASSBOOK_GRANT"):
             self.env.pop(leaked, None)
 
@@ -175,8 +180,10 @@ def test_a_rollback_puts_the_old_value_back_everywhere_the_sweep_moved_it(machin
 
 def test_short_values_and_values_another_key_holds_are_never_retired(tmp_path):
     record = stale.read(tmp_path)
-    raw = {"PORT": "8080", "FLAG": "true", "A": OLD, "B": OLD}
+    raw = {"PORT": "8080", "FLAG": "true", "A": OLD, "B": OLD, "LOGIN": "someone.long@example.com",
+           "PHRASE": "correct horse battery staple"}
     stale.notice(record, raw, raw)
+    assert {key for key, item in record["seen"].items() if item["h"]} == {"A", "B"}  # nothing guessable is hashed
     stale.notice(record, {"PORT": "9090", "FLAG": "false"}, {**raw, "PORT": "9090", "FLAG": "false"})
     assert record["retired"] == {}
     assert stale.retire(record, "A", OLD) is False  # B still holds it

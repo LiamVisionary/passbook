@@ -136,8 +136,8 @@ agent hit 401 on the dead OpenRouter key.
 
 - **Copies are found by value, never by name.** A name scan of one machine found 35 same-name mismatches, nearly
   all files that rightly hold a different key under the same name. PassBook now remembers a salted hash of every
-  value a key held, never the value, in `retired.json` beside the store: owner-only, on this machine, never
-  synced. However a value is replaced (`rotate`, `add --replace`, a pull from another machine, an edit by hand),
+  credential-shaped value a key held, never the value, in `retired.json` beside the store: owner-only, on this
+  machine, never synced (SECURITY.md says what that file does and does not reveal). However a value is replaced (`rotate`, `add --replace`, a pull from another machine, an edit by hand),
   the next look notices that the hash changed. Short values ("true", a port) are never treated as stale, and
   neither is a value another key still holds.
 - **`passbook stale`** lists every env-like file (`.env`, `.env.*`, `.dev.vars`, and anything added with
@@ -156,13 +156,20 @@ agent hit 401 on the dead OpenRouter key.
   machine with 400,000 folders.
 - **A process can't be fixed in a file.** `passbook stale` names each running process the broker handed a key to
   before that key was replaced, so it can be restarted.
+- **What it cannot see, it says.** A key this machine will not open for the sweep (one limited to other apps) is
+  named, and so is a folder it cannot read. It cannot find copies of values replaced before this version, and it
+  cannot open a rotation's sealed previous value after the fact.
 - **Fixed on the way:**
-  - The record of push targets travels between machines as one store key, and the newer copy used to replace
-    the other whole. A copy that was newer only because something else in it changed wiped everything recorded
-    since: two LIVEKIT_API_KEY targets vanished an hour after they were attached, and rotated keys' targets read
-    "not pushed yet" again after their pushes had landed. A sync pull, and a push applied with
-    `add --stdin --replace`, now merge the two copies one target at a time. A removed target stays removed
-    unless it is attached again. The places noted by hand merge the same way.
+  - Push targets could be lost. On 2026-11-24 two LIVEKIT_API_KEY targets vanished an hour after they were
+    attached, and rotated keys' targets read "not pushed yet" again after their pushes had landed. Two causes
+    were found and both are fixed; which one hit that day is not confirmed.
+    - **On one machine:** every writer read the record, changed it and wrote back the copy it read, so of eight
+      `services attach` run together, five survived. A write now merges with what is stored, under a lock.
+    - **Between machines:** the record travels as one store key, and the newer copy replaced the other whole,
+      even when it was newer only because something else in it changed. A sync pull, and a push applied with
+      `add --stdin --replace`, now merge the two copies one target at a time. A removed target stays removed
+      unless it is attached again, and a push from before a target was attached again is not carried onto it.
+      The places noted by hand merge the same way.
   - On a sealed store with open reads, `passbook run --only KEY` by an agent the key is limited away from said
     "The credential store is encrypted and locked … Sign in first". It now says the key was refused and by which
     rule, and that signing in changes nothing.

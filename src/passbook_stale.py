@@ -45,9 +45,11 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 FILE = "retired.json"
+LOG = "stale.log"
+LOG_LIMIT = 1_000_000
 BACKUPS = "stale-backups"
 LOCK = "stale.lock"
-VERSION = 1
+VERSION = 2
 MIN_LENGTH = 16
 BACKUP_DAYS = 30
 FULL_EVERY = 86400
@@ -79,6 +81,9 @@ def read(where: Path | None = None) -> dict[str, Any]:
         data = {}
     if not isinstance(data, dict):
         data = {}
+    if data.get("version") != VERSION:
+        # Version 1 kept a hash of every value; only credential-shaped values are kept now (`retirable`).
+        data = {"salt": data.get("salt"), "extra": data.get("extra"), "files": data.get("files")}
     return {"version": VERSION, "salt": str(data.get("salt") or ""),
             "seen": data.get("seen") if isinstance(data.get("seen"), dict) else {},
             "retired": data.get("retired") if isinstance(data.get("retired"), dict) else {},
@@ -109,10 +114,19 @@ def mark(record: dict, value: str) -> str:
 
 
 def retirable(value: str) -> bool:
-    """Long enough to be a credential and not a setting: a copy of "true" or "8080" is not a stale key."""
+    """Shaped like a generated credential, so it is worth finding and nothing else is hashed.
+
+    Not a setting: a copy of "true" or "8080" is not a stale key, and rewriting every "true" would be a
+    disaster. And not something a person chose or that names them (an email, a passphrase with spaces): the
+    record keeps a salted hash beside its salt, which is safe for a random 32-character key and is not for a
+    guessable value. So: no whitespace or "@", and either 24 characters of at least two kinds (letters,
+    digits, symbols) or 16 of three."""
     text = str(value or "")
-    return (len(text) >= MIN_LENGTH and not text.startswith("hive-sealed:") and not text.isdigit()
-            and not any(ch in text for ch in "\n\r"))
+    if text.startswith("hive-sealed:") or len(text) < MIN_LENGTH or any(ch.isspace() for ch in text) or "@" in text:
+        return False
+    kinds = sum((any(ch.islower() for ch in text), any(ch.isupper() for ch in text),
+                 any(ch.isdigit() for ch in text), any(not ch.isalnum() for ch in text)))
+    return (len(text) >= 24 and kinds >= 2) or kinds >= 3
 
 
 def _raw_mark(record: dict, stored: str) -> str:
@@ -147,7 +161,7 @@ def notice(record: dict, values: Mapping[str, str], raw: Mapping[str, str], *, n
 
 def retire(record: dict, key: str, value: str, *, now: float | None = None) -> bool:
     """Retire one value directly (a rotation's previous value, known before it is replaced)."""
-    if not retirable(value):
+    if key in RECORDS or not retirable(value):
         return False
     hashed = mark(record, value)
     if hashed in {item.get("h") for name, item in record["seen"].items() if name != key}:
@@ -444,6 +458,38 @@ def holders(keys_retired: Mapping[str, float]) -> list[dict]:
 
 def due(record: Mapping[str, Any], *, now: float | None = None) -> bool:
     return (time.time() if now is None else now) - float(record.get("lastFull") or 0) >= FULL_EVERY
+
+
+def try_lock(where: Path | None = None):
+    """The single-run lock, or None when another run holds it. Kept open for the run; closing releases it."""
+    target = Path(where or root()) / LOCK
+    target.parent.mkdir(parents=True, exist_ok=True)
+    handle = open(target, "a+b")  # noqa: SIM115
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        return None
+    return handle
+
+
+def log_handle(where: Path | None = None) -> int:
+    """The background run's log (files and variable names only), started afresh once it passes 1 MB."""
+    target = Path(where or root()) / LOG
+    try:
+        if target.stat().st_size > LOG_LIMIT:
+            target.unlink()
+    except OSError:
+        pass
+    return os.open(str(target), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
 
 
 def off() -> bool:

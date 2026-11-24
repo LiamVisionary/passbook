@@ -49,6 +49,14 @@ vault without a password. That is the trade it exists to make, and it is opt-in.
 compiled into browser bundles by the frameworks that define them. They are
 public before this project touches them.
 
+**The stale-copy record holds hashes of values.** To find old copies of a replaced key by value
+(`passbook stale`), each machine keeps `retired.json` beside the store. It is owner-only, never synced, and holds
+a salted HMAC of each credential-shaped value (no whitespace or `@`, and at least 24 characters of two kinds or
+16 of three), with the salt in the same file. Hashing all of them, not only the replaced ones, is what lets the
+next look notice a value replaced on another machine or by hand. For a randomly generated key, a hash next to its
+salt reveals nothing usable. For a guessable value that still fits that shape, it is an offline check of a guess,
+and it shows which keys share a value. Delete the file to forget all of it; the next look starts again.
+
 **An offline attack on a weak vault password.** The vault file is designed to be
 copied around; `scrypt` at n=2^16 is what stands between a copied file and a
 guessed password. Choose accordingly.

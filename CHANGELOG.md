@@ -4,6 +4,46 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+### A replaced key leaves no stale copy in an env file
+
+Liam, 2026-11-25: "when a key is updated in passbook it must propagate. period... users shouldn't have a stale
+issue." The Ami keys rotated on 2026-11-24 were pushed to every target PassBook knew. A second checkout,
+`~/ami-stream-build/.env.local`, was never attached, so all 26 values stayed stale there, and another machine's
+agent hit 401 on the dead OpenRouter key.
+
+- **Copies are found by value, never by name.** A name scan of one machine found 35 same-name mismatches, nearly
+  all files that rightly hold a different key under the same name. PassBook now remembers a salted hash of every
+  value a key held, never the value, in `retired.json` beside the store: owner-only, on this machine, never
+  synced. However a value is replaced (`rotate`, `add --replace`, a pull from another machine, an edit by hand),
+  the next look notices that the hash changed. Short values ("true", a port) are never treated as stale, and
+  neither is a value another key still holds.
+- **`passbook stale`** lists every env-like file (`.env`, `.env.*`, `.dev.vars`, and anything added with
+  `--watch PATH`) under the home folder and on every attached env-file target. It skips `node_modules`,
+  `Library`, `.git`, the Trash, virtual environments and app bundles, and names each line that holds a replaced
+  value, by file and variable, never the value. **`--fix`** puts the key's current value there. Only the value
+  changes: quotes, `export`, comments and line endings stay, and the file keeps its permissions. The previous
+  version is kept owner-only beside the store for 30 days, and the file becomes an env-file push target
+  (`passbook sink env-file PATH VAR`), so the next rotation writes there directly. Backups and snapshots
+  (`*.bak*`, `state-snapshots`, `*.tmp.*`) are reported and never rewritten. A folder that cannot be read is
+  named, never counted as clean.
+- **It runs by itself.** `rotate` sweeps right away, using the list of files from the last walk. `rollback`
+  sweeps the other way. `add --replace` starts a sweep in the background; that is also how a push lands on
+  another machine with a sealed store. The `sync` maintenance pass the collectors run every ten minutes starts
+  one after a pull changes a value, and does a full walk of the home folder once a day. A walk took 34 s on a
+  machine with 400,000 folders.
+- **A process can't be fixed in a file.** `passbook stale` names each running process the broker handed a key to
+  before that key was replaced, so it can be restarted.
+- **Fixed on the way:**
+  - The record of push targets travels between machines as one store key, and the newer copy used to replace
+    the other whole. A copy that was newer only because something else in it changed wiped everything recorded
+    since: two LIVEKIT_API_KEY targets vanished an hour after they were attached, and rotated keys' targets read
+    "not pushed yet" again after their pushes had landed. A sync pull, and a push applied with
+    `add --stdin --replace`, now merge the two copies one target at a time. A removed target stays removed
+    unless it is attached again. The places noted by hand merge the same way.
+  - On a sealed store with open reads, `passbook run --only KEY` by an agent the key is limited away from said
+    "The credential store is encrypted and locked … Sign in first". It now says the key was refused and by which
+    rule, and that signing in changes nothing.
+
 ### Each key says which provider account it belongs to
 
 Liam, 2026-11-24, during the Ami key rotation: signing in to the wrong account cost time twice. DeepInfra's key

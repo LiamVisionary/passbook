@@ -30,6 +30,9 @@ os.environ["PASSBOOK_FLEET"] = "off"
 # Nor a real provider: `rotate` and `balances` ask a key's provider who owns it (passbook_accounts.py), and
 # the suite rotates keys named like real ones (CLOUDFLARE_INFRA_ADMIN_API_KEY) with made-up values.
 os.environ["PASSBOOK_OWNER_LOOKUP"] = "off"
+# Nor sweep the developer's home folder for copies of the made-up values it replaces (passbook_stale.py);
+# the tests that sweep turn it back on with roots of their own.
+os.environ["PASSBOOK_STALE"] = "off"
 
 BEGIN = "<!-- BEGIN PASSBOOK -->"
 END = "<!-- END PASSBOOK -->"

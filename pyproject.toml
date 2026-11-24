@@ -70,6 +70,7 @@ passbook-push = "passbook_cli:main"
 passbook-rotate = "passbook_cli:main"
 passbook-used-in = "passbook_cli:main"
 passbook-account = "passbook_cli:main"
+passbook-stale = "passbook_cli:main"
 passbook-sink = "passbook_cli:main"
 passbook-github = "passbook_cli:main"
 passbook-standing = "passbook_cli:main"
@@ -171,6 +172,7 @@ py-modules = [
     "passbook_seal",
     "passbook_services",
     "passbook_sinks",
+    "passbook_stale",
     "passbook_github",
     "passbook_standing",
     "passbook_stamp",

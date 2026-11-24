@@ -51,7 +51,7 @@ def test_a_binding_survives_a_round_trip_and_sorts_stably():
 def test_unreadable_text_is_an_empty_registry_not_an_error():
     """A corrupted record must never stop somebody adding a credential."""
     for bad in (None, "", "{", "[]", '{"bindings": 3}', '{"bindings": {"K": "nope"}}'):
-        assert services.parse(bad) == {"version": services.VERSION, "bindings": {}}
+        assert services.parse(bad) == {"version": services.VERSION, "bindings": {}, "removed": {}}
 
 
 def test_attaching_the_same_service_twice_corrects_it_rather_than_duplicating():

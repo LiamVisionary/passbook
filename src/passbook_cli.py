@@ -484,6 +484,18 @@ def cmd_add(args: argparse.Namespace) -> int:
             return 0
     fresh = [k for k in values if k not in held]
     existing = [k for k in values if k in held]
+    if args.replace:
+        _merge_metadata(values, existing)
+    # What the replaced keys held, so copies of it can be found once they are replaced (passbook_stale.py).
+    replaced_from = {}
+    if args.replace and existing:
+        try:
+            import passbook_stale
+
+            if not passbook_stale.off():
+                replaced_from = _current_plain(existing, caller("passbook-add", args))
+        except Exception:  # noqa: BLE001
+            replaced_from = {}
     who = caller("passbook-add", args)
     if fresh and not _confirm_change("add", fresh, reason="add a new credential", app=who):
         return 1
@@ -503,6 +515,9 @@ def cmd_add(args: argparse.Namespace) -> int:
     for name, label in (("added", "added"), ("updated", "replaced"), ("kept", "already set, unchanged")):
         if result[name]:
             print(f"{label}: {', '.join(result[name])}")
+    if replaced_from and result["updated"]:
+        _stale_after_replace({key: replaced_from[key] for key in result["updated"] if key in replaced_from},
+                             sweep=False, news={key: values[key] for key in result["updated"] if key in values}, app=who)
     if result["kept"] and not args.replace:
         sys.stdout.flush()
         print("\nPass --replace to overwrite a key another app may be using.", file=sys.stderr)
@@ -519,6 +534,21 @@ def cmd_add(args: argparse.Namespace) -> int:
     # a script running `--update-services all` read exit 0 as "rotated
     # everywhere" while a service kept the old value.
     return _offer_service_updates(result["updated"], values, args)
+
+
+def _merge_metadata(values: dict, existing: Iterable[str]) -> None:
+    """A replaced record of where keys are pushed or noted is merged with this store's, never swapped for
+    it whole: that is how another machine's push (hive-env-add applies one with `add --stdin --replace`)
+    dropped targets attached here since (passbook_services.merge)."""
+    try:
+        import passbook_services as services
+
+        for name in set(existing) & set(services.METADATA_KEYS):
+            here = services._stored(name)
+            if here and not str(values[name]).startswith("hive-sealed:"):
+                values[name] = services.merge_text(name, here, values[name])
+    except Exception:  # noqa: BLE001 — a record that cannot be read here is written as given, as before
+        return
 
 
 COMPANY_HOST_SELF_NOTE = ("this machine runs companies moved to it and keeps only the keys "
@@ -1533,12 +1563,16 @@ def _rotate(args: argparse.Namespace) -> int:
         if not pending.get("restored"):
             if not _confirm_change("modify", [key], reason="roll back a rotation", app=who):
                 return 1
+            replacing = _current_plain([key], who)
             try:
                 result = passbook.set_values({key: pending["previous"]}, overwrite=True,
                                              exact=True, path=Path(pending["path"]))
             except (OSError, ValueError, KeyError) as error:
                 return _fail(f"Could not put the previous value back: {error}")
             _record_write_age(result)
+            # The other way round: copies the sweep moved to the new value go back to the old one.
+            if replacing.get(key):
+                _stale_after_replace(replacing, sweep=True, app=who)
             pending["restored"] = True
             state[key] = pending
             services.write_rotations(state)
@@ -1628,6 +1662,14 @@ def _rotate(args: argparse.Namespace) -> int:
     except services.ServiceError as error:
         return _fail(str(error))
 
+    # The value being replaced, in the clear, to find its copies once it is (passbook_stale.py). Read now:
+    # afterwards the broker, which opens values by name, would hand over the new one.
+    try:
+        import passbook_stale
+
+        replaced = {} if passbook_stale.off() else _current_plain([key], who)
+    except Exception:  # noqa: BLE001
+        replaced = {}
     # Kept BEFORE the store changes, so there is no moment at which the old
     # value exists nowhere.
     state[key] = {"startedAt": time.time(), "path": str(target), "previous": previous,
@@ -1650,6 +1692,9 @@ def _rotate(args: argparse.Namespace) -> int:
         return 1
     print(f"replaced: {key}")
     _note_new_owner(key, fresh)
+    # Every copy of the old value in an env file on this machine, found by value (passbook_stale.py).
+    if replaced.get(key):
+        _stale_after_replace(replaced, sweep=True, news={key: fresh}, app=who)
     if not getattr(args, "no_sync", False):
         _replicate_write([key], {key: fresh})
 
@@ -1684,6 +1729,255 @@ def _rotate(args: argparse.Namespace) -> int:
     return code
 
 
+def _sink_env_file(rest: list[str]) -> int:
+    """`passbook sink env-file PATH VAR`: VAR in that file gets the value a push hands over (`$PASSBOOK_KEY`'s
+    variable), in place, keeping the file's permissions; the target a stale sweep attaches (passbook_stale.py)."""
+    import passbook_stale
+
+    if len(rest) != 2:
+        return _fail("Usage: passbook sink env-file PATH VAR  (run by a push, with the value in its environment)")
+    source = os.environ.get("PASSBOOK_KEY", "")
+    value = os.environ.get(source, "") if source else ""
+    if not value and not sys.stdin.isatty():
+        value = sys.stdin.read().strip()
+    if not value:
+        return _fail("No value to write: run this through `passbook push`, or pipe the value in.")
+    try:
+        done = passbook_stale.set_var(rest[0], rest[1], value)
+    except (OSError, ValueError, UnicodeDecodeError) as error:
+        return _fail(str(error))
+    print(f"{done}: {rest[1]} in {passbook_stale.display(rest[0])}")
+    return 0
+
+
+STALE_REASON = "find copies of replaced keys"
+
+
+def _store_raw() -> dict[str, str]:
+    """Each key as the store holds it (ciphertext for a sealed one), never opened: `_read` opens what it can
+    and leaves out what it cannot."""
+    raw: dict[str, str] = {}
+    for path in passbook._scoped_paths():
+        try:
+            raw.update(passbook.parse_env_text(Path(path).read_text(encoding="utf-8")))
+        except (OSError, UnicodeDecodeError):
+            continue
+    return raw
+
+
+def _plain(name: str, stored: str) -> str:
+    """A stored value in the clear, or "" when it is sealed. Never through `_unseal`: the broker opens values
+    BY NAME, so a sealed blob that is no longer the store's (a rotation's previous value) would come back as
+    the key's current value."""
+    del name
+    return "" if str(stored or "").startswith("hive-sealed:") else str(stored or "")
+
+
+def _current_plain(keys: Iterable[str], app: str) -> dict[str, str]:
+    """What these keys hold right now, in the clear, through the broker for sealed ones. A key that cannot be
+    opened here is left out (the next `passbook stale` notices it from its value hash)."""
+    raw = _store_raw()
+    names = [key for key in keys if key in raw]
+    out = {key: raw[key] for key in names if not str(raw[key]).startswith("hive-sealed:")}
+    sealed = [key for key in names if key not in out]
+    if sealed:
+        try:
+            got = passbook.request(sealed, app=app, reason="remember the value being replaced") or {}
+        except Exception:  # noqa: BLE001
+            got = {}
+        out.update({key: value for key, value in got.items() if value and not str(value).startswith("hive-sealed:")})
+    return out
+
+
+def _stale_report(report: list[dict], holding: list[dict], *, quiet: bool = False) -> None:
+    said = {"fixed": "fixed", "found": "stale copy", "snapshot": "stale copy in a snapshot, not changed",
+            "refused": "stale copy, NOT fixed"}
+    for item in report:
+        line = f"{said.get(item['status'], item['status'])}: {item['file']}  {item['var']} (an old value of {item['key']})"
+        if item.get("why"):
+            line += f": {item['why']}"
+        if item.get("attached"):
+            line += "; now a push target"
+        print(line)
+    for row in holding:
+        print(f"needs a restart: {row['app']} (pid {row.get('pid') or '?'}) started before {', '.join(row['keys'])} "
+              f"was replaced and still holds the old value: {row['command']}")
+    if not quiet and not report and not holding:
+        print("No stale copy of a replaced key was found.")
+
+
+def _stale_after_replace(retire: dict[str, str], *, sweep: bool, news: dict[str, str] | None = None,
+                         app: str = "passbook-stale") -> None:
+    """Right after this command replaced keys: remember their old values as retired and their new ones as
+    current, then sweep (in this process for `rotate`, in the background for `add`). Never fails the write."""
+    try:
+        import passbook_stale
+
+        if passbook_stale.off():
+            return
+        record = passbook_stale.read()
+        raw = _store_raw()
+        news = dict(news) if news is not None else _current_plain(list(retire), app)
+        for key, old in retire.items():
+            if old and old != news.get(key):
+                passbook_stale.retire(record, key, old)
+        passbook_stale.notice(record, {key: value for key, value in news.items() if value}, raw)
+        passbook_stale.write(record)
+        if not record["retired"]:
+            return
+        if not sweep:
+            _stale_in_background()
+            return
+        files = sorted(set(record["files"]) | set(passbook_stale.attached_files()) | set(record["extra"]))
+        if not files:
+            _stale_in_background()
+            return
+        wanted = {item["key"] for item in record["retired"].values()}
+        current = {**_current_plain(sorted(wanted - set(news)), app), **news}
+        report = passbook_stale.sweep(record, current, files=files, fix=True)
+        record["lastSweep"] = time.time()
+        passbook_stale.write(record)
+        if report:
+            print("\nCopies of the old value:")
+            _stale_report(report, [], quiet=True)
+        # The cached list is a day old at most; a full walk catches a file made since.
+        _stale_in_background()
+    except Exception as error:  # noqa: BLE001 — the key is replaced; the sweep is the extra
+        print(f"note: could not look for old copies: {error}", file=sys.stderr)
+
+
+def _stale_tick(changed: bool) -> None:
+    try:
+        import passbook_stale
+
+        if not passbook_stale.off() and (changed or passbook_stale.due(passbook_stale.read())):
+            _stale_in_background()
+    except Exception:  # noqa: BLE001 — sync never fails over this
+        return
+
+
+def _stale_in_background(*extra: str) -> None:
+    """`passbook stale --fix` as its own process, detached, so whatever started it does not wait on a walk of
+    the home folder. Its lines (files and variable names, never values) go to stale.log beside the store."""
+    try:
+        import subprocess
+
+        import passbook_stale
+
+        if passbook_stale.off():
+            return
+        log = Path(passbook.root()) / "stale.log"
+        descriptor = os.open(str(log), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        # Started from `sync`, this process is the broker's child and its environment holds every key: none of
+        # that goes to a process that outlives it. The sweep opens what it needs itself.
+        held = set(passbook.key_names())
+        env = {name: value for name, value in os.environ.items() if name not in held and name != "PASSBOOK_GRANT"}
+        env["PYTHONPATH"] = os.pathsep.join(
+            part for part in (str(Path(__file__).resolve().parent), os.environ.get("PYTHONPATH", "")) if part)
+        subprocess.Popen([sys.executable, "-m", "passbook_cli", "stale", "--fix", "--quiet", "--app", "passbook-stale",
+                          *extra], stdin=subprocess.DEVNULL, stdout=descriptor, stderr=descriptor,
+                         start_new_session=True, env=env, close_fds=True)
+        os.close(descriptor)
+    except Exception:  # noqa: BLE001
+        return
+
+
+def cmd_stale(args: argparse.Namespace) -> int:
+    """Copies of replaced keys left in env files on this machine, found by value and fixed (passbook_stale.py).
+
+        passbook stale              report them
+        passbook stale --fix        put the current value in each, keep a backup, and make each a push target
+        passbook stale --watch PATH also look at PATH (a file, or a folder to walk) from now on
+    """
+    import fcntl
+
+    import passbook_stale
+
+    root = Path(passbook.root())
+    record = passbook_stale.read()
+    if args.watch or args.unwatch:
+        extra = set(record["extra"])
+        for item in args.watch or []:
+            extra.add(os.path.realpath(os.path.expanduser(item)))
+        for item in args.unwatch or []:
+            extra.discard(os.path.realpath(os.path.expanduser(item)))
+        record["extra"] = sorted(extra)
+        passbook_stale.write(record)
+        print("\n".join(record["extra"]) or "No extra places are watched.")
+        return 0
+    root.mkdir(parents=True, exist_ok=True)
+    who = caller("passbook-stale", args)
+    raw = _store_raw()
+    record = passbook_stale.read()
+    # A rotation not yet confirmed still keeps its previous value: retire that one too, when it is kept in the
+    # clear. A sealed one cannot be opened here (the broker opens values by name, not blobs).
+    import passbook_services as services
+
+    previous = {key: _plain(key, str(item.get("previous") or ""))
+                for key, item in services.read_rotations().items() if isinstance(item, dict) and not item.get("restored")}
+    wanted = sorted((set(passbook_stale.changed(record, raw))
+                     | {item["key"] for item in record["retired"].values()}) & set(raw))
+    got = _balance_values(who, wanted, reason=STALE_REASON) if wanted else ({}, set())
+    if isinstance(got, int):
+        return got  # a guarded key: the broker ran this command again, holding the values, and it did the work
+    # Only the process that does the work holds the lock: taken before the values were open, it was held by the
+    # parent while the broker's child (above) found it taken and stopped, so nothing was ever swept.
+    lock = open(root / passbook_stale.LOCK, "a+")  # noqa: SIM115 — held for the whole run
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        print("A sweep is already running.")
+        return 0
+    record = passbook_stale.read()
+    values, brokered = got
+    _record_run_reads(who, STALE_REASON, wanted, values, brokered)
+    passbook_stale.notice(record, values, raw)
+    for key, old in previous.items():
+        if old and old != values.get(key, _plain(key, raw.get(key, ""))):
+            passbook_stale.retire(record, key, old)
+    report: list[dict] = []
+    unreadable: list[str] = []
+    # A person asking walks the home folder now; the background runs reuse the last walk's list of files until
+    # it is a day old. Listed even while nothing is retired, so a rotation can sweep at once from the list.
+    full = args.full or passbook_stale.due(record) or not record["files"] or not (args.quiet or args.json)
+    if full:
+        found, unreadable = passbook_stale.discover()
+        extra_files, extra_dirs = [], []
+        for item in record["extra"]:
+            (extra_dirs if os.path.isdir(item) else extra_files).append(item)
+        if extra_dirs:
+            more, blocked = passbook_stale.discover(Path(item) for item in extra_dirs)
+            found, unreadable = sorted(set(found) | set(more)), sorted(set(unreadable) | set(blocked))
+        record["files"] = sorted(set(found) | set(extra_files))
+        record["lastFull"] = time.time()
+    if record["retired"]:
+        files = sorted(set(record["files"]) | set(passbook_stale.attached_files()))
+        current = {key: values.get(key) or _plain(key, raw.get(key, ""))
+                   for key in {item["key"] for item in record["retired"].values()}}
+        report = passbook_stale.sweep(record, current, files=files, fix=args.fix)
+    record["lastSweep"] = time.time()
+    passbook_stale.write(record)
+    passbook_stale.prune_backups()
+    holding = passbook_stale.holders({item["key"]: float(item.get("at") or 0) for item in record["retired"].values()})
+    if args.json:
+        print(json.dumps({"retired": len(record["retired"]), "files": len(record["files"]),
+                          "copies": [{field: item.get(field) for field in ("file", "var", "key", "status", "why", "attached")}
+                                     for item in report],
+                          "unreadable": [passbook_stale.display(item) for item in unreadable],
+                          "needsRestart": holding}))
+        return 0
+    if not record["retired"]:
+        if not args.quiet:
+            print("No replaced value is remembered yet. From now on, every key replaced on this machine is.")
+        return 0
+    _stale_report(report, holding, quiet=args.quiet)
+    for item in unreadable[:20]:
+        print(f"could not look in: {passbook_stale.display(item)}")
+    if any(item["status"] == "found" for item in report):
+        print("\nFix them:  passbook stale --fix")
+    return 0
+
+
 def cmd_sink(args: argparse.Namespace) -> int:
     """Pushes that no installed tool can do by name. Used by recorded commands.
 
@@ -1697,6 +1991,8 @@ def cmd_sink(args: argparse.Namespace) -> int:
     rest = list(args.rest or [])
     if args.sink_kind == "gh-secret":
         return _sink_gh_secret(rest)
+    if args.sink_kind == "env-file":
+        return _sink_env_file(rest)
     parser = argparse.ArgumentParser(prog="passbook sink cf-secrets-store")
     parser.add_argument("store")
     parser.add_argument("name")
@@ -2928,11 +3224,21 @@ def cmd_run(args: argparse.Namespace) -> int:
     # nothing resolved and read as a locked vault on a machine that was signed
     # in, and every agent that hit it told its owner to sign in again.
     stored = passbook.key_names()
-    store_locked = bool(stored) and not any(resolved.get(name) for name in stored)
     held = set(stored)
+    # A key this caller is not allowed is not a locked vault. On a sealed store with open reads the broker
+    # leaves a refused key sealed, and that read as "encrypted and locked; sign in" (2026-11-24, after
+    # `passbook agents set KEY --only` named the agent that then ran without the key): signing in changes
+    # nothing. Say which policy withheld it instead.
+    refused = _refusals([name for name in args.only if name in held and not resolved.get(name)
+                         and not os.environ.get(name)], who) if args.only else {}
+    store_locked = bool(stored) and not any(resolved.get(name) for name in stored) and not refused
     shut = [name for name in args.only
             if name in held and not resolved.get(name) and not os.environ.get(name)
-            and not _sealed_refusal([name])]
+            and not _sealed_refusal([name]) and name not in refused]
+    for name, why in refused.items():
+        print(f"Refused: {name} — {why}. Running without it; signing in does not change this.", file=sys.stderr)
+    if refused:
+        print(f"See what governs it:  passbook agents show {next(iter(refused))}", file=sys.stderr)
     unavailable = False
     if store_locked or shut:
         # Empty values are not proof of a locked vault: this process may be
@@ -5548,6 +5854,15 @@ def _apply_pull(plan: dict, raw: dict, store: Path) -> tuple[list[str], str]:
     # as plaintext beside encrypted ones is the outcome this whole path exists
     # to prevent, and there is deliberately no fallback that does it anyway.
     store_sealed = any(passbook_vault.is_sealed(v) for v in raw.values())
+    # Where keys are pushed and noted is one record per store key, and the newer copy used to replace this
+    # one whole, dropping what was recorded here since (passbook_services.merge). Merged instead.
+    import passbook_services as services
+
+    for name in services.METADATA_KEYS:
+        incoming = plan["apply"].get(name)
+        if isinstance(incoming, str) and isinstance(raw.get(name), str) \
+                and not passbook_vault.is_sealed(incoming) and not passbook_vault.is_sealed(raw[name]):
+            plan["apply"][name] = services.merge_text(name, raw[name], incoming)
     if store_sealed:
         import passbook_broker
 
@@ -5701,6 +6016,8 @@ def cmd_sync(args: argparse.Namespace) -> int:
             passbook_sync.forget_host(host)
 
     if not peers:
+        if args.apply:
+            _stale_tick(False)
         ok, detail = passbook_fleet.available()
         if not ok and not company_hosts:
             return _fail(f"No tailnet here: {detail}")
@@ -5854,6 +6171,10 @@ def cmd_sync(args: argparse.Namespace) -> int:
             came_from = {str(plan["apply"][key][2]) for key in pulled
                          if isinstance(plan["apply"].get(key), tuple) and len(plan["apply"][key]) > 2} - {""}
             passbook_sync.note_exchange("pulled", came_from or [host for host, _ in payloads])
+    if args.apply:
+        # This pass runs every ten minutes on every machine: a pull that changed a value is looked for at once,
+        # and the whole home folder once a day (passbook_stale.py).
+        _stale_tick(bool(pulled))
 
     if args.json:
         print(json.dumps({
@@ -8477,6 +8798,19 @@ def build_parser() -> argparse.ArgumentParser:
     used_in_cmd.add_argument("--json", action="store_true")
     used_in_cmd.set_defaults(func=cmd_used_in)
 
+    stale_cmd = subs.add_parser(
+        "stale", help="copies of replaced keys left in env files, found by value; --fix replaces them",
+        description="passbook stale [--fix] [--full] [--json] | passbook stale --watch PATH | --unwatch PATH")
+    stale_cmd.add_argument("--fix", action="store_true",
+                           help="put the current value in each stale copy (backup kept; snapshots never changed)")
+    stale_cmd.add_argument("--full", action="store_true", help="walk the home folder again now")
+    stale_cmd.add_argument("--watch", action="append", metavar="PATH", help="also look at PATH from now on")
+    stale_cmd.add_argument("--unwatch", action="append", metavar="PATH", help="stop looking at PATH")
+    stale_cmd.add_argument("--quiet", action="store_true")
+    stale_cmd.add_argument("--json", action="store_true")
+    stale_cmd.add_argument("--app", default="", help="who is asking; recorded")
+    stale_cmd.set_defaults(func=cmd_stale)
+
     account_cmd = subs.add_parser(
         "account", help="which provider account each key belongs to: sign-in email, method, name",
         description="passbook account [list] | passbook account KEY | "
@@ -8518,7 +8852,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sink_cmd = subs.add_parser(
         "sink", help="a push no installed tool can do by name (used by recorded commands)")
-    sink_cmd.add_argument("sink_kind", choices=["cf-secrets-store", "gh-secret"])
+    sink_cmd.add_argument("sink_kind", choices=["cf-secrets-store", "gh-secret", "env-file"])
     sink_cmd.add_argument("rest", nargs=argparse.REMAINDER,
                           help="cf-secrets-store STORE NAME [--scopes S] | "
                                "gh-secret NAME (--repo R [--env E] | --org O [--visibility V])")

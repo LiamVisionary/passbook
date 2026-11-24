@@ -82,7 +82,7 @@ class RecordLocked(ServiceError):
 # ── the record ─────────────────────────────────────────────────────────────
 
 def _blank() -> dict[str, Any]:
-    return {"version": VERSION, "bindings": {}}
+    return {"version": VERSION, "bindings": {}, "removed": {}}
 
 
 def parse(raw: str | None) -> dict[str, Any]:
@@ -105,7 +105,33 @@ def parse(raw: str | None) -> dict[str, Any]:
                 and isinstance(item.get("command"), str)]
         if kept:
             clean[key] = kept
-    return {"version": VERSION, "bindings": clean}
+    return {"version": VERSION, "bindings": clean, "removed": _parse_removed(data.get("removed"))}
+
+
+#: How long a removal is remembered, so a machine that still holds the old entry cannot bring it back.
+TOMBSTONE_SECONDS = 180 * 86400
+
+
+def _parse_removed(raw: Any) -> dict[str, dict[str, float]]:
+    """{KEY: {name: when}}: what was removed, and when. Old ones are let go."""
+    if not isinstance(raw, dict):
+        return {}
+    oldest = time.time() - TOMBSTONE_SECONDS
+    out: dict[str, dict[str, float]] = {}
+    for key, names in raw.items():
+        if isinstance(key, str) and isinstance(names, dict):
+            kept = {str(name): float(when) for name, when in names.items()
+                    if isinstance(when, (int, float)) and float(when) >= oldest}
+            if kept:
+                out[key] = kept
+    return out
+
+
+def _forget_removal(removed: dict, key: str, name: str) -> None:
+    names = removed.get(key) or {}
+    names.pop(name, None)
+    if not names:
+        removed.pop(key, None)
 
 
 def dump(registry: Mapping[str, Any]) -> str:
@@ -118,8 +144,57 @@ def dump(registry: Mapping[str, Any]) -> str:
     """
     bindings = {key: sorted(items, key=lambda item: str(item.get("service", "")))
                 for key, items in sorted(registry.get("bindings", {}).items()) if items}
-    return json.dumps({"version": VERSION, "bindings": bindings},
+    removed = {key: names for key, names in sorted((registry.get("removed") or {}).items()) if names}
+    return json.dumps({"version": VERSION, "bindings": bindings, **({"removed": removed} if removed else {})},
                       separators=(",", ":"), sort_keys=True)
+
+
+def _stamp(item: Mapping[str, Any], field: str) -> float:
+    try:
+        return float(item.get(field) or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def merge(local: Mapping[str, Any], incoming: Mapping[str, Any]) -> dict[str, Any]:
+    """Two machines' copies of the registry as one, losing neither side's changes.
+
+    The registry travels between machines as one store key, and sync keeps the copy with the newer
+    timestamp. So a copy that was newer only because something else in it changed replaced this machine's
+    whole record: on 2026-11-24 two targets attached to LIVEKIT_API_KEY were gone an hour later, and
+    rotated keys' targets read "not pushed yet" again after their pushes had landed. Now each target is
+    merged on its own. What it is (command, stdin, cwd) comes from whichever copy recorded it last
+    (`addedAt`), what happened to it last (`lastStatus`...) from whichever pushed last (`lastRunAt`), and a
+    target removed on one machine stays removed unless it was attached again after.
+    """
+    first, second = parse(dump(local)), parse(dump(incoming))
+    removed: dict[str, dict[str, float]] = {}
+    for copy in (first, second):
+        for key, names in copy["removed"].items():
+            for name, when in names.items():
+                removed.setdefault(key, {})[name] = max(when, removed.get(key, {}).get(name, 0.0))
+    status = ("lastRunAt", "lastStatus", "lastError")
+    merged: dict[str, list[Binding]] = {}
+    for key in sorted(set(first["bindings"]) | set(second["bindings"])):
+        found: dict[str, Binding] = {}
+        for copy in (first, second):
+            for item in copy["bindings"].get(key, []):
+                name = str(item["service"])
+                held = found.get(name)
+                if held is None:
+                    found[name] = dict(item)
+                    continue
+                newer = dict(item) if _stamp(item, "addedAt") > _stamp(held, "addedAt") else dict(held)
+                pushed = item if _stamp(item, "lastRunAt") > _stamp(held, "lastRunAt") else held
+                newer.update({field: pushed[field] for field in status if field in pushed})
+                found[name] = newer
+        kept = [item for name, item in sorted(found.items())
+                if _stamp(item, "addedAt") > removed.get(key, {}).get(name, -1.0)]
+        for item in kept:
+            _forget_removal(removed, key, str(item["service"]))
+        if kept:
+            merged[key] = kept
+    return {"version": VERSION, "bindings": merged, "removed": removed}
 
 
 def _stored(name: str, *, environ: Mapping[str, str] | None = None) -> str | None:
@@ -246,6 +321,7 @@ def attach(key: str, service: str, command: str, *, stdin: bool = False, cwd: st
             entry[field] = value
     items.append(entry)
     working["bindings"][key] = items
+    _forget_removal(working["removed"], key, service)
     return working
 
 
@@ -259,6 +335,8 @@ def detach(key: str, service: str, registry: Mapping[str, Any] | None = None) ->
         working["bindings"][key] = kept
     else:
         working["bindings"].pop(key, None)
+    # Remembered, so another machine's copy that still holds it is not merged back in (`merge`).
+    working["removed"].setdefault(key, {})[service] = time.time()
     return working, True
 
 
@@ -402,7 +480,7 @@ def select(items: list[Binding], choice: str) -> list[Binding]:
 # ── places a key lives that nothing can push to ────────────────────────────
 
 def parse_places(raw: str | None) -> dict[str, Any]:
-    blank = {"version": VERSION, "places": {}}
+    blank = {"version": VERSION, "places": {}, "removed": {}}
     if not raw:
         return blank
     try:
@@ -418,13 +496,50 @@ def parse_places(raw: str | None) -> dict[str, Any]:
                     if isinstance(item, dict) and isinstance(item.get("where"), str)]
             if kept:
                 clean[key] = kept
-    return {"version": VERSION, "places": clean}
+    return {"version": VERSION, "places": clean, "removed": _parse_removed(data.get("removed"))}
 
 
 def dump_places(record: Mapping[str, Any]) -> str:
     places = {key: sorted(items, key=lambda item: str(item.get("where", "")).lower())
               for key, items in sorted(record.get("places", {}).items()) if items}
-    return json.dumps({"version": VERSION, "places": places}, separators=(",", ":"), sort_keys=True)
+    removed = {key: names for key, names in sorted((record.get("removed") or {}).items()) if names}
+    return json.dumps({"version": VERSION, "places": places, **({"removed": removed} if removed else {})},
+                      separators=(",", ":"), sort_keys=True)
+
+
+def merge_places(local: Mapping[str, Any], incoming: Mapping[str, Any]) -> dict[str, Any]:
+    """Two machines' copies of the places as one (see `merge`): each place by its name, the later note
+    wins, and a place removed on one machine stays removed unless it was noted again after."""
+    first, second = parse_places(dump_places(local)), parse_places(dump_places(incoming))
+    removed: dict[str, dict[str, float]] = {}
+    for copy in (first, second):
+        for key, names in copy["removed"].items():
+            for name, when in names.items():
+                removed.setdefault(key, {})[name] = max(when, removed.get(key, {}).get(name, 0.0))
+    merged: dict[str, list[dict[str, Any]]] = {}
+    for key in sorted(set(first["places"]) | set(second["places"])):
+        found: dict[str, dict[str, Any]] = {}
+        for copy in (first, second):
+            for item in copy["places"].get(key, []):
+                name = str(item.get("where", "")).lower()
+                if name not in found or _stamp(item, "addedAt") > _stamp(found[name], "addedAt"):
+                    found[name] = dict(item)
+        kept = [item for name, item in sorted(found.items())
+                if _stamp(item, "addedAt") > removed.get(key, {}).get(name, -1.0)]
+        for item in kept:
+            _forget_removal(removed, key, str(item.get("where", "")).lower())
+        if kept:
+            merged[key] = kept
+    return {"version": VERSION, "places": merged, "removed": removed}
+
+
+def merge_text(name: str, local: str | None, incoming: str | None) -> str | None:
+    """A metadata key's two stored texts as one, or None for a key that is not one of them."""
+    if name == REGISTRY_KEY:
+        return dump(merge(parse(local), parse(incoming)))
+    if name == USED_IN_KEY:
+        return dump_places(merge_places(parse_places(local), parse_places(incoming)))
+    return None
 
 
 def read_places(*, environ: Mapping[str, str] | None = None) -> dict[str, Any]:
@@ -456,6 +571,7 @@ def add_place(key: str, where: str, *, note: str = "", source: str = "by hand",
              if str(item.get("where", "")).lower() != where.lower()]
     items.append({"where": where, "note": note, "addedAt": time.time(), "source": source})
     working["places"][key] = items
+    _forget_removal(working["removed"], key, where.lower())
     return working
 
 
@@ -469,6 +585,7 @@ def remove_place(key: str, where: str, record: Mapping[str, Any] | None = None) 
         working["places"][key] = kept
     else:
         working["places"].pop(key, None)
+    working["removed"].setdefault(key, {})[str(where).strip().lower()] = time.time()
     return working, True
 
 

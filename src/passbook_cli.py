@@ -3698,6 +3698,38 @@ def cmd_balances(args: argparse.Namespace) -> int:
         print(json.dumps({"full": kept}) if args.json
               else (f"{entry['name']} is full at {amount:,.2f}." if amount else f"{entry['name']} has no set mark."))
         return 0
+    if action == "monthly":
+        # `passbook balances monthly ACCOUNT AMOUNT|max|ultra [DAY]|clear`: credits a plan adds each month (Claude
+        # plans that include API credits; `max` and `ultra` are their published amounts). Nothing is read: what
+        # is spent since each refill is counted at every reading.
+        import passbook_insights as insights
+
+        target, amount_text, day_text = (ids + ["", "", ""])[:3]
+        entry = balances.provider(target) if target else None
+        clear = amount_text.lower() in ("clear", "none")
+        try:
+            amount = None if clear else balances.PLAN_CREDITS.get(amount_text.lower()) or float(amount_text.replace("$", "").replace(",", ""))
+            day = int(day_text or 1)
+        except ValueError:
+            amount, day = -1.0, 0
+        if (not entry or not entry.get("entered_balance") or not 1 <= day <= 31
+                or (not clear and not (amount is not None and 0 < amount < 1e12))):
+            return _fail("Say which account, its monthly credits and the day they refill:  passbook balances monthly anthropic 200 1",
+                         "Only providers that report spend and not credit take one (OpenAI, Anthropic). Take it off with:  ... clear")
+        if clear:
+            balances.set_entered(root, target, None)
+            (root / balances.CACHE_FILE).unlink(missing_ok=True)
+            print(json.dumps({"monthly": None}) if args.json else f"{entry['name']}: the monthly credits are cleared.")
+            return 0
+        record = balances.monthly_record(amount, day)
+        balances.set_entered(root, target, record)
+        # A Console figure, when there is one, is measured against the monthly amount.
+        if target not in insights.marks(root):
+            insights.set_mark(root, target, amount)
+        (root / balances.CACHE_FILE).unlink(missing_ok=True)
+        print(json.dumps({"monthly": record}) if args.json
+              else f"{entry['name']}: {amount:,.2f} USD of credits each month, refilled on day {day}.")
+        return 0
     if action == "console-login":
         # Where the window opens to sign in, and the cookie that says it is done (passbook_balances.CONSOLE).
         spec = balances.CONSOLE.get(ids[0] if ids else "")
@@ -8604,11 +8636,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     bal = subs.add_parser("balances", help="what each service account has left, and where to top up")
     bal.add_argument("action", nargs="?", choices=["list", "enable", "disable", "status", "open", "icons", "full", "alerts", "known",
-                                                  "console-login", "console-save"],
+                                                  "monthly", "console-login", "console-save"],
                      default="list",
                      help="list (default); enable or disable the app's Balances page; open PROVIDER's billing page; "
                           "icons: each provider's logo from its own site; full PROVIDER AMOUNT: what a full account is; "
                           "known ACCOUNT AMOUNT|clear: the credit balance of a provider that reports only spend; "
+                          "monthly ACCOUNT AMOUNT|max|ultra [DAY]|clear: credits a Claude plan adds each month (Max 100, Ultra 200), refilled on DAY, the billing day (1 if left out); "
                           "console-login/console-save PROVIDER: the window's sign-in to a provider's own console; "
                           "alerts [on|off|test|chats]: Telegram messages through your own bot when something runs low")
     bal.add_argument("provider", nargs="*", help="provider ids, as `--all` lists them (for `full`, then the amount)")

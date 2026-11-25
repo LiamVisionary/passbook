@@ -776,6 +776,80 @@ def test_known_keeps_the_entered_balance_and_clear_takes_it_off(store, monkeypat
     assert passbook_cli.cmd_balances(args) != 0, "only a provider that reports spend and not credit takes one"
 
 
+# ── 2026-11-26: Claude plans that include API credits every month ─────────────────────────────────────
+#
+# Liam: "i have claude subscritpions that include api credits every momnth and i need to be able to see those
+# balances in passbook", with a bar "like how some of the other keys show bars with remianing amount".
+
+def _at(text):
+    from datetime import datetime, timezone
+    return datetime.fromisoformat(text).replace(tzinfo=timezone.utc).timestamp()
+
+
+def test_monthly_credits_refill_on_their_day_and_the_last_day_of_a_shorter_month():
+    assert balances.monthly_cycle(1, _at("2026-11-26T10:00:00")) == ("2026-11-01", "2026-12-01T00:00:00Z")
+    assert balances.monthly_cycle(15, _at("2026-11-26T10:00:00")) == ("2026-11-15", "2026-12-15T00:00:00Z")
+    assert balances.monthly_cycle(28, _at("2026-11-26T10:00:00")) == ("2026-10-28", "2026-11-28T00:00:00Z"), "not yet refilled"
+    assert balances.monthly_cycle(31, _at("2027-02-28T10:00:00")) == ("2027-02-28", "2027-03-31T00:00:00Z")
+    assert balances.monthly_cycle(31, _at("2027-02-10T10:00:00")) == ("2027-01-31", "2027-02-28T00:00:00Z")
+    assert balances.monthly_cycle(20, _at("2027-01-05T10:00:00")) == ("2026-12-20", "2027-01-20T00:00:00Z"), "across the year"
+
+
+def test_monthly_credits_are_a_bar_of_what_is_spent_since_they_refilled():
+    import passbook_insights as insights
+
+    now = _at("2026-11-26T10:00:00")
+    values = {"ANTHROPIC_API_KEY": "k-main"}
+    record = balances.monthly_record(100, 20, now=lambda: now)
+    seen = []
+    # $3 before the refill on the 20th is last cycle's; $22.55 after it counts.
+    cost = _cost({"2026-11-19": 300, "2026-11-20": 2000, "2026-11-26": 255})
+    fetch = lambda a, k, start=None: seen.append(start) or (200, cost)  # noqa: E731
+    row = balances.readings(values, set(values), fetch=fetch, identify=_who, known={}, now=lambda: now,
+                            entered={"anthropic": record})[0]
+    assert seen == ["2026-11-20"], "the cost report is asked for from the refill"
+    assert row["allowance"] == {"used": 22.55, "limit": 100.0, "unit": "USD", "resetsAt": "2026-12-20T00:00:00Z"}
+    assert row["balanceKind"] == "monthly" and row["monthly"]["resetDay"] == 20 and row.get("issue") is None
+    assert row["usageUsd"] == pytest.approx(25.55), "this month's spend is still the whole month's"
+    meter = insights.for_row(row, [], now=now)["meter"]
+    assert meter["kind"] == "quota" and meter["left"] == pytest.approx(77.45) and meter["fraction"] == pytest.approx(0.7745)
+    over = balances.readings(values, set(values), fetch=lambda a, k, start=None: (200, _cost({"2026-11-21": 12000})),
+                             identify=_who, known={}, now=lambda: now, entered={"anthropic": record})[0]
+    assert insights.for_row(over, [], now=now)["meter"]["left"] == 0
+    assert any(item["label"] == "Beyond the monthly credits" and item["value"] == "20.00 USD" for item in over["details"])
+
+
+def test_the_consoles_figure_replaces_the_monthly_count():
+    values = {"ANTHROPIC_API_KEY": "k-main", "ANTHROPIC_CONSOLE_SESSION_LIAM": "sessionKey=abc"}
+    console = _console((200, [{"uuid": "org_main", "name": "NewVisionary"}]), {"org_main": (200, {"amount": 6000})})
+    row = balances.readings(values, set(values), fetch=lambda a, k, start=None: (200, _cost({})), identify=_who, known={},
+                            console=console, entered={"anthropic": balances.monthly_record(100, 1)})[0]
+    assert row["balance"] == 60.0 and row["balanceKind"] == "console" and row["allowance"] is None
+
+
+def test_monthly_keeps_the_credits_and_their_day_and_clear_takes_them_off(store, monkeypatch, capsys):
+    import passbook_cli
+    import passbook_insights as insights
+
+    _, home = store
+    args = argparse.Namespace(action="monthly", provider=["anthropic", "ultra", "15"], all=False, fresh=False, json=True, app="test-app")
+    assert passbook_cli.cmd_balances(args) == 0
+    kept = balances.entered(home)["anthropic"]
+    assert kept["kind"] == "monthly" and kept["amount"] == 200 and kept["resetDay"] == 15, "Ultra adds $200 a month"
+    assert insights.marks(home)["anthropic"] == 200, "a Console figure would be measured against it"
+    args.provider = ["anthropic", "max", "15"]
+    assert passbook_cli.cmd_balances(args) == 0 and balances.entered(home)["anthropic"]["amount"] == 100, "Max adds $100"
+    args.provider = ["anthropic", "175.50", "3"]
+    assert passbook_cli.cmd_balances(args) == 0 and balances.entered(home)["anthropic"]["amount"] == 175.5, "or any amount, for Team"
+    args.provider = ["anthropic", "100", "32"]
+    assert passbook_cli.cmd_balances(args) != 0, "a day of the month is 1 to 31"
+    args.provider = ["kie", "100"]
+    assert passbook_cli.cmd_balances(args) != 0, "only a provider that reports spend and not credit takes one"
+    args.provider = ["anthropic", "clear"]
+    assert passbook_cli.cmd_balances(args) == 0 and balances.entered(home) == {}
+    capsys.readouterr()
+
+
 def test_a_remembered_reading_keeps_what_it_asks_for():
     """1.10.18 wiped a cached row's issue, so "Enter credits" vanished for two minutes after every fresh read."""
     salt = b"s" * 32

@@ -4,6 +4,21 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+### Balances: a bar for the API credits a Claude plan adds each month
+
+Liam, 2026-11-26: "i need to see the a bar like how some of the other keys show bars with remianing amount. i
+have claude subscritpions that include api credits every momnth". An Anthropic row said only "$22.55 used, this
+month so far": Anthropic reports spend to a key, never the credits left.
+
+- **Monthly credits from a plan.** Open an Anthropic row, Enter credits, and pick the plan: Max adds $100 a month,
+  Ultra $200 (Anthropic's help center, "Monthly API credits for Max, Ultra, and Team plans"); Team or anything else
+  is typed. Give the plan's billing day, since unused credits expire at the end of each billing cycle. The row
+  then draws a bar like a plan's quota, "89% left · $22.55 of $200.00 used · resets Dec 1", counting what the cost
+  report says was spent since the last refill.
+- `passbook balances monthly ACCOUNT max|ultra|AMOUNT [DAY]` does the same from a terminal; `... clear` takes it off.
+- An organization whose spend no key can read (an individual organization) still needs the Console sign-in for a
+  figure; setting its monthly credits makes that figure's bar measure against them.
+
 ## [1.10.26] — 2026-11-25
 
 ### Updates: the app's Update button finds uv, and says what is missing when it cannot

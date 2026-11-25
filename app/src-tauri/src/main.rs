@@ -1260,6 +1260,33 @@ fn balances_known(id: String, amount: Option<f64>) -> Result<Value, String> {
     balances_state(Some(false))
 }
 
+/// Credits a plan adds each month (Claude plans that include API credits), and the day of the month they
+/// refill: the row's meter then counts what is spent since each refill against them. `None` clears it.
+#[tauri::command(async)]
+fn balances_monthly(id: String, amount: Option<f64>, day: Option<u32>) -> Result<Value, String> {
+    let id = id.trim();
+    let first_ok = id.chars().next().map_or(false, |c| c.is_ascii_lowercase() || c.is_ascii_digit());
+    if !first_ok || !id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '/' | '_')) {
+        return Err("Which account?".into());
+    }
+    let day = day.unwrap_or(1);
+    if !(1..=31).contains(&day) {
+        return Err("Say the day of the month the credits refill, 1 to 31.".into());
+    }
+    let day = day.to_string();
+    match amount {
+        Some(amount) if amount.is_finite() && amount > 0.0 && amount < 1e12 => {
+            let amount = format!("{amount}");
+            run(&["balances", "monthly", id, amount.as_str(), day.as_str(), "--app", "passbook-app"])?;
+        }
+        Some(_) => return Err("Type the monthly credits as a number, like 200.".into()),
+        None => {
+            run(&["balances", "monthly", id, "clear", "--app", "passbook-app"])?;
+        }
+    }
+    balances_state(Some(false))
+}
+
 /// Sign in to a provider's own web console so Balances can read the credit figure it shows (Anthropic shows
 /// credits nowhere else). A private window of its own opens on the console's sign-in page: it keeps nothing
 /// after it closes, and it is not `main`, so the capability gives it no PassBook command. When the console's
@@ -3157,7 +3184,7 @@ fn main() {
             pending_signin_ask, dismiss_signin_ask,
             github_state, github_connect_token, github_connect_gh, github_connect_device,
             github_disconnect, github_targets, github_environments, github_check, github_push,
-            balances_state, balances_enable, balances_open, balances_icons, balances_full, balances_known, console_signin, balances_alerts, appearance, set_appearance,
+            balances_state, balances_enable, balances_open, balances_icons, balances_full, balances_known, balances_monthly, console_signin, balances_alerts, appearance, set_appearance,
             add_pasted, sync_status, sync_now, oauth_add, rotate_status, rotate_start, rotate_finish, rotate_verify,
             account_set, account_lookup,
             update_state, update_install

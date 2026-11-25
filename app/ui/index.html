@@ -344,6 +344,8 @@
   .warntext { color: var(--warn); }
   .ebamount { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; }
   .ebamount input { width: 120px; min-width: 0; flex: none; }
+  .ebamount input.ebday { width: 44px; }
+  .bkform .seg { align-self: flex-start; background: var(--chip2); }
   @media (max-width: 980px) {
     .stats4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .bmain { grid-template-columns: 34px minmax(110px, 1fr) minmax(120px, 1.3fr) minmax(90px, .8fr); }
@@ -4252,7 +4254,8 @@ Use the copy button to put it on the clipboard."
     // A quota that refills before it would run out is not counting down to anything.
     const refills = m?.kind === "quota" && m.resetsAt ? (Date.parse(m.resetsAt) - Date.now()) / 86400000 : null;
     const hasRunway = i.runwayDays !== null && i.runwayDays !== undefined;
-    const estimate = r.balanceKind === "entered" ? "estimate" : r.balanceKind === "console" ? "from the Console" : "";
+    const estimate = r.balanceKind === "entered" ? "estimate" : r.balanceKind === "console" ? "from the Console"
+      : r.balanceKind === "monthly" ? "monthly credits" : "";
     const leftRest = (hasRunway && refills !== null && i.runwayDays >= refills ? "enough until it resets"
       : hasRunway ? runwayWords(i.runwayDays)
       : m?.kind === "quota" ? "left on the plan" : r.usagePeriod ? r.usagePeriod.toLowerCase()
@@ -4308,11 +4311,13 @@ Use the copy button to put it on the clipboard."
           : `Credits can be read from the ${esc(r.consoleSignIn.name)} with a sign-in PassBook keeps on this Mac, through Anthropic's undocumented web API.`}</span>
           <button class="act${r.balanceKind === "console" ? "" : " primary"}" data-cs-open="${esc(r.consoleSignIn.provider)}" ${balancesView.signingIn ? "disabled" : ""}>${r.balanceKind === "console" ? "Sign in again" : `Sign in to the ${esc(r.consoleSignIn.name)}`}</button></div>` : ""}
       ${r.canEnterBalance && r.balanceKind !== "console" ? (balancesView.entering === r.providerId ? balanceEnteredForm(r)
-        : `<div class="bmark"><span class="note flat">${r.entered
+        : `<div class="bmark"><span class="note flat">${r.monthly
+            ? `${esc(amount(r.monthly.amount, "USD"))} of credits a month, refilled on day ${esc(String(r.monthly.resetDay))}. Next refill ${esc(shortDay(String(r.monthly.resetsAt).slice(0, 10)))}.`
+            : r.entered
             ? `Credits entered by you on ${esc(shortDay(String(r.entered.at).slice(0, 10)))}.`
-            : `${esc(r.name.split(" · ")[0])} reports what is spent, not the credit left. Enter the balance its console shows to see what is left.`}</span>
-           <button class="act${r.entered ? "" : " primary"}" data-eb-open="${esc(r.providerId)}">${r.entered ? "Change" : "Enter credits"}</button>
-           ${r.entered ? `<button class="act" data-eb-clear="${esc(r.providerId)}">Clear</button>` : ""}</div>`) : ""}
+            : `${esc(r.name.split(" · ")[0])} reports what is spent, not the credit left. Enter your plan's monthly credits, or the balance its console shows, to see what is left.`}</span>
+           <button class="act${r.entered || r.monthly ? "" : " primary"}" data-eb-open="${esc(r.providerId)}">${r.entered || r.monthly ? "Change" : "Enter credits"}</button>
+           ${r.entered || r.monthly ? `<button class="act" data-eb-clear="${esc(r.providerId)}">Clear</button>` : ""}</div>`) : ""}
       ${r.balanceKey && balancesView.adding === r.providerId ? balanceKeyForm(r)
         : r.balanceKey && r.keyName !== r.balanceKey.key ? `<div class="bmark"><span class="note flat">Read with ${esc(r.keyName)}, a key other apps use too.
              You can give Balances a key of its own instead.</span><button class="act" data-bk-open="${esc(r.providerId)}">Use a balance-only key</button></div>` : ""}
@@ -4339,14 +4344,30 @@ Use the copy button to put it on the clipboard."
     </div>`;
   }
 
-  /** The credit balance a person reads in the provider's console, for a provider that reports only spend. */
+  /** The credits a provider that reports only spend will not tell: either what a plan adds each month (Claude
+   *  plans with API credits), counted down from each refill, or the balance its console shows right now. */
+  // What each Claude plan adds a month, from Anthropic's help center (read 2026-11-26); the same figures as
+  // PLAN_CREDITS in passbook_balances.py. Team credits are pooled per seat, so a Team org's amount is typed.
+  const CLAUDE_PLANS = [["Max", 100], ["Ultra", 200]];
   function balanceEnteredForm(r) {
     const v = balancesView, busy = v.ebBusy === r.providerId, who = r.name.split(" · ")[0];
+    const mode = v.ebMode || (r.entered ? "once" : "monthly"), monthly = mode === "monthly";
+    const shown = monthly ? (r.monthly ? String(r.monthly.amount) : "") : (r.entered ? String(r.entered.amount) : "");
     return `<div class="bkform">
-      <div class="note flat">The credit balance ${esc(who)}'s console shows for ${esc(r.accountLabel || r.name)} right now. PassBook takes off what
-        ${esc(who)} reports spent after this, so it stays close until the next top-up.</div>
+      <div class="seg" role="group" aria-label="What kind of credits">
+        <button data-eb-mode="monthly" aria-pressed="${monthly}" ${busy ? "disabled" : ""}>Monthly credits from a plan</button>
+        <button data-eb-mode="once" aria-pressed="${!monthly}" ${busy ? "disabled" : ""}>Credits left right now</button></div>
+      ${monthly && (r.provider || r.providerId).startsWith("anthropic") ? `<div class="seg" role="group" aria-label="Claude plan">
+        ${CLAUDE_PLANS.map(([label, dollars]) => `<button data-eb-plan="${dollars}" aria-pressed="${shown === String(dollars)}" ${busy ? "disabled" : ""}>${label} · ${amount(dollars, "USD")}</button>`).join("")}
+        <button data-eb-plan="" aria-pressed="${!!shown && !CLAUDE_PLANS.some(([, d]) => shown === String(d))}" ${busy ? "disabled" : ""}>Team or other</button></div>` : ""}
+      <div class="note flat">${monthly
+        ? `The Claude plan this organization's API credits come from. They expire at the end of each billing cycle, so they refill on
+           the plan's billing day. The bar counts what ${esc(who)} reports spent since each refill against them.`
+        : `The credit balance ${esc(who)}'s console shows for ${esc(r.accountLabel || r.name)} right now. PassBook takes off what
+           ${esc(who)} reports spent after this, so it stays close until the next top-up.`}</div>
       <div class="alform">
-        <label class="ebamount">$ <input id="ebvalue" inputmode="decimal" autocomplete="off" placeholder="247.57" value="${r.entered ? esc(String(r.entered.amount)) : ""}" ${busy ? "disabled" : ""} /></label>
+        <label class="ebamount">$ <input id="ebvalue" inputmode="decimal" autocomplete="off" placeholder="${monthly ? "amount" : "247.57"}" value="${esc(shown)}" ${busy ? "disabled" : ""} /></label>
+        ${monthly ? `<label class="ebamount">a month, billing day <input id="ebday" class="ebday" inputmode="numeric" autocomplete="off" maxlength="2" placeholder="1" value="${esc(String(r.monthly?.resetDay || 1))}" ${busy ? "disabled" : ""} /></label>` : ""}
         <button class="act primary" data-eb-save="${esc(r.providerId)}" ${busy ? "disabled" : ""}>${busy ? "Saving…" : "Save"}</button>
         ${r.topUpUrl ? `<button class="act" data-topup="${esc(r.provider || r.providerId)}">Open ${esc(who)}'s billing ${icon("chevron", "tinyicon")}</button>` : ""}
         <button class="act" data-eb-cancel="1" ${busy ? "disabled" : ""}>Cancel</button>
@@ -7091,7 +7112,17 @@ Use the copy button to put it on the clipboard."
     main.querySelectorAll("[data-bal-fixes]").forEach((b) => b.onclick = () => { balancesView.allFixes = true; paint(); });
     // A credit balance entered by hand, for a provider that reports only spend.
     main.querySelectorAll("[data-eb-open]").forEach((b) => b.onclick = () => {
-      Object.assign(balancesView, { entering: b.dataset.ebOpen, ebNote: "", keyDone: "" }); paint();
+      Object.assign(balancesView, { entering: b.dataset.ebOpen, ebMode: "", ebNote: "", keyDone: "" }); paint();
+      document.getElementById("ebvalue")?.focus();
+    });
+    // A plan fills in its published amount; "Team or other" empties the field to type one.
+    main.querySelectorAll("[data-eb-plan]").forEach((b) => b.onclick = () => {
+      const field = document.getElementById("ebvalue");
+      if (field) { field.value = b.dataset.ebPlan; field.focus(); }
+      b.parentElement.querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+    });
+    main.querySelectorAll("[data-eb-mode]").forEach((b) => b.onclick = () => {
+      Object.assign(balancesView, { ebMode: b.dataset.ebMode, ebNote: "" }); paint();
       document.getElementById("ebvalue")?.focus();
     });
     main.querySelectorAll("[data-cs-open]").forEach((b) => b.onclick = async () => {
@@ -7108,24 +7139,36 @@ Use the copy button to put it on the clipboard."
       finally { v.signingIn = ""; paint(); }
     });
     main.querySelectorAll("[data-eb-cancel]").forEach((b) => b.onclick = () => { Object.assign(balancesView, { entering: "", ebNote: "" }); paint(); });
-    const saveEntered = async (id, value) => {
+    // `day` is set for monthly credits; a clear takes off whichever kind the account has.
+    const saveEntered = async (id, value, day) => {
       const v = balancesView, row = (v.data?.providers || []).find((r) => r.providerId === id);
+      const monthly = day !== undefined || (value === null && row?.monthly);
       Object.assign(v, { ebBusy: id, ebNote: "", ebNoteFor: id }); paint();
       try {
-        v.data = await invoke("balances_known", { id, amount: value });
+        v.data = monthly ? await invoke("balances_monthly", { id, amount: value, day: day ?? null })
+          : await invoke("balances_known", { id, amount: value });
         v.entering = "";
-        v.keyDone = value === null ? `${row?.name || id}: the entered balance is cleared.`
+        v.keyDone = value === null ? `${row?.name || id}: the ${monthly ? "monthly credits are" : "entered balance is"} cleared.`
+          : monthly ? `${row?.name || id}: ${amount(value, "USD")} of credits a month, refilled on day ${day}.`
           : `${row?.name || id}: ${amount(value, "USD")} entered. PassBook takes off what is spent from now on.`;
       } catch (e) { Object.assign(v, { ebNote: balanceError(e), ebNoteFor: id }); }
       finally { v.ebBusy = ""; paint(); }
     };
     main.querySelectorAll("[data-eb-save]").forEach((b) => b.onclick = () => {
+      const id = b.dataset.ebSave, row = (balancesView.data?.providers || []).find((r) => r.providerId === id);
+      const monthly = (balancesView.ebMode || (row?.entered ? "once" : "monthly")) === "monthly";
       const typed = String(document.getElementById("ebvalue")?.value || "").replace(/[$,\s]/g, "");
       const value = Number(typed);
-      if (!typed || !Number.isFinite(value) || value < 0) {
-        Object.assign(balancesView, { ebNote: "Type the balance as a number, like 247.57.", ebNoteFor: b.dataset.ebSave }); paint(); return;
+      if (!typed || !Number.isFinite(value) || value < 0 || (monthly && value === 0)) {
+        Object.assign(balancesView, { ebNote: monthly ? "Type the monthly credits as a number, like 200." : "Type the balance as a number, like 247.57.", ebNoteFor: id }); paint(); return;
       }
-      saveEntered(b.dataset.ebSave, value);
+      if (!monthly) { saveEntered(id, value); return; }
+      const dayTyped = String(document.getElementById("ebday")?.value || "1").trim();
+      const day = Number(dayTyped);
+      if (!/^\d{1,2}$/.test(dayTyped) || day < 1 || day > 31) {
+        Object.assign(balancesView, { ebNote: "Say the day of the month the credits refill, 1 to 31.", ebNoteFor: id }); paint(); return;
+      }
+      saveEntered(id, value, day);
     });
     main.querySelectorAll("[data-eb-clear]").forEach((b) => b.onclick = () => saveEntered(b.dataset.ebClear, null));
     main.querySelectorAll("[data-noticeclear]").forEach((b) => b.onclick = () => {

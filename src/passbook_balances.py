@@ -1094,11 +1094,78 @@ def entered_record(amount: float, days: Mapping[str, float], *, now: Callable[[]
     return {"amount": round(float(amount), 2), "at": _iso(now()), "day": today, "baseline": round(float(days.get(today, 0.0)), 6)}
 
 
-def _apply_entered(row: dict, record: Mapping[str, Any] | None, provider_name: str) -> None:
+# Liam, 2026-11-26: "i have claude subscriptions that include api credits every month and i need to be able
+# to see those balances in passbook", with a bar like the other plans'. Anthropic reports neither the grant nor
+# what is left of it to a key, so the amount and the day it refills are told once; each reading counts what
+# the cost report says was spent since the last refill against it, as a plan's quota is counted.
+# What each Claude plan adds, per Anthropic's help center ("Monthly API credits for Max, Ultra, and Team
+# plans", support.claude.com/en/articles/17154008, read 2026-11-26): Max $100 a month, Ultra $200. Credits are
+# claimed by linking one Console organization to the plan and expire at the end of each billing cycle, so
+# they refill on the plan's billing date. Team credits are pooled per seat, so a Team org's amount is typed.
+PLAN_CREDITS = {"max": 100.0, "ultra": 200.0}
+
+
+def monthly_record(amount: float, reset_day: int, *, now: Callable[[], float] = time.time) -> dict:
+    """Credits that refill each month: how much, and on which day of the month (1–31, the last day in a
+    shorter month)."""
+    return {"kind": "monthly", "amount": round(float(amount), 2), "resetDay": int(reset_day), "at": _iso(now())}
+
+
+def monthly_cycle(reset_day: int, now: float) -> tuple[str, str]:
+    """(the day the credits last refilled, YYYY-MM-DD; the moment they refill next, ISO), in UTC like the
+    cost report's own days."""
+    import calendar
+
+    def on(year: int, month: int) -> datetime:
+        return datetime(year, month, min(max(int(reset_day), 1), calendar.monthrange(year, month)[1]), tzinfo=timezone.utc)
+
+    def step(year: int, month: int, by: int) -> tuple[int, int]:
+        index = year * 12 + (month - 1) + by
+        return index // 12, index % 12 + 1
+
+    today = datetime.fromtimestamp(now, timezone.utc)
+    start = on(today.year, today.month)
+    if today < start:
+        start = on(*step(today.year, today.month, -1))
+    following = on(*step(start.year, start.month, 1))
+    return start.strftime("%Y-%m-%d"), following.isoformat().replace("+00:00", "Z")
+
+
+def _entered_start(record: Mapping[str, Any] | None, now: float) -> str | None:
+    """The first day a cost report must cover for this record."""
+    if not record:
+        return None
+    if record.get("kind") == "monthly":
+        return monthly_cycle(int(record.get("resetDay") or 1), now)[0]
+    return record.get("day")
+
+
+def _apply_monthly(row: dict, record: Mapping[str, Any], days: Mapping[str, float], provider_name: str, now: float) -> None:
+    amount = float(record["amount"])
+    start, resets = monthly_cycle(int(record.get("resetDay") or 1), now)
+    spent = round(sum(v for d, v in days.items() if d >= start), 4)
+    left = round(max(amount - spent, 0.0), 4)
+    row.update(allowance={"used": spent, "limit": amount, "unit": "USD", "resetsAt": resets}, balanceKind="monthly", entered=None,
+               monthly={"amount": amount, "resetDay": int(record.get("resetDay") or 1), "since": start, "spentSince": spent,
+                        "resetsAt": resets},
+               message=f"Your ${amount:,.2f} of monthly credits, less the ${spent:,.2f} {provider_name} reports spent since they "
+                       f"refilled on {start}. {provider_name} does not report the credits themselves, so this is counted here; "
+                       "its figures arrive a few minutes late.")
+    row["details"] = [{"label": "Monthly credits", "value": f"{amount:.2f} USD, refilled on day {int(record.get('resetDay') or 1)}"},
+                      {"label": "Spent since they refilled", "value": f"{spent:.2f} USD since {start}"},
+                      {"label": "Left this month", "value": f"{left:.2f} USD"}, *row.get("details", [])]
+    if spent > amount:
+        row["details"].insert(3, {"label": "Beyond the monthly credits", "value": f"{spent - amount:.2f} USD"})
+
+
+def _apply_entered(row: dict, record: Mapping[str, Any] | None, provider_name: str, *, now: Callable[[], float] = time.time) -> None:
     days = row.get("_days")
     if row.get("status") != "ready" or days is None:
         return
     row["canEnterBalance"] = True
+    if record and record.get("kind") == "monthly":
+        _apply_monthly(row, record, days, provider_name, now())
+        return
     if not record:
         row["issue"] = {"kind": "enter-balance", "rank": ISSUE_RANK["enter-balance"], "action": "enter-balance",
                         "title": f"Enter {row.get('accountLabel') or row['name']}'s credits to see what's left",
@@ -1233,11 +1300,13 @@ def _apply_console(entry: Mapping[str, Any], rows: list[dict], values: Mapping[s
             status, payload = 0, None
         dollars = parse_console_credits(payload) if status == 200 else None
         if dollars is not None:
+            # The Console's own figure is what is left of every credit, monthly ones included: it is measured
+            # against the monthly amount (set as what full is), not counted down beside it.
             row.update(status="ready", balance=dollars, unit="USD", balanceKind="console", consoleKey=session, providerError=None,
-                       observedAt=row.get("checkedAt"), entered=None, issue=None,
+                       observedAt=row.get("checkedAt"), entered=None, issue=None, allowance=None,
                        message=CONSOLE_NOTE.format(name=spec["name"], provider=provider_name))
             row["details"] = [{"label": "Credits (from the Console)", "value": f"{dollars:g} USD"},
-                              *[item for item in row.get("details", []) if item.get("label") not in ("Credits you entered", "Spent since")]]
+                              *[item for item in row.get("details", []) if item.get("label") not in ("Credits you entered", "Spent since", "Left this month")]]
             continue
         row["issue"] = ({"kind": "console-blocked", "rank": ISSUE_RANK["console-blocked"], "action": "retry",
                          "title": f"{spec['name']} refused PassBook's request",
@@ -1384,7 +1453,7 @@ def _provider_rows(entry: Mapping[str, Any], values: Mapping[str, str], held: se
         tried = [name for name in (None if stray else slot, *reading_keys) if name and (name in keys or name == slot or not found)]
         record = (entered or {}).get(account["id"]) if entry.get("entered_balance") else None
         row = read_provider(account, values, held, fetch=fetch, now=now, salt=salt, fresh_from=fresh_from, names=tried,
-                            start=(record or {}).get("day"))
+                            start=_entered_start(record, now()))
         row.update(accountKeys=list(keys), accountId=(found or {}).get("id"))
         if found and found.get("name"):
             row["accountLabel"] = row.get("accountLabel") or found["name"]
@@ -1397,7 +1466,7 @@ def _provider_rows(entry: Mapping[str, Any], values: Mapping[str, str], held: se
                          else f"{title} for {found['name']}")
                 row["issue"] = {**row["issue"], "title": title[:1].upper() + title[1:]}
         if entry.get("entered_balance"):
-            _apply_entered(row, record, entry["name"].removesuffix(" API"))
+            _apply_entered(row, record, entry["name"].removesuffix(" API"), now=now)
         if stray:
             row["issue"] = {"kind": "wrong-account", "rank": ISSUE_RANK["wrong-account"], "action": "add-key", "key": slot,
                             "createUrl": row["balanceKey"]["createUrl"], "detail": f"What to make: {row['balanceKey']['permission']}",

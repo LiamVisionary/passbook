@@ -4,6 +4,8 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [1.10.26] — 2026-11-25
+
 ### Updates: the app's Update button finds uv, and says what is missing when it cannot
 
 Liam, 2026-11-25: "passbook error updating the command line". The Updates page answered "The command line could

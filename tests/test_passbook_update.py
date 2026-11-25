@@ -1,6 +1,7 @@
 """Updating an installed CLI must not strand sign-in or end live grants."""
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -127,21 +128,90 @@ def test_missing_broker_uses_normal_first_signin_setup(machine, monkeypatch):
     assert vault.status()["fully_sealed"]
 
 
-def test_uv_update_preserves_interpreter_and_pins_the_release(tmp_path, monkeypatch):
+def _behind_uv_tool_install(tmp_path, monkeypatch):
+    """A uv tool install one release behind, with no background service to ask."""
     monkeypatch.setattr(passbook, "__file__", str(
         tmp_path / "uv/tools/passbook/lib/python3.12/site-packages/passbook.py"))
     monkeypatch.setenv("PASSBOOK_SOURCE", "git+https://example.test/passbook.git")
     monkeypatch.setattr(cli, "installed_version", lambda: "1.6.2")
     monkeypatch.setattr(cli, "latest_version", lambda: ("1.6.3", "v1.6.3"))
-    interpreter = str(Path(getattr(sys, "_base_executable", None) or sys.executable).resolve())
+    monkeypatch.setattr(broker, "running", lambda: False)
+
+
+def _recorded_runs(monkeypatch):
     commands = []
     def run(command, **kwargs):
         commands.append(command)
         return subprocess.CompletedProcess(command, 0, "", "")
     monkeypatch.setattr(cli.subprocess, "run", run)
+    return commands
+
+
+def _program(path: Path) -> Path:
+    """An empty file that PATH lookup accepts as a program on this platform."""
+    if os.name == "nt":
+        path = path.with_name(path.name + ".exe")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("")
+    path.chmod(0o755)
+    return path
+
+
+def test_uv_update_preserves_interpreter_and_pins_the_release(tmp_path, monkeypatch):
+    _behind_uv_tool_install(tmp_path, monkeypatch)
+    monkeypatch.setattr(cli, "_installer", lambda name: f"/found/{name}")
+    interpreter = str(Path(getattr(sys, "_base_executable", None) or sys.executable).resolve())
+    commands = _recorded_runs(monkeypatch)
     assert cli.main(["update"]) == 0
-    assert commands == [["uv", "tool", "install", "--force", "--python", interpreter,
+    assert commands == [["/found/uv", "tool", "install", "--force", "--python", interpreter,
                          "git+https://example.test/passbook.git@v1.6.3"]]
+
+
+def test_update_finds_uv_where_a_short_path_leaves_it_out(tmp_path, monkeypatch):
+    """2026-11-25: the app runs the command line with the PATH an app opened from
+    the Dock gets, /usr/bin:/bin:/usr/sbin:/sbin, and its Update button answered
+    with a FileNotFoundError traceback for `uv`, which that Mac keeps in
+    /opt/homebrew/bin. uv is now looked for in the folders such a PATH leaves
+    out, and run by its full path."""
+    _behind_uv_tool_install(tmp_path, monkeypatch)
+    home = tmp_path / "home"
+    uv = _program(home / ".local" / "bin" / "uv")
+    for name in ("HOME", "USERPROFILE"):
+        monkeypatch.setenv(name, str(home))
+    monkeypatch.setenv("PATH", str(tmp_path / "nothing-on-path"))
+    commands = _recorded_runs(monkeypatch)
+    assert cli.main(["update"]) == 0
+    assert len(commands) == 1
+    assert Path(commands[0][0]) == uv, "uv by its full path, not a bare name PATH cannot resolve"
+    assert commands[0][1:4] == ["tool", "install", "--force"]
+
+
+def test_an_installer_on_path_is_preferred_to_one_guessed(tmp_path, monkeypatch):
+    """The folders are a fallback for a short PATH, not a second opinion on a full one."""
+    home = tmp_path / "home"
+    on_path = _program(tmp_path / "chosen" / "uv")
+    guessed = _program(home / ".local" / "bin" / "uv")
+    for name in ("HOME", "USERPROFILE"):
+        monkeypatch.setenv(name, str(home))
+    monkeypatch.setenv("PATH", str(on_path.parent))
+    assert Path(cli._installer("uv")) == on_path
+    monkeypatch.setenv("PATH", str(tmp_path / "nothing-on-path"))
+    assert Path(cli._installer("uv")) == guessed
+    assert cli._installer("no-such-installer-anywhere") == ""
+
+
+def test_an_installer_that_will_not_run_is_said_in_a_sentence(tmp_path, monkeypatch, capsys):
+    """The app shows what a failed update printed, as it is. With uv nowhere to be
+    found, that was a traceback; now it is what is missing and where else to run it."""
+    _behind_uv_tool_install(tmp_path, monkeypatch)
+    monkeypatch.setattr(cli, "_installer", lambda name: "")
+    def missing(command, **kwargs):
+        raise FileNotFoundError(2, "No such file or directory", command[0])
+    monkeypatch.setattr(cli.subprocess, "run", missing)
+    assert cli.main(["update"]) == 1
+    said = capsys.readouterr().err
+    assert "Could not run uv, which installed this copy: No such file or directory." in said
+    assert "In a terminal where uv runs:  passbook update" in said
 
 
 def test_uv_interpreter_pin_uses_base_runtime_for_a_copied_venv_launcher(tmp_path, monkeypatch):

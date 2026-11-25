@@ -4,6 +4,23 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+### Updates: the app's Update button finds uv, and says what is missing when it cannot
+
+Liam, 2026-11-25: "passbook error updating the command line". The Updates page answered "The command line could
+not be updated." and then a Python traceback ending in `FileNotFoundError: [Errno 2] No such file or directory:
+'uv'`. Reproduced by running `~/.local/bin/passbook update` with the PATH the app has.
+
+- **`passbook update` finds the installer that put it there when PATH leaves it out.** The app runs the command
+  line with the PATH an app opened from the Dock is given, `/usr/bin:/bin:/usr/sbin:/sbin`, which has no Homebrew
+  and none of your own bin folders in it, and that Mac keeps uv in `/opt/homebrew/bin`. uv and pipx are now looked
+  for on PATH and then in `~/.local/bin`, `~/.cargo/bin`, `/opt/homebrew/bin`, `/usr/local/bin` and
+  `/home/linuxbrew/.linuxbrew/bin`, and run by their full path. That also covers a launchd agent, cron and `ssh
+  host passbook update`, which start with a short PATH too.
+- **An installer it cannot run is said in a sentence**, not a traceback: "Could not run uv, which installed this
+  copy: No such file or directory." and where to run the update instead.
+- A command line on 1.10.25 or older still has the old code, so on such a machine the button fails once more: run
+  `passbook update` in a terminal there once, and the button works from then on.
+
 ## [1.10.25] — 2026-11-25
 
 ### Keys: a key can be found, opened and changed without hunting for how, and adding one does not wait on other machines

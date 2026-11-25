@@ -5097,6 +5097,33 @@ def _as_numbers(text: str) -> tuple:
     return tuple(parts)
 
 
+def _installer_folders() -> list[str]:
+    """Folders an installer is kept in that a short PATH leaves out.
+
+    The app, a launchd agent, cron and a non-interactive ssh all start with a
+    short PATH: an app opened from the Dock gets /usr/bin:/bin:/usr/sbin:/sbin,
+    with no Homebrew and none of the person's own bin folders in it. On
+    2026-11-25 the app's Update button answered with a FileNotFoundError
+    traceback for `uv`, which that Mac keeps in /opt/homebrew/bin.
+    passbook_fleet._TAILSCALE_PLACES is the same miss, for Tailscale.
+    """
+    home = Path.home()
+    folders = [home / ".local" / "bin",   # uv's own installer (0.5 on), pipx, pip --user
+               home / ".cargo" / "bin"]   # uv's installer before 0.5, and cargo install
+    if os.name != "nt":
+        folders += [Path("/opt/homebrew/bin"),                # Homebrew, Apple silicon
+                    Path("/usr/local/bin"),                   # Homebrew, Intel; manual installs
+                    Path("/home/linuxbrew/.linuxbrew/bin")]   # Homebrew on Linux
+    return [str(folder) for folder in folders]
+
+
+def _installer(name: str) -> str:
+    """Where `name` (uv, pipx) is: on PATH, else in a folder a short PATH leaves out. "" when neither."""
+    return (shutil.which(name)
+            or shutil.which(name, path=os.pathsep.join(_installer_folders()))
+            or "")
+
+
 def install_method() -> tuple[str, list[str]]:
     """How this copy got here, and the command that would replace it.
 
@@ -5104,6 +5131,10 @@ def install_method() -> tuple[str, list[str]]:
     machine, because a box can have uv AND pipx AND a pip install, and
     upgrading the one this process is not running from would report success
     and change nothing.
+
+    The installer is named by its full path wherever it can be found (see
+    _installer_folders), and by its bare name when it cannot, so that the
+    failure names what is missing.
     """
     here = str(Path(passbook.__file__).resolve())
     source = os.environ.get("PASSBOOK_SOURCE", f"git+{REPOSITORY}")
@@ -5112,10 +5143,10 @@ def install_method() -> tuple[str, list[str]]:
         # Changing Python minor versions removes the old broker's import path.
         # Use the base runtime: Windows copies its venv launcher, while POSIX
         # normally symlinks it. The tool tree itself is about to be replaced.
-        return "uv tool", ["uv", "tool", "install", "--force", "--python",
+        return "uv tool", [_installer("uv") or "uv", "tool", "install", "--force", "--python",
                            str(Path(getattr(sys, "_base_executable", None) or sys.executable).resolve()), source]
     if "/pipx/venvs/" in here:
-        return "pipx", ["pipx", "install", "--force", source]
+        return "pipx", [_installer("pipx") or "pipx", "install", "--force", source]
     # The app carries its own copy under `cli/`, beside a private runtime. That
     # one is replaced when the app is, and pip would write into the bundle.
     if f"{os.sep}cli{os.sep}" in here or ".app/Contents/" in here:
@@ -5133,8 +5164,9 @@ def install_method() -> tuple[str, list[str]]:
                              capture_output=True).returncode == 0
     if has_pip:
         return "pip", [sys.executable, "-m", "pip", "install", "--upgrade", source]
-    if shutil.which("uv"):
-        return "uv", ["uv", "pip", "install", "--python", sys.executable, source]
+    uv = _installer("uv")
+    if uv:
+        return "uv", [uv, "pip", "install", "--python", sys.executable, source]
     return "pip", [sys.executable, "-m", "pip", "install", "--upgrade", source]
 
 
@@ -5213,7 +5245,15 @@ def cmd_update(args: argparse.Namespace) -> int:
     # a worse thing to have than no `update` at all.
     pinned = [part if not part.startswith("git+") else f"{part}@{tag}" for part in command]
     print(f"\nUpdating to {newest} ...")
-    done = subprocess.run(pinned, capture_output=True, text=True)
+    try:
+        done = subprocess.run(pinned, capture_output=True, text=True)
+    except OSError as error:
+        # The installer is not in any folder _installer looked in, or will not
+        # start. Said in a sentence: the app shows this text as it is, and on
+        # 2026-11-25 what it showed was a Python traceback.
+        name = Path(pinned[0]).name
+        return _fail(f"Could not run {name}, which installed this copy: {error.strerror or error}.",
+                     f"In a terminal where {name} runs:  passbook update")
     if done.returncode != 0:
         # A locked tree fails here as a bare permission error from uv, which
         # names a path and not a reason — the exact shape of dead end this

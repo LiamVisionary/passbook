@@ -4,6 +4,8 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [1.10.27] — 2026-11-26
+
 ### Balances: a bar for the API credits a Claude plan adds each month
 
 Liam, 2026-11-26: "i need to see the a bar like how some of the other keys show bars with remianing amount. i

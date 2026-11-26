@@ -1,0 +1,21 @@
+// A PassBook relay of your own. Create its database, put the id below, apply schema.sql, deploy:
+//
+//   npx wrangler d1 create passbook_relay
+//   npx wrangler d1 execute passbook_relay --remote --file=./schema.sql
+//   npx wrangler deploy
+//
+// Then, on every machine that should use it (both ends of a link must allow it):
+//
+//   export PASSBOOK_WEB_RELAYS=https://passbook-relay.<your-subdomain>.workers.dev
+//   export PASSBOOK_MACHINE_RELAY=https://passbook-relay.<your-subdomain>.workers.dev
+{
+  "name": "passbook-relay",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-11",
+  "d1_databases": [
+    { "binding": "DB", "database_name": "passbook_relay", "database_id": "<the id `wrangler d1 create` printed>" }
+  ],
+  // How many computers one PassBook may lend keys to through this relay. Yours to choose.
+  "vars": { "MAX_MACHINES": "50" },
+  "observability": { "enabled": true }
+}

@@ -4,6 +4,8 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [1.10.30] — 2026-11-26
+
 ### A backup's passphrase is made by PassBook, not chosen
 
 Liam, 2026-11-26, asking whether a backup on the relay "cant be stolen", and of the answer (use a passphrase you

@@ -69,11 +69,17 @@ def test_the_wrong_passphrase_is_refused_without_saying_which_half_was_wrong():
 
 
 def test_an_export_carries_no_key_material_in_the_clear():
-    text = backup.encrypt(VALUES, PASSPHRASE)
-    for value in VALUES.values():
+    # Values long enough that the base64 of random bytes cannot spell one by chance. This used
+    # VALUES, whose first value is "one": three letters, in a file that is mostly random base64. It
+    # failed on CI on 2026-11-26 with nothing wrong (`assert 'one' not in 'passbook-ex…'`), which is
+    # about a one in a thousand chance each run.
+    values = {name: f"{value}-in-the-clear-{index}-0123456789abcdef" for index, (name, value) in enumerate(VALUES.items())}
+    text = backup.encrypt(values, PASSPHRASE)
+    for value in values.values():
         assert value not in text
-    for name in VALUES:
+    for name in values:
         assert name not in text
+    assert backup.keys_of(backup.decrypt(text, PASSPHRASE)) == values
 
 
 def test_a_short_passphrase_is_refused():

@@ -931,9 +931,8 @@ key arrives already scoped rather than machine wide.
 
 ## The relay, and plans
 
-> **Not on sale yet.** Plans, the backup on the relay, answering from a phone and sharing with
-> people arrive with the release after 1.10.28. Until plans can be bought, the default relay
-> carries 50 computers for everyone, as it does today.
+Plans, the backup on the relay, answering from a phone and sharing with people need PassBook
+1.10.29 or later.
 
 Everything above this line runs on your machine and is free. It stays that way: the store,
 encryption, sign-in, the broker, scoping, guards, the record. None of it can be charged for and

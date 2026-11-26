@@ -322,6 +322,83 @@ fn revoke(did: String) -> Result<Value, String> {
     state()
 }
 
+// ── adding a computer (`passbook join`) ───────────────────────────────────
+//
+// The window chooses what the new machine gets and shows the one line to run there; the CLI makes
+// the invite, answers the join, and keeps the machine current. Names only cross here: an invite
+// carries no credential, and `link complete` seals the keys to the joining machine itself.
+
+#[tauri::command(async)]
+fn link_choices() -> Result<Value, String> {
+    run_json(&["link", "choices"])
+}
+
+/// Each list becomes repeated flags. Names arrive as separate arguments, never through a shell.
+fn invite_args(selection: &Value, advanced: &Value) -> Vec<String> {
+    let mut args: Vec<String> = ["link", "invite", "--json", "--no-wait"].iter().map(|s| s.to_string()).collect();
+    if selection.get("all").and_then(Value::as_bool).unwrap_or(false) {
+        args.push("--all".into());
+    }
+    let lists = [(selection, "keys", "--keys"), (selection, "groups", "--group"), (selection, "projects", "--project"),
+                 (selection, "umbrellas", "--umbrella"), (advanced, "hosts", "--host"), (advanced, "commands", "--command"),
+                 (advanced, "apps", "--app")];
+    for (source, field, flag) in lists {
+        let items: Vec<String> = source.get(field).and_then(Value::as_array).map(|items| items.iter()
+            .filter_map(Value::as_str).map(str::trim).filter(|item| !item.is_empty() && !item.starts_with('-'))
+            .map(str::to_string).collect()).unwrap_or_default();
+        if !items.is_empty() {
+            args.push(flag.into());
+            args.extend(items);
+        }
+    }
+    if let Some(days) = advanced.get("days").and_then(Value::as_u64) {
+        args.push("--days".into());
+        args.push(days.clamp(1, 365).to_string());
+    }
+    if advanced.get("fixed").and_then(Value::as_bool).unwrap_or(false) {
+        args.push("--fixed".into());
+    }
+    args
+}
+
+#[tauri::command(async)]
+fn link_invite(selection: Value, advanced: Value) -> Result<Value, String> {
+    let args = invite_args(&selection, &advanced);
+    let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
+    run_json(&borrowed)
+}
+
+#[tauri::command(async)]
+fn link_complete() -> Result<Value, String> {
+    run_json(&["link", "complete", "--json"])
+}
+
+#[tauri::command(async)]
+fn link_cancel(id: String) -> Result<Value, String> {
+    run(&["link", "cancel", id.as_str()])?;
+    Ok(Value::Bool(true))
+}
+
+/// Keeps joined machines current; the window calls it on its ten-minute tick.
+#[tauri::command(async)]
+fn link_refresh() -> Result<Value, String> {
+    run_json(&["link", "refresh", "--json"])
+}
+
+#[cfg(test)]
+mod invite_tests {
+    use super::invite_args;
+    use serde_json::json;
+
+    #[test]
+    fn a_selection_becomes_flags_and_nothing_can_pass_for_one() {
+        let args = invite_args(&json!({"groups": ["AI", " "], "keys": ["--all", "OPENAI_API_KEY"]}),
+                               &json!({"hosts": ["api.openai.com"], "days": 900, "fixed": true}));
+        assert_eq!(args, ["link", "invite", "--json", "--no-wait", "--keys", "OPENAI_API_KEY", "--group", "AI",
+                          "--host", "api.openai.com", "--days", "365", "--fixed"]);
+    }
+}
+
 /// Run `passbook add --stdin --sync`, answer as soon as the keys are written, and say afterward how
 /// sending them to the other machines went.
 ///
@@ -3187,7 +3264,8 @@ fn main() {
             balances_state, balances_enable, balances_open, balances_icons, balances_full, balances_known, balances_monthly, console_signin, balances_alerts, appearance, set_appearance,
             add_pasted, sync_status, sync_now, oauth_add, rotate_status, rotate_start, rotate_finish, rotate_verify,
             account_set, account_lookup,
-            update_state, update_install
+            update_state, update_install,
+            link_choices, link_invite, link_complete, link_cancel, link_refresh
         ])
         .run(tauri::generate_context!())
         .expect("PassBook failed to start");

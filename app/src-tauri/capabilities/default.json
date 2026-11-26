@@ -103,7 +103,12 @@
     "allow-account-set",
     "allow-account-lookup",
     "allow-update-state",
-    "allow-update-install"
+    "allow-update-install",
+    "allow-link-choices",
+    "allow-link-invite",
+    "allow-link-complete",
+    "allow-link-cancel",
+    "allow-link-refresh"
   ],
   "remote": {
     "urls": [

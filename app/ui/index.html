@@ -1131,6 +1131,37 @@
   .aprimary { background: var(--accent); color: var(--accent-ink); }
   .aprimary:disabled { opacity: .55; cursor: default; }
   .aerr { margin: 0; font-size: 12.5px; color: var(--warn); line-height: 1.5; }
+  /* ── Add a device ─────────────────────────────────────────────────────────
+     The "what does it get" step: tabs over the store's own groupings, a list
+     of ticks, and a running count of what will actually leave. */
+  .devhead { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .devhead h2 { margin-bottom: 0; }
+  .dtabs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; padding: 3px;
+    background: var(--soft); border-radius: 10px; }
+  .dtabs button { min-height: 32px; border: 0; border-radius: 8px; background: none; color: var(--ink2);
+    font: 600 12.5px inherit; cursor: pointer; }
+  .dtabs button[aria-selected="true"] { background: var(--card); color: var(--ink); box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  .dlist { display: grid; gap: 4px; max-height: 260px; overflow-y: auto; }
+  .drow { display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px; border-radius: 9px;
+    border: 1px solid var(--line); background: var(--paper); cursor: pointer; font-size: 13px; color: var(--ink); }
+  .drow input { margin-top: 2px; }
+  .drow .grow { display: grid; gap: 2px; min-width: 0; word-break: break-word; }
+  .drow.dmuted { opacity: .6; cursor: default; }
+  .dsub { font-size: 11.5px; color: var(--ink3); line-height: 1.4; }
+  .dempty { margin: 6px 2px; }
+  .dsummary { margin: 0; font-size: 12.5px; color: var(--ink2); line-height: 1.5; }
+  .dadv { display: grid; gap: 12px; padding-top: 4px; border-top: 1px solid var(--line); }
+  .akey select { min-height: 40px; padding: 0 9px; border: 1px solid var(--line2); border-radius: 9px;
+    background: var(--paper); color: var(--ink); font: 400 13px inherit; }
+  .dcmd { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px;
+    background: var(--soft); border: 1px solid var(--line2); }
+  .dcmd code { flex: 1; font-size: 12px; word-break: break-all; color: var(--ink); user-select: all; }
+  .dcmd .iconbtn { width: auto; padding: 0 10px; font: 600 12px inherit; }
+  .dwait { margin: 0; display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--ink3); }
+  .dspin { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--line2);
+    border-top-color: var(--accent); animation: dspin 0.9s linear infinite; }
+  @keyframes dspin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .dspin { animation: none; } }
   .arefused { margin: 0; font-size: 11.5px; color: var(--ink3); line-height: 1.5; }
 
   /* The confirmation. A tick that draws itself, because "it worked" should be
@@ -1278,6 +1309,7 @@
 
 <script src="/authorize.js"></script>
 <script src="/weblink.js"></script>
+<script src="/adddevice.js"></script>
 <script>
 (() => {
   const invoke = window.__TAURI__?.core?.invoke;
@@ -4841,7 +4873,10 @@ Use the copy button to put it on the clipboard."
       ...(l.borrowed || []),
     ];
     return `
-      <h2>Devices</h2>
+      <div class="devhead"><h2>Devices</h2>
+        ${addDevice.waiting()
+          ? `<button class="act" data-resume-device>Invite waiting\u2026</button>`
+          : `<button class="act primary" data-add-device ${busy ? "disabled" : ""}>Add a device</button>`}</div>
       <p class="lede">Every device that holds this store \u2014 the ones you paired with,
       and the ones that have it because they are on your network.</p>
       ${syncPanel()}
@@ -4864,18 +4899,22 @@ Use the copy button to put it on the clipboard."
             <span class="statustile plain sm">${icon(r.lent ? "out" : "into")}</span>
             <div class="grow">
               <div>${r.lent ? "Lent to" : "Borrowed from"}
-                <span class="mono">${esc(r.host || r.fingerprint || r.did)}</span>
+                ${r.label ? `<b>${esc(r.label)}</b>` : `<span class="mono">${esc(r.host || r.fingerprint || r.did)}</span>`}
                 ${r.via === "tailnet"
                   ? `<span class="viatag" title="Trusted because it is on your network. No pairing code was compared.">${icon("globe", "tinyicon")} network</span>`
                   : `<span class="viatag grant" title="Both ends compared a pairing code.">${icon("shield", "tinyicon")} paired</span>`}</div>
               ${(r.keys || []).length > 8
                 ? `<div class="sub">${(r.keys || []).length} keys \u2014 everything whose reach allows it</div>`
                 : `<div class="chips inline">${(r.keys || []).map((k) =>
-                    `<span class="chip mono">${esc(k)}</span>`).join("") || `<span class="sub">no keys</span>`}</div>`}</div>
+                    `<span class="chip mono">${esc(k)}</span>`).join("") || `<span class="sub">no keys</span>`}</div>`}
+              ${r.relay && r.active ? `<div class="sub">${r.live === false ? "these keys as they were" : "kept up to date"}${
+                r.sentAt ? ` \u00b7 last sent ${esc(String(r.sentAt).slice(0, 16).replace("T", " "))}` : ""}${
+                r.pulledAt ? ` \u00b7 last checked ${esc(String(r.pulledAt).slice(0, 16).replace("T", " "))}` : ""}${
+                r.expires ? ` \u00b7 until ${esc(String(r.expires).slice(0, 10))}` : ""}</div>` : ""}</div>
             ${r.lent && r.active
               ? (r.via === "tailnet"
                   ? `<button class="act" data-forget="${esc(r.host)}" ${busy ? "disabled" : ""}>Forget</button>`
-                  : `<button class="act" data-revoke="${esc(r.did)}" ${busy ? "disabled" : ""}>Revoke</button>`)
+                  : `<button class="act" data-revoke="${esc(r.did)}" ${busy ? "disabled" : ""}>${r.relay ? "Unlink" : "Revoke"}</button>`)
               : `<span class="tag ${r.active ? "on" : "off"}">${r.revoked ? "Revoked" : r.active ? "Active" : "Expired"}</span>`}
           </div>`).join("") || `<div class="empty">No other devices.</div>`}
         ${aside(`<p>A pairing names which keys may move, and it can be undone from
@@ -6062,6 +6101,7 @@ Use the copy button to put it on the clipboard."
   function paintSheet() {
     if (webLink.paint()) return;
     if (authorization.paint()) return;
+    if (addDevice.paint()) return;
     if (ghShouldShow()) { paintGithub(); return; }
     if (impShouldShow() || impView.done) { paintImport(); return; }
     paintAsk();
@@ -7537,6 +7577,8 @@ Use the copy button to put it on the clipboard."
       call("broker", { action: b.dataset.broker }));
     main.querySelectorAll("[data-revoke]").forEach((b) => b.onclick = () =>
       call("revoke", { did: b.dataset.revoke }));
+    main.querySelectorAll("[data-add-device]").forEach((b) => b.onclick = () => { void addDevice.start(); });
+    main.querySelectorAll("[data-resume-device]").forEach((b) => b.onclick = () => addDevice.resume());
     main.querySelectorAll("[data-forget]").forEach((b) => b.onclick = () =>
       call("forget_machine", { host: b.dataset.forget }));
     main.querySelectorAll("[data-reveal]").forEach((b) => b.onclick = async () => {
@@ -7729,6 +7771,8 @@ Use the copy button to put it on the clipboard."
 
   const authorization = window.createPassbookAuthorization({ invoke, container: ask, esc, repaint: paint });
   const webLink = window.createPassbookWebLink({ invoke, container: ask, esc, repaint: paint });
+  const addDevice = window.createPassbookAddDevice({ invoke, container: ask, esc, repaint: paint,
+                                                    onJoined: () => { void call("state"); } });
 
   async function boot() {
     if (!invoke) {
@@ -7767,6 +7811,11 @@ Use the copy button to put it on the clipboard."
       // which is how often the devices exchange keys by themselves.
       loadSync(true);
       setInterval(() => loadSync(true), 10 * 60 * 1000);
+      // Machines added with `passbook join` get their keys again if they changed here, and their
+      // grants renewed; quietly, and never by opening the vault (a shut one is skipped).
+      const refreshJoined = () => invoke("link_refresh").catch(() => {});
+      refreshJoined();
+      setInterval(refreshJoined, 10 * 60 * 1000);
       // Balances keeps a history, so a reading is taken now and each hour while the app is open (when
       // the page is on; off, this asks nothing of anyone).
       loadBalances(false, true);

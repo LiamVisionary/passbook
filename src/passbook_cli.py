@@ -7039,13 +7039,203 @@ def cmd_link_revoke(args: argparse.Namespace) -> int:
     module = _link_or_fail()
     if module is None:
         return 1
-    result = module.revoke(args.did)
+    # A machine that joined with `passbook join` is told through its mailbox,
+    # so it drops the keys itself; any other grant is revoked here only.
+    import passbook_join
+    result = passbook_join.unlink(args.did)
     print(result["detail"])
     if result["rotate"]:
         print("\nRotate these at the provider — revoking cannot unsend them:")
         for key in result["rotate"]:
             print(f"  {key}")
     return 0 if result["ok"] else 1
+
+
+def _join_writer(app: str):
+    """The CLI's own writer for keys arriving from another machine: seals into a sealed store."""
+    def write(values, overwrite):
+        result = _write_values(values, overwrite=overwrite, exact=True, app=app)
+        if result is None:
+            import passbook_join
+            raise passbook_join.JoinError("The keys could not be saved here. Open the vault with `passbook signin` and try again.")
+        return result
+    return write
+
+
+def _selection_from(args: argparse.Namespace) -> dict:
+    split = lambda items: [part for item in (items or []) for part in str(item).split(",") if part.strip()]
+    return {"all": bool(args.all), "keys": split(args.keys), "groups": split(args.group),
+            "projects": split(args.project), "umbrellas": split(args.umbrella)}
+
+
+def cmd_link_invite(args: argparse.Namespace) -> int:
+    """Run on the machine that HAS the keys: make an invite for `passbook join`."""
+    if _link_or_fail() is None:
+        return 1
+    import passbook_join
+    try:
+        made = passbook_join.create_invite(
+            _selection_from(args), caveats={"hosts": args.host, "commands": args.command, "apps": args.app},
+            days=args.days, live=not args.fixed, workspace=args.workspace)
+    except passbook_join.JoinError as error:
+        return _fail(str(error))
+    if args.json:
+        print(json.dumps(made, indent=2))
+        return 0 if args.no_wait else _wait_for_join(made["id"], quiet=True)
+    print(f"It will get {made['describe']}: {len(made['keys'])} key{'s' if len(made['keys']) != 1 else ''} now"
+          + (", and whatever joins that later." if not args.fixed else "."))
+    if made["staying"]:
+        print(f"Staying here (reach is not lendable): {', '.join(made['staying'])}")
+    print("\nOn the machine you are adding, run:\n")
+    print(f"    {made['command']}\n")
+    print("Anyone with that line can join for the next 15 minutes, once. Paste it only where you mean to.")
+    if args.no_wait:
+        print("\nThen run `passbook link complete` here, or keep PassBook open, to send its keys.")
+        return 0
+    print("\nWaiting for it to join… (Ctrl-C to stop; the invite stays open)")
+    return _wait_for_join(made["id"])
+
+
+def _wait_for_join(invite_id: str, *, quiet: bool = False) -> int:
+    import passbook_join
+    deadline = time.monotonic() + 15 * 60
+    try:
+        while time.monotonic() < deadline:
+            rows = passbook_join.complete_invites(invite_id=invite_id)
+            row = next((item for item in rows if item["id"] == invite_id), {"status": "expired"})
+            if row["status"] == "joined":
+                if quiet:
+                    print(json.dumps(row, indent=2))
+                else:
+                    print(f"\n{row['label']} joined. It has {len(row['keys'])} key(s) and stays current while this machine's vault is open.")
+                    print(f"its code: {row['fingerprint']}")
+                return 0
+            if row["status"] in ("expired", "failed"):
+                return _fail(row.get("detail") or "The invite ran out before a machine joined.")
+            time.sleep(passbook_join.POLL_SECONDS)
+    except KeyboardInterrupt:
+        print("\nStopped waiting. Run `passbook link complete` once it has joined.", file=sys.stderr)
+        return 1
+    return _fail("The invite ran out before a machine joined.")
+
+
+def cmd_link_invites(args: argparse.Namespace) -> int:
+    import passbook_join
+    rows = passbook_join.invites()
+    if args.json:
+        print(json.dumps(rows, indent=2))
+        return 0
+    for row in rows:
+        print(f"{row['id']}  until {row['expires']}  {passbook_join.describe_selection(row['selection'])}")
+    if not rows:
+        print("no open invites")
+    return 0
+
+
+def cmd_link_complete(args: argparse.Namespace) -> int:
+    if _link_or_fail() is None:
+        return 1
+    import passbook_join
+    rows = passbook_join.complete_invites()
+    if args.json:
+        print(json.dumps(rows, indent=2))
+        return 0
+    for row in rows:
+        detail = f"{row['label']}, {len(row['keys'])} keys" if row["status"] == "joined" else row.get("detail", "")
+        print(f"{row['id']}  {row['status']}  {detail}".rstrip())
+    if not rows:
+        print("no open invites")
+    return 0
+
+
+def cmd_link_refresh(args: argparse.Namespace) -> int:
+    if _link_or_fail() is None:
+        return 1
+    import passbook_join
+    done = passbook_join.refresh(force=args.force)
+    done["invites"] = passbook_join.complete_invites()
+    if args.json:
+        print(json.dumps(done, indent=2))
+        return 0
+    print(f"sent: {', '.join(done['sent']) or 'none'}; already current: {', '.join(done['current']) or 'none'}; "
+          f"skipped (vault shut): {', '.join(done['skipped']) or 'none'}"
+          + (f"; unlinked there: {', '.join(done['unlinked'])}" if done["unlinked"] else ""))
+    return 0
+
+
+def cmd_link_pull(args: argparse.Namespace) -> int:
+    if _link_or_fail() is None:
+        return 1
+    import passbook_join
+    if args.schedule or args.unschedule:
+        result = passbook_join.schedule(install=bool(args.schedule))
+        print(result.get("detail") or (f"Checking for new keys every ten minutes ({result.get('where')})."
+                                       if result.get("installed") else "No longer checking on a schedule."))
+        return 0 if result["ok"] else 1
+    try:
+        result = passbook_join.pull(write=_join_writer(caller("passbook-link", args)))
+    except passbook_join.JoinError as error:
+        return 0 if args.quiet else _fail(str(error))
+    if args.json:
+        print(json.dumps(result, indent=2))
+        return 0
+    if args.quiet:
+        return 0
+    for row in result["links"]:
+        extra = ""
+        if row["status"] == "updated":
+            extra = f"{len(row['keys'])} keys" + (f", removed {', '.join(row['removed'])}" if row.get("removed") else "")
+        elif row.get("removed"):
+            extra = f"removed {', '.join(row['removed'])}"
+        elif row.get("detail"):
+            extra = row["detail"]
+        print(f"{row['from']}  {row['status']}  {extra}".rstrip())
+    if not result["links"]:
+        print("This machine has not joined another PassBook. Run `passbook join <invite>`.")
+    return 0
+
+
+def cmd_link_cancel(args: argparse.Namespace) -> int:
+    import passbook_join
+    if not passbook_join.cancel_invite(args.id):
+        return _fail("No open invite has that id.")
+    print("Closed. Nobody can join with it now.")
+    return 0
+
+
+def cmd_link_choices(args: argparse.Namespace) -> int:
+    import passbook_join
+    print(json.dumps(passbook_join.choices(), indent=2))
+    return 0
+
+
+def cmd_join(args: argparse.Namespace) -> int:
+    """Run on the machine you are adding: join an invite made in PassBook on another machine."""
+    if _link_or_fail() is None:
+        return 1
+    import passbook_join
+    print("Joining… keep PassBook open on the other machine.", file=sys.stderr)
+    try:
+        result = passbook_join.join(args.invite, label=args.label, wait_seconds=args.wait,
+                                    write=_join_writer(caller("passbook-link", args)))
+    except passbook_join.link.LinkError as error:
+        return _fail(str(error))
+    except passbook.ContainerisedHomeError as error:
+        return _fail(str(error))
+    if args.json:
+        print(json.dumps(result, indent=2))
+    else:
+        print(f"Joined. {len(result['keys'])} key(s) from the machine whose code is {result['from']}:")
+        for name in result["keys"]:
+            print(f"  {name}")
+        if result["kept"]:
+            print(f"Already set here, left as they were: {', '.join(result['kept'])}")
+    if not args.no_schedule:
+        planned = passbook_join.schedule(install=True)
+        if not args.json:
+            print("\n" + (planned.get("detail") or
+                          "This machine checks for changes every ten minutes. Stop with `passbook link pull --unschedule`."))
+    return 0
 
 
 def _broker():
@@ -9349,6 +9539,54 @@ def build_parser() -> argparse.ArgumentParser:
     revoke = link_subs.add_parser("revoke", help="stop lending to a machine")
     revoke.add_argument("did")
     revoke.set_defaults(json=False, func=cmd_link_revoke)
+
+    invite = link_subs.add_parser("invite", help="make an invite another machine joins with `passbook join`")
+    invite.add_argument("--all", action="store_true", help="everything whose reach lets it leave this machine")
+    invite.add_argument("--keys", nargs="+", default=[], metavar="KEY", help="these keys")
+    invite.add_argument("--group", nargs="+", default=[], metavar="GROUP", help="every key in these groups")
+    invite.add_argument("--project", nargs="+", default=[], metavar="PROJECT", help="every key limited to these projects")
+    invite.add_argument("--umbrella", nargs="+", default=[], metavar="UMBRELLA", help="every key under these umbrellas")
+    invite.add_argument("--days", type=int, default=30, help="how long each grant lasts; a live link renews")
+    invite.add_argument("--fixed", action="store_true",
+                        help="these keys as they are now, ending on that date; not kept current")
+    invite.add_argument("--host", nargs="+", default=[], metavar="HOST", help="there, the keys may only reach these hosts")
+    invite.add_argument("--command", nargs="+", default=[], metavar="CMD", help="there, only these commands receive them")
+    invite.add_argument("--app", nargs="+", default=[], metavar="APP", help="there, only these apps may read them")
+    invite.add_argument("--workspace", default="", help="lend from this workspace")
+    invite.add_argument("--no-wait", dest="no_wait", action="store_true", help="print the invite and return")
+    invite.add_argument("--json", action="store_true")
+    invite.set_defaults(func=cmd_link_invite)
+
+    invites_cmd = link_subs.add_parser("invites", help="invites that have not been used yet")
+    invites_cmd.add_argument("--json", action="store_true")
+    invites_cmd.set_defaults(func=cmd_link_invites)
+    complete = link_subs.add_parser("complete", help="send keys to any machine that has joined an invite")
+    complete.add_argument("--json", action="store_true")
+    complete.set_defaults(func=cmd_link_complete)
+    refresh_cmd = link_subs.add_parser("refresh", help="send joined machines their keys again if they changed")
+    refresh_cmd.add_argument("--force", action="store_true", help="send even if nothing changed")
+    refresh_cmd.add_argument("--json", action="store_true")
+    refresh_cmd.set_defaults(func=cmd_link_refresh)
+    pull_cmd = link_subs.add_parser("pull", help="on a joined machine: collect new keys, drop expired ones")
+    pull_cmd.add_argument("--quiet", action="store_true", help="say nothing; for the schedule")
+    pull_cmd.add_argument("--json", action="store_true")
+    pull_cmd.add_argument("--schedule", action="store_true", help="check every ten minutes from now on")
+    pull_cmd.add_argument("--unschedule", action="store_true", help="stop checking on a schedule")
+    pull_cmd.set_defaults(func=cmd_link_pull)
+    cancel_cmd = link_subs.add_parser("cancel", help="close an invite nobody has used")
+    cancel_cmd.add_argument("id")
+    cancel_cmd.set_defaults(json=False, func=cmd_link_cancel)
+    choices_cmd = link_subs.add_parser("choices", help="what an invite can offer: keys, groups, projects, umbrellas")
+    choices_cmd.set_defaults(json=True, func=cmd_link_choices)
+
+    join_cmd = subs.add_parser("join", help="add this machine to PassBook on another machine, with its invite")
+    join_cmd.add_argument("invite", help="the pbj1.… invite PassBook showed on the other machine")
+    join_cmd.add_argument("--label", default="", help="how the other machine will name this one (default: host name)")
+    join_cmd.add_argument("--wait", type=float, default=900, help="seconds to wait for the other machine")
+    join_cmd.add_argument("--no-schedule", dest="no_schedule", action="store_true",
+                          help="do not check for changes every ten minutes")
+    join_cmd.add_argument("--json", action="store_true")
+    join_cmd.set_defaults(func=cmd_join)
 
     history_cmd = subs.add_parser("history", help="what the record holds about one key")
     history_cmd.add_argument("key")

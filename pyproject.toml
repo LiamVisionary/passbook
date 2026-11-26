@@ -62,6 +62,7 @@ passbook-harden = "passbook_cli:main"
 passbook-history = "passbook_cli:main"
 passbook-install = "passbook_cli:main"
 passbook-integration = "passbook_cli:main"
+passbook-join = "passbook_cli:main"
 passbook-link = "passbook_cli:main"
 passbook-mcp = "passbook_cli:main"
 passbook-oauth = "passbook_cli:main"
@@ -150,6 +151,7 @@ py-modules = [
     "passbook_harden",
     "passbook_identity",
     "passbook_integrations",
+    "passbook_join",
     "passbook_keystore",
     "passbook_link",
     "passbook_web_link",

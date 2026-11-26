@@ -854,6 +854,37 @@ already had.
 A second device borrows **named keys** from the first, for a stated period,
 after a human has confirmed a pairing code. Not the store. Named keys.
 
+### Adding a computer: one line
+
+On the Devices page press **Add a device**, choose what it gets (everything that
+may leave, groups, projects, umbrellas or single keys, with duration and limits
+under Advanced), and run the line it shows on the new machine:
+
+```bash
+passbook join pbj1.…
+```
+
+From a terminal on the machine with the keys, the same invite:
+
+```bash
+passbook link invite --group AI --host api.openai.com
+```
+
+The invite works once, for 15 minutes, and whoever has it can join, so paste it
+only into that machine. In exchange nobody compares codes: the joining machine
+proves it holds the invite's secret, which the relay never sees. Keys stay
+current from then on. The machine with the keys re-sends them when they change
+(`passbook link refresh`, run by the window every ten minutes), and the joined
+machine collects them every ten minutes (`passbook link pull`, scheduled by
+`join`). Unlinking, or a grant running out, removes the keys from a machine that
+is still checking in, except any it changed itself.
+
+Only keys whose reach is `tailnet` leave; the rest are listed as staying. A
+spending limit is not something PassBook enforces on a key: set that at the
+provider.
+
+### By hand, with no relay
+
 ![Every device that holds this store](docs/app-devices.png)
 
 ```bash

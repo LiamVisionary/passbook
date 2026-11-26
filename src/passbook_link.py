@@ -88,6 +88,9 @@ ENVELOPE_PREFIX = "passbook-env:v1:"
 
 PAIRING_TTL_SECONDS = 600
 DEFAULT_GRANT_DAYS = 30
+# What a grant may say about how its keys are used where they land. Anything
+# else in a caller's caveats is dropped rather than signed into the grant.
+CAVEATS = ("hosts", "commands", "apps")
 
 
 class LinkError(RuntimeError):
@@ -375,6 +378,7 @@ def grant(
     root: Path | None = None,
     stores: Iterable[str | Path] | None = None,
     resolve_values: Callable[[list[str]], Mapping[str, str]] | None = None,
+    caveats: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run on the OWNING machine. Approve a device for named keys and seal them.
 
@@ -389,6 +393,11 @@ def grant(
     A managed host may supply an already-authorized, workspace-scoped resolver.
     It remains responsible for its key policy; this never skips peer identity
     verification or falls back to a legacy read when that resolver refuses.
+
+    `caveats` narrows what the receiving machine may do with the keys (which
+    hosts and commands they may reach, which apps may read them). They sit in
+    the signed half beside the key list, so whoever carries the envelope cannot
+    strip them, and a receiver that understands them applies them on arrival.
     """
     crypto = _require_crypto()
     serialization, x25519, AESGCM = crypto.serialization, crypto.x25519, crypto.AESGCM
@@ -441,7 +450,8 @@ def grant(
         "att": [{
             "with": f"passbook://{workspace or passbook.workspace() or 'main'}",
             "can": "env/read",
-            "nb": {"keys": wanted},
+            "nb": {**{name: list(value) for name, value in (caveats or {}).items()
+                      if name in CAVEATS and value}, "keys": wanted},
         }],
         "nbf": _stamp(issued),
         "exp": _stamp(expires),
@@ -757,6 +767,11 @@ def grants(*, root: Path | None = None) -> dict[str, Any]:
             "expires": entry.get("exp", ""),
             "revoked": bool(entry.get("revoked")),
             "active": not expired and not entry.get("revoked"),
+            # Set by a machine that joined with `passbook join` (passbook_join):
+            # how it is named, what it was given and whether it stays current.
+            **{name: entry[name] for name in ("label", "live", "selection", "caveats", "sentAt",
+                                              "pulledAt", "unlinkedAt", "relay")
+               if entry.get(name) not in (None, "", [], {})},
         }
 
     def shape_tailnet(entry: Mapping[str, Any]) -> dict[str, Any]:

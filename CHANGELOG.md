@@ -4,6 +4,34 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+### Devices: add a computer with one line, choose what it gets, and keep it current
+
+Liam, 2026-11-26: "does passbook have easy pairing to other machines? say for example, a user wants to create a bot
+machine". It did not. Linking was three terminal steps on two machines, two strings carried by hand and a code typed
+twice, and the keys that arrived were a snapshot that never changed and never left, whatever the grant's end date said.
+
+- **Add a device** on the Devices page: choose what the machine gets (Everything, Groups, Projects and umbrellas,
+  or single Keys; a key whose reach is not lendable is shown as staying here), then run the one line it shows on the
+  new machine: `passbook join pbj1.…`. The window answers the join itself. From a terminal: `passbook link invite
+  --group AI` (or `--keys`, `--project`, `--umbrella`, `--all`) on the machine with the keys.
+- **Advanced** sets how long a grant lasts, whether it stays up to date or is these keys as they are now, and the
+  limits applied where the keys land: which hosts they may reach, which commands receive them, which apps may read
+  them. The limits are signed into the grant, so whatever carries it cannot strip them. A spending limit is not
+  offered: PassBook cannot enforce one on a key, and the sheet says to set it at the provider.
+- **Kept current.** The window re-seals a joined machine's keys every ten minutes when they changed or its grant is
+  within ten days of ending (`passbook link refresh`), and never opens the vault to do it. The joined machine checks
+  every ten minutes (`passbook link pull`, scheduled by `join` with launchd, a systemd user timer or a Windows task;
+  `--no-schedule` to skip, `passbook link pull --unschedule` to stop).
+- **Unlinking and expiry now take keys back** from a machine that is still checking in: it removes each key it was
+  sent, unless that key was changed there since. Unlinking still lists the keys to rotate at the provider, since a
+  machine that stopped checking in keeps what it had.
+- **What the relay sees.** The invite's secret never reaches it: the joining machine proves it holds the invite with
+  an HMAC that this machine checks, which is what the code comparison used to do. Every relay call is signed by the
+  machine making it, envelopes stay sealed to the receiving machine, and an older envelope cannot be replayed to roll
+  a machine's keys back. The relay routes are new (hivemindos-passbook-relay, `/api/passbook/machine-invites` and
+  `/api/passbook/machines/:did`) and need no HivemindOS account.
+- `passbook link approve` / `accept` are unchanged and still work with no relay at all.
+
 ## [1.10.27] — 2026-11-26
 
 ### Balances: a bar for the API credits a Claude plan adds each month

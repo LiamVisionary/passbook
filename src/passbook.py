@@ -766,7 +766,13 @@ def store_lock(path: Path):
         if os.name == "nt":
             import msvcrt
             if os.fstat(fd).st_size == 0:
-                os.write(fd, b"\0")
+                try:
+                    os.write(fd, b"\0")
+                except PermissionError:
+                    # Two writers found a new, empty lock file at the same moment. The other one
+                    # wrote the byte and holds it, and Windows refuses a write into a held range.
+                    # The byte is there, which is all this was for: wait for it like anyone else.
+                    pass
             os.lseek(fd, 0, os.SEEK_SET)
             msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
         else:

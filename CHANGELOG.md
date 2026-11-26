@@ -56,6 +56,10 @@ stores and forwards and not against one changed to serve a different page; and n
 - **A relay that was busy no longer ends an invite.** `passbook link complete` read any answer but 200 as
   "expired" and threw the invite away, a rate limit included. Only a 404 or the relay saying so ends one now.
 - A link refused at the relay's limit is no longer recorded as lent: nothing was delivered.
+- **Windows: several writers creating a new store at once could fail with "Permission denied".** Each found the
+  new lock file empty and tried to write its first byte; the second one's write landed on a byte the first already
+  held. It waits for the lock now. Found by `test_concurrent_writers_keep_unrelated_keys_and_lock_is_per_store`
+  failing once on Windows; it only ever happened on a store's very first writes.
 
 
 ## [1.10.28] — 2026-11-26

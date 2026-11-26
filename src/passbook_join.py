@@ -75,7 +75,15 @@ SEEN_NONCES = 200
 
 
 class JoinError(link.LinkError):
-    """Something about adding a machine went wrong. The message is safe to show a person."""
+    """Something about adding a machine went wrong. The message is safe to show a person.
+
+    `code` is the relay's own word for a refusal that has a way out (`machine_limit`, `seat_limit`,
+    `not_included`), so the window can put that way out beside the sentence. "" otherwise.
+    """
+
+    def __init__(self, message: str = "", code: str = "") -> None:
+        super().__init__(message)
+        self.code = code
 
 
 # ── small pieces ────────────────────────────────────────────────────────────
@@ -136,7 +144,8 @@ def _call(relay: str, method: str, path: str, body: Mapping[str, Any] | None, me
                                      })
     try:
         with (opener or urllib.request.urlopen)(request, timeout=TIMEOUT) as response:
-            return response.status, json.loads(response.read(1_000_000) or b"{}")
+            # Room for the largest answer a relay gives: a backup of up to a megabyte, in JSON.
+            return response.status, json.loads(response.read(2_500_000) or b"{}")
     except urllib.error.HTTPError as error:
         try:
             return error.code, json.loads(error.read(100_000) or b"{}")
@@ -173,10 +182,11 @@ def normalise_selection(selection: Mapping[str, Any] | None) -> dict[str, Any]:
 def normalise_caveats(caveats: Mapping[str, Any] | None) -> dict[str, list[str]]:
     raw = dict(caveats or {})
     out: dict[str, list[str]] = {}
-    for name in link.CAVEATS:
+    for name in (*link.CAVEATS, *link.TEAM_CAVEATS):
         items = raw.get(name) or []
         if isinstance(items, str):
-            items = [part for part in re.split(r"[,\s]+", items)]
+            # A person's name is one thing, spaces and all; hosts and commands are lists.
+            items = [items] if name in link.TEAM_CAVEATS else [part for part in re.split(r"[,\s]+", items)]
         cleaned = sorted({str(item).strip().lower() if name == "hosts" else str(item).strip()
                           for item in items if str(item).strip()})
         if cleaned:
@@ -278,8 +288,13 @@ def _values_for(names: list[str], workspace: str, resolve_values: Callable[[list
 
 def create_invite(selection: Mapping[str, Any], *, caveats: Mapping[str, Any] | None = None,
                   days: int = DEFAULT_DAYS, live: bool = True, workspace: str = "", label: str = "",
-                  relay: str = "", root: Path | None = None, opener: Opener | None = None) -> dict[str, Any]:
+                  relay: str = "", root: Path | None = None, opener: Opener | None = None,
+                  kind: str = "machine") -> dict[str, Any]:
     """Make an invite for a machine to join with `passbook join`.
+
+    `kind` is "machine" for one of the owner's own computers and "member" for another person
+    (passbook_team.py). The relay counts the two apart, and refuses a member invite it will not
+    carry before any line is shown, so nobody is sent one that cannot work.
 
     The selection is checked now, so a person learns at once that it means no keys at all, or that
     some of what they picked stays on this machine. It is resolved again when the machine joins, and
@@ -296,10 +311,12 @@ def create_invite(selection: Mapping[str, Any], *, caveats: Mapping[str, Any] | 
         raise JoinError("Choose at least one key, group or project for the new machine.")
     relay = relay_url(relay)
     me = link.identity(root=root)
-    status, answer = _call(relay, "POST", "/api/passbook/machine-invites", {"label": label or machine_label()}, me,
-                           opener=opener)
+    kind = "member" if kind == "member" else "machine"
+    status, answer = _call(relay, "POST", "/api/passbook/machine-invites",
+                           {"label": label or machine_label(), "kind": kind}, me, opener=opener)
     if status != 200 or not answer.get("ok") or not INVITE_ID.fullmatch(str(answer.get("inviteId") or "")):
-        raise JoinError(str(answer.get("error") or "The relay did not make an invite. Try again in a moment."))
+        raise JoinError(str(answer.get("error") or "The relay did not make an invite. Try again in a moment."),
+                        str(answer.get("code") or ""))
     secret = secrets.token_bytes(16)
     code = me["fingerprint"].replace("-", "")
     import passbook_web_link as web_link
@@ -313,12 +330,13 @@ def create_invite(selection: Mapping[str, Any], *, caveats: Mapping[str, Any] | 
         "workspace": workspace or passbook.workspace(), "created": link._stamp(link._now()),
         # A fixed grant is the keys as they are now, not whatever the selection means later.
         "names": [] if live else resolved["keys"],
+        "kind": kind,
     })
     state["invites"] = pending
     link._write_grants(state, root)
     return {"ok": True, "invite": invite, "command": f"passbook join {invite}", "id": answer["inviteId"],
             "expires": answer.get("expiresAt", ""), "keys": resolved["keys"], "staying": resolved["staying"],
-            "describe": describe_selection(chosen)}
+            "describe": describe_selection(chosen), "kind": kind}
 
 
 def invites(*, root: Path | None = None) -> list[dict[str, Any]]:
@@ -349,6 +367,7 @@ def _seal_and_record(peer_token: str, peer_fingerprint: str, names: list[str], v
             item.update({"label": entry.get("label", ""), "relay": entry["relay"], "live": bool(entry.get("live", True)),
                          "selection": entry.get("selection", {}), "caveats": entry.get("caveats", {}),
                          "days": days, "names": entry.get("names", []), "seal": entry["seal"],
+                         "kind": entry.get("kind", "machine"),
                          "digest": _digest_values(values), "sentAt": link._stamp(link._now())})
     link._write_grants(state, root)
     return sealed
@@ -382,8 +401,15 @@ def complete_invites(*, invite_id: str = "", root: Path | None = None, opener: O
             rows.append({"id": item["id"], "status": "waiting", "detail": str(error)})
             keep.append(item)
             continue
-        if status != 200 or seen.get("status") == "expired":
+        if status == 404 or seen.get("status") == "expired":
             rows.append({"id": item["id"], "status": "expired"})
+            continue
+        if status != 200:
+            # A relay that is busy or briefly wrong has not ended the invite. Calling that "expired"
+            # threw away an invite somebody was in the middle of using.
+            rows.append({"id": item["id"], "status": "waiting",
+                         "detail": str(seen.get("error") or "The relay did not answer just now.")})
+            keep.append(item)
             continue
         if seen.get("status") != "joined":
             rows.append({"id": item["id"], "status": "waiting"})
@@ -396,6 +422,7 @@ def complete_invites(*, invite_id: str = "", root: Path | None = None, opener: O
             rows.append({"id": item["id"], "status": "failed",
                          "detail": "A machine without this invite's secret tried to join, so it was turned away. Make a new invite."})
             continue
+        peer: dict[str, Any] = {}
         try:
             peer = link.read_pairing_token(token)
             names = list(item.get("names") or []) or resolve_selection(item.get("selection", {}))["keys"]
@@ -409,13 +436,21 @@ def complete_invites(*, invite_id: str = "", root: Path | None = None, opener: O
             status, answer = _call(item["relay"], "POST", path + "/answer", {"envelope": sealed["envelope"]}, me,
                                    opener=opener)
             if status != 200 or not answer.get("ok"):
-                raise JoinError(str(answer.get("error") or "The relay did not take the answer."))
+                raise JoinError(str(answer.get("error") or "The relay did not take the answer."),
+                                str(answer.get("code") or ""))
         except link.LinkError as error:
-            rows.append({"id": item["id"], "status": "failed", "detail": str(error)})
+            row = {"id": item["id"], "status": "failed", "detail": str(error)}
+            if getattr(error, "code", ""):
+                row["code"] = error.code
+                # Refused by the relay's limit, after the keys were sealed and recorded as lent.
+                # Nothing was delivered, so the record must not say this machine holds them.
+                _forget_issued(str(peer.get("did") or ""), root)
+            rows.append(row)
             keep.append(item)
             continue
         rows.append({"id": item["id"], "status": "joined", "label": entry["label"], "did": peer["did"],
-                     "fingerprint": peer["fingerprint"], "keys": names, "expires": sealed["expires"]})
+                     "fingerprint": peer["fingerprint"], "keys": names, "expires": sealed["expires"],
+                     "kind": item.get("kind", "machine")})
     # Re-read before writing: an invite made while this ran must survive it.
     kept = {item["id"] for item in keep}
     finished = {row["id"] for row in rows} - kept
@@ -423,6 +458,17 @@ def complete_invites(*, invite_id: str = "", root: Path | None = None, opener: O
     state["invites"] = [item for item in state.get("invites", []) if item.get("id") not in finished]
     link._write_grants(state, root)
     return rows
+
+
+def _forget_issued(did: str, root: Path | None) -> None:
+    """Drop the record of a grant whose envelope the relay refused to carry. It was never delivered."""
+    if not did:
+        return
+    state = link._read_grants(root)
+    kept = [item for item in state["issued"] if not (item.get("aud") == did and not item.get("revoked") and item.get("sentAt"))]
+    if len(kept) != len(state["issued"]):
+        state["issued"] = kept
+        link._write_grants(state, root)
 
 
 def _peer_token(entry: Mapping[str, Any]) -> str:
@@ -549,10 +595,17 @@ def _apply_caveats(names: Iterable[str], caveats: Mapping[str, Any]) -> None:
         return
     import passbook_access as access
     policy = access.read_policy()
+    use_only = "use" in (caveats.get("role") or [])
     for name in names:
         if caveats.get("hosts") or caveats.get("commands"):
             access.set_guard(name, policy, commands=caveats.get("commands") or None,
                              destinations=caveats.get("hosts") or None, replace=True)
+        elif use_only:
+            # Shared "to use": a guard with nothing in it. The key goes to commands this machine's
+            # broker starts and is never printed or revealed here. That keeps it off this person's
+            # screen and out of their agent's transcript. It does not stop somebody who sets out to
+            # take it, and the owner's side says so (passbook_team.py).
+            access.set_guard(name, policy)
         if caveats.get("apps"):
             access.set_audience(name, "include", caveats["apps"], policy)
     access.write_policy(policy)
@@ -575,7 +628,7 @@ def _land(body: Mapping[str, Any], values: Mapping[str, str], link_row: Mapping[
     delivered = {name: _raw_digest(raw[name]) for name in writable if name in raw}
     caveats = {}
     for capability in body.get("att", []):
-        caveats.update({name: capability.get("nb", {}).get(name) for name in link.CAVEATS
+        caveats.update({name: capability.get("nb", {}).get(name) for name in (*link.CAVEATS, *link.TEAM_CAVEATS)
                         if capability.get("nb", {}).get(name)})
     _apply_caveats(writable, caveats)
     state = link._read_grants(root)
@@ -588,6 +641,10 @@ def _land(body: Mapping[str, Any], values: Mapping[str, str], link_row: Mapping[
         "at": link._stamp(link._now()), "fingerprint": link_row["fingerprint"], "relay": link_row["relay"],
         "label": link_row.get("label", ""), "delivered": delivered, "caveats": caveats,
         "pulledAt": link._stamp(link._now()),
+        # The lending machine's sealing key, from the signed envelope. A member seals its reports
+        # of key use to it (passbook_team.py).
+        "issSeal": link_row.get("issSeal") or previous.get("issSeal", ""),
+        "reported": previous.get("reported", ""), "reportedHashes": previous.get("reportedHashes", []),
     })
     link._write_grants(state, root)
     link._record("link", sorted(writable), granted=True, reason=f"joined from {link_row['fingerprint']}",
@@ -628,7 +685,8 @@ def join(invite: str, *, label: str = "", root: Path | None = None, opener: Open
             on_wait()
         sleep(poll_seconds)
     body, values = link._open_accepted(answer["envelope"], confirm_fingerprint=parsed["fingerprint"], root=root)
-    row = {"fingerprint": parsed["fingerprint"], "relay": parsed["relay"], "label": "", "delivered": {}}
+    row = {"fingerprint": parsed["fingerprint"], "relay": parsed["relay"], "label": "", "delivered": {},
+           "issSeal": _issuer_seal(answer["envelope"])}
     state = link._read_grants(root)
     known = next((item for item in state["accepted"] if item.get("iss") == body["iss"]), None)
     if known:
@@ -673,7 +731,8 @@ def pull(*, root: Path | None = None, opener: Opener | None = None, write: Write
                 if body["iss"] != item["iss"] or older or body["nonce"] in (item.get("nonces") or []):
                     rows.append({"from": label, "status": "refused", "detail": "An older or foreign envelope was ignored."})
                 else:
-                    landed = _land(body, values, item, write=write, remove=remove, root=root)
+                    landed = _land(body, values, {**item, "issSeal": _issuer_seal(envelope) or item.get("issSeal", "")},
+                                   write=write, remove=remove, root=root)
                     rows.append({"from": label, "status": "updated", **landed})
                     continue
         if item.get("exp") and link._parse_stamp(item["exp"]) <= link._now():
@@ -684,6 +743,16 @@ def pull(*, root: Path | None = None, opener: Opener | None = None, write: Write
         if not any(row["from"] == label for row in rows):
             rows.append({"from": label, "status": "current", "removed": []})
     return {"ok": True, "links": rows}
+
+
+def _issuer_seal(envelope: str) -> str:
+    """The sealing key the issuer put in its signed envelope. Read only after the envelope verified."""
+    try:
+        outer = json.loads(_unb64(envelope[len(link.ENVELOPE_PREFIX):]))
+        seal = str(outer["iss_seal"])
+        return seal if len(_unb64(seal)) == 32 else ""
+    except (ValueError, KeyError, TypeError):
+        return ""
 
 
 def _envelope_nonce(envelope: str) -> str:

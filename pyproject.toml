@@ -63,6 +63,10 @@ passbook-history = "passbook_cli:main"
 passbook-install = "passbook_cli:main"
 passbook-integration = "passbook_cli:main"
 passbook-join = "passbook_cli:main"
+passbook-plan = "passbook_cli:main"
+passbook-backup = "passbook_cli:main"
+passbook-phone = "passbook_cli:main"
+passbook-team = "passbook_cli:main"
 passbook-link = "passbook_cli:main"
 passbook-mcp = "passbook_cli:main"
 passbook-oauth = "passbook_cli:main"
@@ -137,6 +141,10 @@ py-modules = [
     "passbook_accounts",
     "passbook_alerts",
     "passbook_backup",
+    "passbook_cloud_backup",
+    "passbook_phone",
+    "passbook_plan",
+    "passbook_team",
     "passbook_balances",
     "passbook_insights",
     "passbook_logos",

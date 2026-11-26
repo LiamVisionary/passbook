@@ -91,6 +91,10 @@ DEFAULT_GRANT_DAYS = 30
 # What a grant may say about how its keys are used where they land. Anything
 # else in a caller's caveats is dropped rather than signed into the grant.
 CAVEATS = ("hosts", "commands", "apps")
+# Carried in the signed half the same way, for a grant to another person rather than to one of the
+# owner's own machines (passbook_team.py): `role` is "use" or "read", `member` is the name the owner
+# gave them. Kept apart from CAVEATS because those three are offered for any link and these are not.
+TEAM_CAVEATS = ("role", "member")
 
 
 class LinkError(RuntimeError):
@@ -451,7 +455,7 @@ def grant(
             "with": f"passbook://{workspace or passbook.workspace() or 'main'}",
             "can": "env/read",
             "nb": {**{name: list(value) for name, value in (caveats or {}).items()
-                      if name in CAVEATS and value}, "keys": wanted},
+                      if name in (*CAVEATS, *TEAM_CAVEATS) and value}, "keys": wanted},
         }],
         "nbf": _stamp(issued),
         "exp": _stamp(expires),

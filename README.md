@@ -46,6 +46,7 @@ you see here, you can do from a terminal.
 - [Balances](#balances)
 - [Fleet replication](#fleet-replication)
 - [Devices](#devices)
+- [The relay, and plans](#the-relay-and-plans)
 - [Sign-ins that stay alive](#sign-ins-that-stay-alive)
 - [Add to PassBook](#add-to-passbook)
 - [Agents](#agents)
@@ -928,6 +929,136 @@ key arrives already scoped rather than machine wide.
 
 ---
 
+## The relay, and plans
+
+Everything above this line runs on your machine and is free. It stays that way: the store,
+encryption, sign-in, the broker, scoping, guards, the record. None of it can be charged for and
+none of it calls home.
+
+One part of PassBook runs on somebody else's computer. When two things cannot reach each other (a
+new machine and the one with the keys, a phone and your desk), a small relay carries what they send.
+Its source is in [`relay/`](relay/), about a thousand lines, and you can run your own:
+
+```bash
+export PASSBOOK_WEB_RELAYS=https://passbook-relay.<you>.workers.dev
+export PASSBOOK_MACHINE_RELAY=https://passbook-relay.<you>.workers.dev
+```
+
+A relay you run has no plans and no billing. Everything it can do is on for everyone it serves.
+
+The relay PassBook uses by default costs money to run, so it has plans. The limit is on what the
+relay carries, never on what PassBook does on your machine:
+
+| | Free | PassBook Sync | PassBook Teams |
+|---|---|---|---|
+| | $0 | $5 a month, or $48 a year | $8 a person a month, you included |
+| Computers linked through the relay | 3 | 50 | 50 each |
+| Linking by hand, or through your own relay | no limit | no limit | no limit |
+| An encrypted backup kept on the relay | | yes | yes |
+| Answer a request from your phone | | yes | yes |
+| Share keys with other people | | | yes |
+| Account needed | none | none | none |
+
+```bash
+passbook plan                       # what you have, and how much of it is used
+passbook plan subscribe sync        # opens Stripe's checkout in your browser
+passbook plan subscribe sync --yearly
+passbook plan subscribe teams --seats 3
+passbook plan seats 5
+passbook plan cancel                # stops the renewal; what you paid for runs to its end
+passbook plan billing               # your card and invoices, on Stripe's page
+```
+
+Four things worth knowing before you pay for anything.
+
+- **A plan belongs to this machine's key, not to an account.** PassBook never had an account and
+  buying something is not a reason to make one. The relay starts a checkout for this machine's key,
+  you pay Stripe, and the relay asks Stripe whether it was paid.
+- **A machine you link is covered by your plan.** Your second laptop does not need its own.
+- **Nothing is taken away when a plan ends.** A limit is checked when something is added. A machine
+  already linked keeps getting its keys and a backup already stored can always be read back. A
+  card that fails gets three days before anything changes, and what changes is only that you
+  cannot add more.
+- **If you use HivemindOS,** a paid HivemindOS plan includes Sync for the PassBook its browser is
+  linked to. There is nothing to do.
+
+### A backup kept on the relay
+
+`passbook export` writes an encrypted file and then the file is your problem. This keeps the same
+text on the relay instead.
+
+```bash
+passbook backup store               # asks for a passphrase, twice
+passbook backup list
+passbook backup restore pbb1.…      # on any machine, with the recovery code
+passbook backup restore pbb1.… --dry-run
+passbook backup remove <id>
+```
+
+What leaves your machine is exactly what `passbook export` makes: scrypt over your passphrase,
+AES-256-GCM over the body. The passphrase never leaves, so the relay holds something it cannot
+open.
+
+`store` prints a **recovery code** once and does not save it here, because a recovery code kept
+on the machine it recovers is not one. A machine that has nothing needs the code *and* the
+passphrase. The relay has only the SHA-256 of the code's secret. Lose the passphrase and the
+backup is gone: nobody can reset it, the relay least of all.
+
+### Answering from your phone
+
+A request PassBook has to ask you about used to wait at the machine that was asked. A job that
+needed a key at night got "no answer in time". Link a phone and the question goes there too.
+
+```bash
+passbook phone add                  # prints an address; open it on the phone
+passbook phone list
+passbook phone remove <id>
+```
+
+The address is a secret until it is used, so after a phone opens it PassBook shows you which phone
+it was and waits for you to say yes. Then the phone's page shows what is waiting: which app, which
+keys by name, why, on which machine. Allow once, allow for an hour, or deny.
+
+- The relay cannot read the question. It is encrypted to a key that exists only in the phone's
+  browser.
+- The relay cannot make the answer. The phone signs it, together with a digest of the exact
+  question it was shown, and PassBook checks that signature against the key it accepted when you
+  linked the phone.
+- A phone can only answer a request to *use* a key. Adding, changing or deleting one is answered in
+  front of the store.
+- Every answer from a phone is in Activity as `answered from phone: <its name>`.
+
+There is no push notification. The phone sees a request while its page is open, so put the page on
+your home screen. If balance alerts already go to a Telegram bot of yours, that bot also tells you
+when something is waiting, with a button that opens the page. With a phone linked, a request waits
+three minutes instead of one (`PASSBOOK_APPROVAL_TIMEOUT` still overrides).
+
+### Sharing with other people
+
+A member is another person's PassBook that you lend named keys to. It is the same link a second
+computer uses, with a name and a role in the signed grant, so everything Devices says about a link
+is true of a member: named keys, an expiry, kept current, removed when you unlink.
+
+```bash
+passbook team invite --name "Ada" --group AI --role use
+passbook team list
+passbook team activity
+passbook team remove <did>          # prints the keys to rotate
+```
+
+They run the `passbook join pbj1.…` line it prints, on their own machine.
+
+- **`--role use`** (the default): the keys arrive guarded. Their apps and agents can use them
+  through their broker, and PassBook never prints or reveals them there.
+- **`--role read`**: the keys are theirs to see, like one of their own.
+
+Each member's PassBook reports uses of the keys you lent, every ten minutes, sealed to your key
+before it leaves. `passbook team activity` reads them: who, which key, which app, when, allowed or
+refused. The relay stores who reported and when, and cannot read the rest. A member's own keys
+never appear in it.
+
+---
+
 ## Sign-ins that stay alive
 
 Some things are not an API key but a **sign-in**, and the difference that
@@ -1581,6 +1712,24 @@ Making refusals real needs the operating system to vouch for the caller. A code
 signed binary and a keychain ACL on macOS, something different again elsewhere.
 That is a signing and distribution project, not a file in here.
 
+**A role is not a wall.** `--role use` keeps a shared key off somebody's screen and out of their
+agent's transcript. It does not stop a person who sets out to take it: the value is on their
+machine in order to be used there. That is why removing a member ends with a list of keys to rotate
+rather than a claim that they are gone.
+
+**What members report is what their machines volunteer.** Someone who has changed their PassBook
+can leave things out. The record tells you what honest machines did. It is not a control.
+
+**A phone's answer is only as honest as the page that made it.** The page a phone opens is served
+by the relay. The protocol keeps a relay that stores and forwards from reading a question or
+forging an answer, which covers a stolen database and a curious operator. It does not cover a relay
+changed to serve the phone a different page, because that page would hold the phone's key. Every
+phone answer is in Activity by name, a phone can only allow a use, and the longest it can say yes
+for is an hour. If you need more than that, run your own relay.
+
+**A plan is not a security boundary.** It limits what the default relay will carry for you. It does
+not make anything on your machine more or less protected, and nothing here gets safer when you pay.
+
 ### What it will not do
 
 - **Print a value.** Every status, diagnostic and error surface returns key
@@ -1636,6 +1785,12 @@ are the sort of promise that erodes one convenience at a time.
 | `passbook_sinks.py` | recognising a push in a command, and `--to` specs |
 | `passbook_github.py` | the GitHub connection, and secrets sealed to GitHub's key |
 | `passbook_link.py` | lending named keys to a second device |
+| `passbook_join.py` | adding a computer with one line, and keeping it current |
+| `passbook_plan.py` | what the relay carries for this PassBook, and buying more |
+| `passbook_cloud_backup.py` | an encrypted export kept on the relay, and the recovery code |
+| `passbook_phone.py` | answering a request from a phone: sealing the question, checking the answer |
+| `passbook_team.py` | sharing with other people: roles, seats, and their sealed reports |
+| `relay/` | the relay itself: a Cloudflare Worker you can run |
 | `passbook_peer.py` | asking the kernel who is calling (macOS) |
 | `bin/passbook` | the command line |
 | `app/` | the desktop app, which holds no logic of its own |

@@ -42,7 +42,7 @@ import sys
 import time
 import urllib.parse
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -7176,6 +7176,13 @@ def cmd_link_pull(args: argparse.Namespace) -> int:
         result = passbook_join.pull(write=_join_writer(caller("passbook-link", args)))
     except passbook_join.JoinError as error:
         return 0 if args.quiet else _fail(str(error))
+    try:
+        # If somebody shares keys with this machine, tell them how those were used (passbook_team.py).
+        # Nothing to report is the usual case and costs one read of this machine's own grants.
+        import passbook_team
+        passbook_team.report()
+    except Exception:  # noqa: BLE001 - a report is never worth failing a pull for
+        pass
     if args.json:
         print(json.dumps(result, indent=2))
         return 0
@@ -8731,6 +8738,380 @@ def cmd_install(args: argparse.Namespace) -> int:
 # ── argument parsing ───────────────────────────────────────────────────────
 
 
+# ── the relay's plan, a backup kept on it, a phone, and people ─────────────────
+
+
+def _open_page(url: str) -> bool:
+    """Open a web page in the person's browser. Only ever with an address a module here accepted."""
+    try:
+        import webbrowser
+        return bool(webbrowser.open(url))
+    except Exception:  # noqa: BLE001 - a machine with no browser still has the address printed
+        return False
+
+
+def _print_plan(plan: Mapping[str, Any]) -> None:
+    import passbook_plan
+    print(passbook_plan.describe(plan))
+    limits, billing = plan["limits"], plan.get("billing")
+    print(f"  backup on the relay: {'yes' if limits['backup'] else 'no'}    answers from a phone: {'yes' if limits['approvals'] else 'no'}")
+    if billing is None:
+        print(f"  relay: {plan['relay']} (no paid plans; everything it can do is on)")
+        return
+    source = billing.get("source")
+    if source == "hivemindos":
+        print("  Included with your HivemindOS plan. There is nothing to pay or cancel here.")
+    elif source == "lender":
+        print("  Covered by the PassBook that lends to this one. There is nothing to pay or cancel here.")
+    elif source == "stripe":
+        until = str(billing.get("paidUntil") or "")[:10]
+        if billing.get("status") == "past_due":
+            print(f"  The last payment did not go through. The plan stays on for now; fix the card with:  passbook plan billing")
+        elif billing.get("renews"):
+            print(f"  Renews {until}. Stop it with:  passbook plan cancel")
+        else:
+            print(f"  Ends {until} and will not renew. Keep it with:  passbook plan resume")
+    elif not billing.get("onSale"):
+        print("  Paid plans are not on sale yet.")
+    else:
+        prices = billing.get("prices") or {}
+        sync, teams = prices.get("sync") or {}, prices.get("teams") or {}
+        print(f"  PassBook Sync, ${sync.get('month')} a month or ${sync.get('year')} a year: 50 computers, a backup on the relay, answers from your phone.")
+        print(f"  PassBook Teams, ${teams.get('seatMonth')} a person a month: everything in Sync, and sharing keys with other people.")
+        print("  Get one with:  passbook plan subscribe sync    (add --yearly, or: teams --seats 3)")
+
+
+def cmd_plan(args: argparse.Namespace) -> int:
+    """What the relay carries for this PassBook, and buying more (passbook_plan.py)."""
+    if _link_or_fail() is None:
+        return 1
+    import passbook_join
+    import passbook_plan
+    step = getattr(args, "plan_command", None) or "status"
+    try:
+        if step == "subscribe":
+            made = passbook_plan.subscribe(args.plan, yearly=args.yearly, seats=args.seats)
+            if made.get("changed"):
+                if args.json:
+                    print(json.dumps(made, indent=2))
+                else:
+                    print("Changed on the plan you already pay for; the difference is prorated.")
+                    _print_plan(made)
+                return 0
+            opened = False if args.no_open else _open_page(made["url"])
+            if args.json:
+                print(json.dumps({"ok": True, "opened": opened, "url": made["url"]}, indent=2))
+                return 0
+            print("Pay in your browser. Nothing is charged until you finish there." if opened
+                  else "Open this address to pay. Nothing is charged until you finish there.")
+            print(f"\n    {made['url']}\n")
+            print("When you are done, `passbook plan` shows the plan. It takes a few seconds.")
+            return 0
+        if step == "billing":
+            url = passbook_plan.billing_page()
+            opened = False if args.no_open else _open_page(url)
+            if args.json:
+                print(json.dumps({"ok": True, "opened": opened, "url": url}, indent=2))
+            else:
+                print("Opened your billing page." if opened else f"Open this address:\n\n    {url}\n")
+            return 0
+        if step == "cancel":
+            plan = passbook_plan.cancel()
+        elif step == "resume":
+            plan = passbook_plan.resume()
+        elif step == "seats":
+            plan = passbook_plan.set_seats(args.count)
+        else:
+            plan = passbook_plan.status()
+    except passbook_join.JoinError as error:
+        return _fail(str(error))
+    if args.json:
+        print(json.dumps(plan, indent=2))
+        return 0
+    if step == "cancel":
+        print("It will not renew. Everything stays on until the date below, and nothing already linked or backed up is removed after it.")
+    _print_plan(plan)
+    return 0
+
+
+def cmd_backup(args: argparse.Namespace) -> int:
+    """An encrypted export kept on the relay (passbook_cloud_backup.py)."""
+    if _link_or_fail() is None:
+        return 1
+    try:
+        import passbook_backup
+        import passbook_cloud_backup as cloud
+    except ImportError:
+        return _fail("Backup is not installed on this machine.", "Run:  passbook install")
+    import passbook_join
+    step = getattr(args, "backup_command", None) or "list"
+    try:
+        if step == "list":
+            rows = cloud.stored()
+            allowed = True
+            if args.json:
+                import passbook_plan
+                try:
+                    allowed = bool(passbook_plan.status()["limits"]["backup"])
+                except passbook_join.JoinError:
+                    allowed = bool(rows)
+                print(json.dumps({"ok": True, "allowed": allowed, "backups": rows}, indent=2))
+                return 0
+            for row in rows:
+                print(f"{row['id']}  {row['at'][:16].replace('T', ' ')}  {row['bytes']:>8} bytes  {row['label']}")
+            if not rows:
+                print("No backups of this machine are on the relay. Make one with:  passbook backup store")
+            return 0
+        if step == "remove":
+            cloud.remove(args.id)
+            print(json.dumps({"ok": True}) if args.json else "Removed from the relay.")
+            return 0
+        if step == "store":
+            values = _export_values("passbook-export", "back up to the relay")
+            if values is None:
+                return 1
+            if not values:
+                return _fail("There is nothing in this store to back up.")
+            passphrase = _ask_password("Passphrase for the backup: ", confirm=True, from_stdin=args.password_stdin)
+            text = passbook_backup.encrypt(values, passphrase, workspace=passbook.workspace(), machine=platform.node(),
+                                           note=args.note or "")
+            made = cloud.store(text, label=args.label or "")
+            _record_export("export", sorted(values), "the relay")
+            made["count"] = len(values)
+            if args.json:
+                print(json.dumps(made, indent=2))
+                return 0
+            print(f"Backed up {len(values)} key(s), encrypted with your passphrase. The relay cannot open it.")
+            print("\nKeep this recovery code. It is shown once and is not saved on this machine:\n")
+            print(f"    {made['code']}\n")
+            print("A new machine needs the code AND the passphrase. Nobody can reset either one.")
+            return 0
+        # restore
+        text = cloud.fetch(args.code)
+        passphrase = _ask_password("Passphrase for the backup: ", from_stdin=args.password_stdin)
+        incoming = passbook_backup.keys_of(passbook_backup.read(text, passphrase=passphrase))
+        if not incoming:
+            return _fail("That backup has no keys in it.")
+        held = set(passbook.key_names())
+        fresh, clashes = sorted(set(incoming) - held), sorted(set(incoming) & held)
+        if not args.dry_run:
+            result = _write_values({name: incoming[name] for name in (incoming if args.overwrite else fresh)},
+                                   overwrite=args.overwrite, exact=True, app="passbook-import") if (fresh or args.overwrite) else {}
+            if result is None:
+                return 1
+            _record_export("import", sorted(incoming if args.overwrite else fresh), "the relay")
+        kept = [] if args.overwrite else clashes
+        if args.json:
+            print(json.dumps({"ok": True, "dryRun": bool(args.dry_run), "added": fresh, "kept": kept,
+                              "updated": clashes if args.overwrite else [], "count": len(incoming)}, indent=2))
+            return 0
+        verb = "Would add" if args.dry_run else "Added"
+        print(f"{verb} {len(fresh)} key(s)." + (f" {len(clashes)} already here and {'would be ' if args.dry_run else ''}"
+                                                f"{'replaced' if args.overwrite else 'kept'}." if clashes else ""))
+        for name in fresh:
+            print(f"  + {name}")
+        return 0
+    except (passbook_join.JoinError, passbook_backup.BackupError) as error:
+        return _fail(str(error))
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return 1
+    except (ValueError, OSError) as error:
+        return _fail(str(error))
+
+
+def cmd_phone(args: argparse.Namespace) -> int:
+    """Answer requests from a phone (passbook_phone.py)."""
+    step = getattr(args, "phone_command", None) or "list"
+    if step == "ping":
+        return _phone_ping()
+    if _link_or_fail() is None:
+        return 1
+    import passbook_join
+    import passbook_phone as phone
+    try:
+        if step == "add":
+            made = phone.begin(label=args.label or "")
+            if args.json:
+                print(json.dumps(made, indent=2))
+                return 0
+            print("Open this address on your phone within 15 minutes. Until it is used, treat it as a secret:\n")
+            print(f"    {made['url']}\n")
+            if args.no_wait:
+                print(f"Then run:  passbook phone confirm {made['id']}")
+                return 0
+            print("Waiting for the phone… (Ctrl-C to stop)")
+            deadline = time.monotonic() + 15 * 60
+            while time.monotonic() < deadline:
+                seen = phone.check(made["id"])
+                if seen["status"] == "joined":
+                    answer = input(f"\n{seen['label']} opened it. Link this phone? [y/N] ").strip().lower()
+                    if answer not in ("y", "yes"):
+                        phone.remove(made["id"])
+                        print("Not linked.")
+                        return 1
+                    done = phone.confirm(made["id"])
+                    print(f"Linked {done['phone']['label']}. It can allow or deny a request to use a key, "
+                          "never one to add, change or delete.")
+                    return 0
+                if seen["status"] in ("expired", "refused"):
+                    return _fail(seen.get("detail") or "That link ran out before a phone opened it.")
+                time.sleep(2.5)
+            return _fail("That link ran out before a phone opened it.")
+        if step == "check":
+            print(json.dumps(phone.check(args.id), indent=2))
+            return 0
+        if step == "confirm":
+            done = phone.confirm(args.id)
+            print(json.dumps(done, indent=2) if args.json else f"Linked {done['phone']['label']}.")
+            return 0
+        if step == "remove":
+            done = phone.remove(args.id)
+            print(json.dumps({"ok": True}) if args.json else
+                  ("Unlinked. It will be asked nothing more." if done["told"] else
+                   "Unlinked here. The relay could not be told, but this machine no longer accepts that phone's answers."))
+            return 0
+        rows = phone.listed()
+        if args.json:
+            print(json.dumps({"ok": True, "phones": rows}, indent=2))
+            return 0
+        for row in rows:
+            seen = f"last looked {row['seenAt'][:16].replace('T', ' ')}" if row["seenAt"] else "has not looked yet"
+            print(f"{row['id']}  {row['label']}  linked {row['linkedAt'][:10]}  {seen}")
+        if not rows:
+            print("No phone is linked. Link one with:  passbook phone add")
+        return 0
+    except passbook_join.JoinError as error:
+        return _fail(str(error))
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return 1
+
+
+def _phone_ping() -> int:
+    """Tell the owner's Telegram bot a request is waiting. Run by the broker; silent, and never an error.
+
+    Says only that something waits. Which app and which key are on the phone's page, encrypted to
+    the phone; a chat service does not need them.
+    """
+    try:
+        import passbook_alerts as alerts
+        import passbook_phone
+        record = alerts.settings(passbook.root())
+        url = passbook_phone.page_url()
+        if not record["on"] or not url or record["key"] not in set(passbook.key_names()):
+            return 0
+        reason = "tell your phone a request is waiting"
+        got = _balance_values("passbook-phone", [record["key"]], reason)
+        if isinstance(got, int):
+            return 0
+        values, brokered = got
+        _record_run_reads("passbook-phone", reason, [record["key"]], values, brokered)
+        token = values.get(record["key"], "")
+        if token and not token.startswith("hive-sealed:"):
+            alerts.send(token, record["chat"], {
+                "severity": "info", "title": "PassBook is waiting for you",
+                "body": "An app asked to use a key. Open PassBook on your phone to allow or deny it.",
+                "action": {"label": "Open PassBook", "url": url}})
+    except Exception:  # noqa: BLE001 - a ping is a courtesy; the request is waiting either way
+        pass
+    return 0
+
+
+def cmd_team(args: argparse.Namespace) -> int:
+    """Share keys with other people (passbook_team.py)."""
+    if _link_or_fail() is None:
+        return 1
+    import passbook_join
+    import passbook_team as team
+    step = getattr(args, "team_command", None) or "list"
+    try:
+        if step == "invite":
+            made = team.invite(args.name, _selection_from(args), role=args.role,
+                               caveats={"hosts": args.host, "commands": args.command, "apps": args.app},
+                               days=args.days, live=not args.fixed, workspace=args.workspace)
+            if args.json:
+                print(json.dumps(made, indent=2))
+                return 0 if args.no_wait else _wait_for_join(made["id"], quiet=True)
+            how = "their apps can use them, and PassBook never shows them" if args.role == "use" else "they can use and see them"
+            print(f"{made['name']} will get {made['describe']}: {len(made['keys'])} key(s) now ({how}).")
+            if made["staying"]:
+                print(f"Staying here (reach is not lendable): {', '.join(made['staying'])}")
+            print(f"\nSend {made['name']} this line, to run on their own machine with PassBook installed:\n")
+            print(f"    {made['command']}\n")
+            print("Anyone with that line can join for the next 15 minutes, once. Send it the way you would send a password.")
+            if args.no_wait:
+                print("\nThen run `passbook link complete` here, or keep PassBook open, to send their keys.")
+                return 0
+            print("\nWaiting for them to join… (Ctrl-C to stop; the invite stays open)")
+            return _wait_for_join(made["id"])
+        if step == "remove":
+            result = team.remove(args.did)
+            if args.json:
+                print(json.dumps(result, indent=2))
+                return 0 if result["ok"] else 1
+            print(result["detail"])
+            if result["rotate"]:
+                print("\nRotate these at the provider. Removing somebody cannot take back what they were sent:")
+                for key in result["rotate"]:
+                    print(f"  {key}")
+            return 0 if result["ok"] else 1
+        if step == "activity":
+            rows = team.activity(limit=args.limit)
+            if args.json:
+                print(json.dumps({"ok": True, "events": rows}, indent=2))
+                return 0
+            for row in rows:
+                mark = "" if row["granted"] else "  refused"
+                print(f"{row['at'][:16].replace('T', ' ')}  {row['member']:<16} {row['op']:<8} {', '.join(row['keys'])}  {row['app']}{mark}")
+            if not rows:
+                print("Nobody you share with has reported using a key yet. Their PassBook reports every ten minutes.")
+            return 0
+        if step == "report":
+            result = team.report()
+            if args.json:
+                print(json.dumps(result, indent=2))
+            elif not getattr(args, "quiet", False):
+                print(f"Reported {result['sent']} use(s) to {result['owners']} owner(s).")
+            return 0
+        rows = team.members()
+        seats = {"limit": 0, "used": len(rows)}
+        try:
+            import passbook_plan
+            plan = passbook_plan.status()
+            seats = {"limit": plan["limits"]["seats"], "used": max(plan["used"]["members"], len(rows))}
+        except passbook_join.JoinError:
+            pass
+        if args.json:
+            print(json.dumps({"ok": True, "seats": seats, "members": rows}, indent=2))
+            return 0
+        for row in rows:
+            print(f"{row['name']:<20} {row['role']:<5} {len(row['keys']):>3} key(s)  until {row['expires'][:10]}  {row['did']}")
+        if not rows:
+            print("This PassBook shares with nobody. Share with:  passbook team invite --name NAME --group GROUP")
+        return 0
+    except passbook_join.JoinError as error:
+        return _fail(str(error))
+
+
+def _add_invite_arguments(parser: argparse.ArgumentParser) -> None:
+    """What an invite carries and for how long: the same for one of your machines and for another person."""
+    parser.add_argument("--all", action="store_true", help="everything whose reach lets it leave this machine")
+    parser.add_argument("--keys", nargs="+", default=[], metavar="KEY", help="these keys")
+    parser.add_argument("--group", nargs="+", default=[], metavar="GROUP", help="every key in these groups")
+    parser.add_argument("--project", nargs="+", default=[], metavar="PROJECT", help="every key limited to these projects")
+    parser.add_argument("--umbrella", nargs="+", default=[], metavar="UMBRELLA", help="every key under these umbrellas")
+    parser.add_argument("--days", type=int, default=30, help="how long each grant lasts; a live link renews")
+    parser.add_argument("--fixed", action="store_true",
+                        help="these keys as they are now, ending on that date; not kept current")
+    parser.add_argument("--host", nargs="+", default=[], metavar="HOST", help="there, the keys may only reach these hosts")
+    parser.add_argument("--command", nargs="+", default=[], metavar="CMD", help="there, only these commands receive them")
+    parser.add_argument("--app", nargs="+", default=[], metavar="APP", help="there, only these apps may read them")
+    parser.add_argument("--workspace", default="", help="lend from this workspace")
+    parser.add_argument("--no-wait", dest="no_wait", action="store_true", help="print the invite and return")
+    parser.add_argument("--json", action="store_true")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="passbook",
@@ -9541,20 +9922,7 @@ def build_parser() -> argparse.ArgumentParser:
     revoke.set_defaults(json=False, func=cmd_link_revoke)
 
     invite = link_subs.add_parser("invite", help="make an invite another machine joins with `passbook join`")
-    invite.add_argument("--all", action="store_true", help="everything whose reach lets it leave this machine")
-    invite.add_argument("--keys", nargs="+", default=[], metavar="KEY", help="these keys")
-    invite.add_argument("--group", nargs="+", default=[], metavar="GROUP", help="every key in these groups")
-    invite.add_argument("--project", nargs="+", default=[], metavar="PROJECT", help="every key limited to these projects")
-    invite.add_argument("--umbrella", nargs="+", default=[], metavar="UMBRELLA", help="every key under these umbrellas")
-    invite.add_argument("--days", type=int, default=30, help="how long each grant lasts; a live link renews")
-    invite.add_argument("--fixed", action="store_true",
-                        help="these keys as they are now, ending on that date; not kept current")
-    invite.add_argument("--host", nargs="+", default=[], metavar="HOST", help="there, the keys may only reach these hosts")
-    invite.add_argument("--command", nargs="+", default=[], metavar="CMD", help="there, only these commands receive them")
-    invite.add_argument("--app", nargs="+", default=[], metavar="APP", help="there, only these apps may read them")
-    invite.add_argument("--workspace", default="", help="lend from this workspace")
-    invite.add_argument("--no-wait", dest="no_wait", action="store_true", help="print the invite and return")
-    invite.add_argument("--json", action="store_true")
+    _add_invite_arguments(invite)
     invite.set_defaults(func=cmd_link_invite)
 
     invites_cmd = link_subs.add_parser("invites", help="invites that have not been used yet")
@@ -9587,6 +9955,87 @@ def build_parser() -> argparse.ArgumentParser:
                           help="do not check for changes every ten minutes")
     join_cmd.add_argument("--json", action="store_true")
     join_cmd.set_defaults(func=cmd_join)
+
+    plan_cmd = subs.add_parser("plan", help="what the relay carries for this PassBook, and buying more")
+    plan_cmd.add_argument("--json", action="store_true")
+    plan_cmd.set_defaults(func=cmd_plan)
+    plan_subs = plan_cmd.add_subparsers(dest="plan_command")
+    subscribe = plan_subs.add_parser("subscribe", help="buy PassBook Sync or PassBook Teams; you pay in your browser")
+    subscribe.add_argument("plan", choices=("sync", "teams"))
+    subscribe.add_argument("--yearly", action="store_true", help="Sync by the year instead of the month")
+    subscribe.add_argument("--seats", type=int, default=0, metavar="N", help="Teams: how many people, you included")
+    subscribe.add_argument("--no-open", dest="no_open", action="store_true", help="print the address instead of opening it")
+    subscribe.add_argument("--json", action="store_true")
+    for name, text in (("cancel", "stop the plan renewing; what was paid for runs to its end"),
+                       ("resume", "undo a cancel that has not taken effect yet")):
+        step = plan_subs.add_parser(name, help=text)
+        step.add_argument("--json", action="store_true")
+    seats_cmd = plan_subs.add_parser("seats", help="Teams: change how many people there are seats for")
+    seats_cmd.add_argument("count", type=int)
+    seats_cmd.add_argument("--json", action="store_true")
+    billing_cmd = plan_subs.add_parser("billing", help="open the page for your card and invoices")
+    billing_cmd.add_argument("--no-open", dest="no_open", action="store_true", help="print the address instead of opening it")
+    billing_cmd.add_argument("--json", action="store_true")
+
+    backup_cmd = subs.add_parser("backup", help="an encrypted export kept on the relay")
+    backup_cmd.add_argument("--json", action="store_true")
+    backup_cmd.set_defaults(func=cmd_backup)
+    backup_subs = backup_cmd.add_subparsers(dest="backup_command")
+    backup_list = backup_subs.add_parser("list", help="this machine's backups on the relay")
+    backup_list.add_argument("--json", action="store_true")
+    backup_store = backup_subs.add_parser("store", help="encrypt the store with a passphrase and keep it on the relay")
+    backup_store.add_argument("--label", default="", help="how the backup is named (default: this machine's name)")
+    backup_store.add_argument("--note", default="", help="a note kept inside the encrypted backup")
+    backup_store.add_argument("--password-stdin", action="store_true", help="read the passphrase from stdin")
+    backup_store.add_argument("--json", action="store_true")
+    backup_restore = backup_subs.add_parser("restore", help="bring a backup into this store")
+    backup_restore.add_argument("code", help="a recovery code (pbb1.…), or the id of one of this machine's backups")
+    backup_restore.add_argument("--dry-run", dest="dry_run", action="store_true", help="say what would change and change nothing")
+    backup_restore.add_argument("--overwrite", action="store_true", help="replace keys already here")
+    backup_restore.add_argument("--password-stdin", action="store_true", help="read the passphrase from stdin")
+    backup_restore.add_argument("--json", action="store_true")
+    backup_remove = backup_subs.add_parser("remove", help="delete one of this machine's backups from the relay")
+    backup_remove.add_argument("id")
+    backup_remove.add_argument("--json", action="store_true")
+
+    phone_cmd = subs.add_parser("phone", help="answer requests for a key from your phone")
+    phone_cmd.add_argument("--json", action="store_true")
+    phone_cmd.set_defaults(func=cmd_phone)
+    phone_subs = phone_cmd.add_subparsers(dest="phone_command")
+    phone_add = phone_subs.add_parser("add", help="link a phone: open the address it prints on the phone")
+    phone_add.add_argument("--label", default="")
+    phone_add.add_argument("--no-wait", dest="no_wait", action="store_true", help="print the address and return")
+    phone_add.add_argument("--json", action="store_true")
+    for name, text in (("check", "has a phone opened the link"), ("confirm", "link the phone that opened it"),
+                       ("remove", "unlink a phone")):
+        step = phone_subs.add_parser(name, help=text)
+        step.add_argument("id")
+        step.add_argument("--json", action="store_true")
+    phone_list = phone_subs.add_parser("list", help="phones linked to this machine")
+    phone_list.add_argument("--json", action="store_true")
+    phone_ping = phone_subs.add_parser("ping", help=argparse.SUPPRESS)
+    phone_ping.add_argument("--json", action="store_true")
+
+    team_cmd = subs.add_parser("team", help="share keys with other people")
+    team_cmd.add_argument("--json", action="store_true")
+    team_cmd.set_defaults(func=cmd_team)
+    team_subs = team_cmd.add_subparsers(dest="team_command")
+    team_invite = team_subs.add_parser("invite", help="make an invite another person joins with `passbook join`")
+    team_invite.add_argument("--name", required=True, help="who this is, so you can tell who has what")
+    team_invite.add_argument("--role", choices=("use", "read"), default="use",
+                             help="use: their apps can use the keys and PassBook never shows them; read: they can see them too")
+    _add_invite_arguments(team_invite)
+    team_list = team_subs.add_parser("list", help="everyone this PassBook shares with")
+    team_list.add_argument("--json", action="store_true")
+    team_remove = team_subs.add_parser("remove", help="stop sharing with somebody; prints the keys to rotate")
+    team_remove.add_argument("did")
+    team_remove.add_argument("--json", action="store_true")
+    team_activity = team_subs.add_parser("activity", help="what the people you share with did with your keys")
+    team_activity.add_argument("--limit", type=int, default=200)
+    team_activity.add_argument("--json", action="store_true")
+    team_report = team_subs.add_parser("report", help="on a member's machine: tell each owner how their keys were used")
+    team_report.add_argument("--quiet", action="store_true")
+    team_report.add_argument("--json", action="store_true")
 
     history_cmd = subs.add_parser("history", help="what the record holds about one key")
     history_cmd.add_argument("key")

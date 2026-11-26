@@ -4,6 +4,58 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+### The relay's source, and plans: PassBook Sync and PassBook Teams
+
+Liam, 2026-11-26: "I want to monetize Passbook ... still free for most users for most functionality", then, of the
+tier split that came out of it: "publish the relay code in the passbook repo. and build ALL OF THIS completely end to
+end with the subscribe ui and payments". Everything that runs on one machine stays free and Apache-2.0. What is sold
+is what the default relay carries, because that is the part that costs money to run.
+
+- **`relay/`** is the relay PassBook uses, published. It ran from a private repository and `docs/SPEC.md` did not
+  describe it, so `PASSBOOK_WEB_RELAYS` let a machine point at another relay when there was no relay to point at.
+  It is a Cloudflare Worker over D1, with its own tests (`cd relay && npm test`). A relay you run has no plans and
+  no billing. `docs/SPEC.md` has a section on what any relay must hold to.
+- **Plans** (`passbook plan`, and Plan in Settings). Free: 3 computers through the default relay. PassBook Sync,
+  $5 a month or $48 a year: 50 computers, a backup kept on the relay, answers from a phone. PassBook Teams, $8 a
+  person a month: all of that, and sharing with other people. A plan belongs to this machine's key, so there is no
+  account; a linked machine is covered by the plan of the one that lends to it; a paid HivemindOS plan includes Sync
+  for the PassBook its browser is linked to. `passbook plan subscribe` opens Stripe's checkout and nothing else:
+  the address is checked to be Stripe's before it is opened. A limit is checked when something is added, so a plan
+  that ends removes nothing.
+- **A backup on the relay** (`passbook backup store | list | restore | remove`). The text `passbook export` makes,
+  encrypted with a passphrase that never leaves this machine. `store` prints a recovery code once (`pbb1.…`); a
+  machine that has nothing needs the code and the passphrase. The relay holds the ciphertext and a hash of the
+  code's secret.
+- **Answering from a phone** (`passbook phone add | list | remove`). A request the policy says to ask about goes to
+  a linked phone as well as the window. The question is encrypted to a key in the phone's browser; the answer is
+  signed by the phone together with a digest of the exact question, and checked here against the key accepted when
+  the phone was linked. Linking needs the code shown on this machine and then a person's yes. A phone can only
+  allow a request to use a key, once or for an hour. With a phone linked a request waits three minutes, not one.
+  There is no push notification: the page must be open, and a Telegram bot already used for balance alerts is told
+  that something is waiting.
+- **Sharing with other people** (`passbook team invite | list | activity | remove`). A member is another person's
+  PassBook that named keys are lent to, with a name and a role in the signed grant. `--role use` (the default) lands
+  the keys guarded: usable through their broker, never printed there. Each member's PassBook reports uses of the
+  lent keys every ten minutes, sealed to the owner; `team activity` reads them. Removing a member lists the keys to
+  rotate.
+- What PassBook sends to a linked browser is now signed with the machine's key (`X-PassBook-Proof`), as every
+  machine route already was. The relay keeps who signed, and takes fresh envelopes for that browser from that
+  machine alone; before, anyone who knew a browser's id could replace what the relay held for it.
+
+Said plainly, in the README's "What it does not claim": a role is not a wall; what members report is what their
+machines volunteer; the page a phone opens is served by the relay, so the phone protocol holds against a relay that
+stores and forwards and not against one changed to serve a different page; and nothing gets safer when you pay.
+
+#### Fixed
+
+- **The 1.10.28 window could not start.** `index.html` loaded `/adddevice.js`, which the window's own server
+  neither embedded nor served, so the running app answered 404 and the first line that used it threw before the
+  window finished loading. It is embedded and routed now, and a test checks that for every script tag.
+- **A relay that was busy no longer ends an invite.** `passbook link complete` read any answer but 200 as
+  "expired" and threw the invite away, a rate limit included. Only a 404 or the relay saying so ends one now.
+- A link refused at the relay's limit is no longer recorded as lent: nothing was delivered.
+
+
 ## [1.10.28] — 2026-11-26
 
 ### Devices: add a computer with one line, choose what it gets, and keep it current

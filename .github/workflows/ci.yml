@@ -65,6 +65,21 @@ jobs:
         working-directory: app/src-tauri
         run: cargo test --quiet
 
+  # The relay is the one part of PassBook that runs on somebody else's computer, and everything it
+  # promises ("cannot read a question, cannot forge an answer, takes nothing away when a plan ends")
+  # is a property of this code. Its tests need nothing installed: node:test over node:sqlite.
+  relay:
+    name: relay
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Test the relay
+        working-directory: relay
+        run: node --test test/*.test.ts
+
   # A machine with no OS keystore is the normal case on a headless server, and
   # the vault has to work there on a password alone. This pins that.
   no-keystore:

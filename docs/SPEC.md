@@ -173,6 +173,30 @@ Reference implementation: `passbook_link.py`. Grants are UCAN-shaped
 (`iss`/`aud`/`att`/`exp`) and identities are `did:key`, so a receiver verifies
 from the envelope alone with nothing to look up.
 
+### A relay (optional)
+
+Two machines that cannot hand each other a string may use a relay to carry it. A relay is optional
+twice over: linking works without one, and an implementation may use any relay it trusts no more
+than this section requires. Where one is used:
+
+1. it is never trusted with a value: everything it stores is sealed to its recipient or encrypted
+   with a secret that does not reach it
+2. every request a machine makes is signed by that machine's own key
+   (`X-PassBook-Proof: <did> <unix seconds> <signature>` over
+   `passbook-relay:v1\n<METHOD>\n<path and query>\n<seconds>\n<sha256 hex of the body>`), so a relay
+   needs no accounts and a proof cannot be replayed against another route or body
+3. a machine talks only to relays its owner has allowed, so a link cannot send an envelope anywhere
+   else
+4. an invite's secret, a backup's passphrase and recovery secret, and a phone link's secret never
+   reach the relay; what proves possession of each is checked by the machine that issued it
+5. an answer carried from another device (a phone) is acted on only if that device signed it
+   together with a digest of the exact request it was shown, and only for a request to use a key
+6. a limit a relay applies is checked when something is added, and never removes what was delivered
+
+Reference implementation: `relay/` (a Cloudflare Worker over D1) with `passbook_join.py`,
+`passbook_cloud_backup.py`, `passbook_phone.py` and `passbook_team.py`. `relay/README.md` lists every
+route and what the relay can and cannot read on each.
+
 ## Brokering (optional)
 
 Not required for conformance. An implementation that offers it must be honest

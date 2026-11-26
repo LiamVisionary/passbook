@@ -135,6 +135,7 @@
     <a href="#agents">Agents</a>
     <p class="grp">Operating</p>
     <a href="#machines">Your other machines</a>
+    <a href="#plans">The relay, and plans</a>
     <a href="#backup">Backup</a>
     <a href="#reference">Command reference</a>
     <a href="#limits">What it does not claim</a>
@@ -435,6 +436,53 @@ rather use no relay at all, <code>passbook link request</code>,
 <code>approve</code> and <code>accept</code> still move a grant as plain
 strings, by whatever means you like.</p>
 
+<h2 id="plans">The relay, and plans</h2>
+<p>Everything PassBook does on your machine is free and stays free: the store,
+encryption, the broker, scoping, the record. One part runs on somebody else's
+computer. When a new machine and the one with the keys cannot reach each other,
+a small relay carries what they send. Its source is in the repository
+(<code>relay/</code>), and you can run your own, with no limits and no billing.</p>
+<p>The relay PassBook uses by default costs money to run, so it has plans. The
+limit is on what the relay carries, never on what PassBook does on your
+machine.</p>
+<table>
+  <tr><th></th><th>Free</th><th>PassBook Sync</th><th>PassBook Teams</th></tr>
+  <tr><td>Price</td><td>$0</td><td>$5 a month, or $48 a year</td><td>$8 a person a month</td></tr>
+  <tr><td>Computers linked through the relay</td><td>3</td><td>50</td><td>50 each</td></tr>
+  <tr><td>Linking by hand, or through your own relay</td><td>No limit</td><td>No limit</td><td>No limit</td></tr>
+  <tr><td>An encrypted backup kept on the relay</td><td></td><td>Yes</td><td>Yes</td></tr>
+  <tr><td>Answer a request from your phone</td><td></td><td>Yes</td><td>Yes</td></tr>
+  <tr><td>Share keys with other people</td><td></td><td></td><td>Yes</td></tr>
+</table>
+<pre><code>passbook plan                        # what you have, and how much is used
+passbook plan subscribe sync         # opens Stripe's checkout in your browser
+passbook plan subscribe teams --seats 3
+passbook plan cancel                 # stops the renewal; what you paid for runs to its end</code></pre>
+<p>A plan belongs to this machine's key, not to an account: there is nothing to
+sign up for. A machine you link is covered by your plan. And nothing is taken
+away when a plan ends. A machine already linked keeps getting its keys and a
+backup already stored can always be read back. You just cannot add more.</p>
+<pre><code>passbook backup store                # an encrypted export, kept on the relay
+passbook backup restore pbb1.…       # on any machine, with the recovery code
+passbook phone add                   # answer requests for a key from your phone
+passbook team invite --name Ada --group AI --role use
+passbook team activity               # what the people you share with did with your keys</code></pre>
+<p>The backup is encrypted with a passphrase that never leaves your machine,
+so the relay holds something it cannot open. A question sent to your phone is
+encrypted to the phone, and its answer is signed by the phone and checked here.
+What a member reports is sealed to you. The relay carries all three and can
+read none of them.</p>
+<div class="note warn">
+  <p><b>Nothing here gets safer when you pay.</b> A plan limits what the default
+  relay will carry. It is not a security boundary.</p>
+  <p>A shared key marked <code>use</code> stays off the other person's screen. It
+  does not stop someone who sets out to take it, so removing a person lists the
+  keys to rotate. And the page your phone opens is served by the relay: a relay
+  that stores and forwards cannot forge your answer, but one changed to serve a
+  different page could. Every phone answer is in Activity by name, and a phone
+  can only allow a key to be <i>used</i>, for an hour at most.</p>
+</div>
+
 <h2 id="backup">Backup</h2>
 <pre><code>passbook export --out backup.json   # sealed, portable
 passbook import backup.json
@@ -467,6 +515,10 @@ and for agents that prefer one binary per action.</p>
   <tr><td><code>oauth</code></td><td>Grants that know how to refresh themselves</td></tr>
   <tr><td><code>mcp</code></td><td>Serve the store to an agent</td></tr>
   <tr><td><code>join</code> / <code>link</code></td><td>Lend chosen keys to another machine, and keep them current there</td></tr>
+  <tr><td><code>plan</code></td><td>What the relay carries for this machine, and buying more</td></tr>
+  <tr><td><code>backup</code></td><td>An encrypted export kept on the relay, and getting it back anywhere</td></tr>
+  <tr><td><code>phone</code></td><td>Answer a request for a key from your phone</td></tr>
+  <tr><td><code>team</code></td><td>Share keys with other people, and see how they were used</td></tr>
   <tr><td><code>export</code> / <code>import</code> / <code>sync</code></td><td>Move a store between machines</td></tr>
   <tr><td><code>install</code> / <code>forget</code> / <code>group</code></td><td>Set up, and tidy up</td></tr>
 </table>

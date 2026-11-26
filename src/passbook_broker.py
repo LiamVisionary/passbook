@@ -290,11 +290,102 @@ def _approval_timeout() -> float:
 
     Read per call rather than frozen at import so a test — or a machine where a
     minute is the wrong answer — can set it without restarting anything.
+
+    A minute is for somebody at the machine. A phone has to be noticed, picked up and unlocked
+    first, so a machine with a phone linked waits three minutes unless it was told a number. The
+    caller's socket timeout is this same function plus a margin, so the two stay in step.
+    """
+    explicit = os.environ.get("PASSBOOK_APPROVAL_TIMEOUT", "").strip()
+    if explicit:
+        try:
+            return max(1.0, float(explicit))
+        except ValueError:
+            return 60.0
+    return PHONE_APPROVAL_SECONDS if _phone_linked() else 60.0
+
+
+PHONE_APPROVAL_SECONDS = 180.0
+# The app name `passbook phone ping` reads the bot token under. A request from it is never itself
+# sent to a phone, or a token kept behind "ask" would have every request announce another.
+PHONE_APP = "passbook-phone"
+
+
+def _phone_linked(root: Path | None = None) -> bool:
+    try:
+        import passbook_phone
+        return passbook_phone.any_linked(store_root(root))
+    except Exception:  # noqa: BLE001 - a phone is optional; anything wrong with it means "no phone"
+        return False
+
+
+def _ask_phones(request_id: str) -> None:
+    """Carry a held request to its owner's phone, if one is linked (passbook_phone.py).
+
+    Never raises and never waits: the request is already waiting at the machine, and a phone is one
+    more place it can be answered from, not a thing it depends on. Only a request to USE a key goes
+    to a phone; adding, changing or deleting one is answered in front of the store.
     """
     try:
-        return max(1.0, float(os.environ.get("PASSBOOK_APPROVAL_TIMEOUT", "60")))
-    except ValueError:
-        return 60.0
+        import passbook_phone
+        with _PENDING_LOCK:
+            item = dict(_PENDING.get(request_id) or {})
+        if not item or item.get("kind") not in passbook_phone.ASKABLE_KINDS or item.get("app") == PHONE_APP:
+            return
+        root = Path(item["_root"])
+        if not passbook_phone.any_linked(root):
+            return
+        threading.Thread(target=_phone_round, args=(request_id, item, root), daemon=True,
+                         name="passbook-phone").start()
+    except Exception:  # noqa: BLE001
+        return
+
+
+def _phone_round(request_id: str, item: Mapping[str, Any], root: Path) -> None:
+    """Send one request to the linked phones and act on the first answer a phone really signed."""
+    try:
+        import passbook_phone
+        seconds = _approval_timeout()
+        sent = passbook_phone.ask(rid=request_id, app=item["app"], keys=list(item["keys"]), reason=item["reason"],
+                                  kind=item["kind"], workspace=item["workspace"], seconds=seconds, root=root)
+        if not sent:
+            return
+        _ping_phone(root)
+        event: threading.Event = item["event"]
+        deadline = time.monotonic() + seconds
+        verdict = None
+        while time.monotonic() < deadline and not event.wait(2.0):
+            verdict = passbook_phone.poll(sent, root=root)
+            if verdict is not None:
+                break
+        if verdict is not None and not event.is_set():
+            who = f"phone: {verdict['label'] or 'a phone'}"
+            # Written before the answer takes effect, and under its own name: an answer that came
+            # from a phone has to be findable as one, whatever happens to the request after it.
+            _record("approve" if verdict["approve"] else "denied", item["keys"], app=item["app"],
+                    granted=bool(verdict["approve"]), reason=f"answered from {who}", workspace=item["workspace"], root=root)
+            resolve(request_id, approve=bool(verdict["approve"]),
+                    remember="1h" if verdict["approve"] and verdict["remember"] else "", approved_by=who)
+        passbook_phone.withdraw(sent, root=root)
+    except Exception:  # noqa: BLE001
+        return
+
+
+def _ping_phone(root: Path) -> None:
+    """Tell the owner's Telegram bot a request is waiting, if balance alerts already use one.
+
+    Done by a separate `passbook phone ping`, not here: the bot's token is a credential like any
+    other, and it is read the way every credential is read, through the broker's own front door
+    with its own row in the record, rather than lifted out of the broker's memory by the broker.
+    """
+    if os.environ.get("PASSBOOK_NO_NOTIFY"):
+        return
+    try:
+        cli = Path(__file__).with_name("passbook_cli.py")
+        subprocess.Popen([sys.executable, str(cli), "phone", "ping"], stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         env={**os.environ, "HIVE_HOME": str(root)} if os.environ.get("HIVE_HOME") else None)
+    except (OSError, subprocess.SubprocessError):
+        pass
 
 _PENDING: dict[str, dict[str, Any]] = {}
 _PENDING_LOCK = threading.Lock()
@@ -321,6 +412,7 @@ def _queue(app: str, keys: list[str], reason: str,
             "asked": access._stamp(access._now()), "decision": "", "event": event,
         }
     notify(kind, app, sorted(keys))
+    _ask_phones(request_id)
     return request_id, event
 
 

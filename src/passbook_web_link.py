@@ -82,11 +82,23 @@ def parse_link(url: str) -> tuple[str, str]:
 
 
 def _http(method: str, url: str, body: Mapping[str, Any] | None = None, *,
-          opener: Callable[..., Any] | None = None) -> tuple[int, dict[str, Any]]:
-    data = None if body is None else json.dumps(body).encode("utf-8")
-    request = urllib.request.Request(url, data=data, method=method, headers={
-        "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "PassBook",
-    })
+          opener: Callable[..., Any] | None = None, sign: bool = False) -> tuple[int, dict[str, Any]]:
+    text = "" if body is None else json.dumps(body)
+    data = None if body is None else text.encode("utf-8")
+    headers = {"Content-Type": "application/json", "Accept": "application/json", "User-Agent": "PassBook"}
+    if sign:
+        # The proof every machine route carries. With it the relay knows which PassBook a browser
+        # belongs to, and takes fresh envelopes for that browser from this machine alone; before,
+        # anybody who knew a browser's id could replace what the relay held for it. A relay from
+        # before this ignores the header.
+        try:
+            import passbook_join
+            parsed = urllib.parse.urlsplit(url)
+            path = parsed.path + (f"?{parsed.query}" if parsed.query else "")
+            headers["X-PassBook-Proof"] = passbook_join._proof(link.identity(), method, path, text)
+        except Exception:  # noqa: BLE001 - a link that cannot be signed is still a link
+            pass
+    request = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
         with (opener or urllib.request.urlopen)(request, timeout=TIMEOUT) as response:
             return response.status, json.loads(response.read(1_000_000) or b"{}")
@@ -180,7 +192,7 @@ def decide(body: Mapping[str, Any], root: Path, tx: Any, *, opener=None) -> dict
     except link.LinkError as exc:
         raise ManagedError(str(exc), "link-failed") from None
     status, answer = _http("POST", f"{relay}/api/passbook/link-requests/{request_id}/answer",
-                           {"envelope": sealed["envelope"]}, opener=opener)
+                           {"envelope": sealed["envelope"]}, opener=opener, sign=True)
     if status != 200 or not answer.get("ok"):
         raise ManagedError(str(answer.get("error") or "HivemindOS did not accept the link. Start again from HivemindOS."), "relay-refused")
     record = {"did": peer["did"], "seal": link._b64(peer["seal_public"]), "fingerprint": peer["fingerprint"],
@@ -231,7 +243,7 @@ def sync(root: Path, tx: Any, held_dek: Callable[[str], tuple[bytes | None, str]
         try:
             sealed = _seal(peer, values, row["workspace"], root)
             status, answer = _http("POST", f"{row['relay']}/api/passbook/devices/{row['did']}/envelope",
-                                   {"envelope": sealed["envelope"]}, opener=opener)
+                                   {"envelope": sealed["envelope"]}, opener=opener, sign=True)
         except (ManagedError, link.LinkError):
             skipped.append(row["label"])
             continue

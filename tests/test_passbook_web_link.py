@@ -25,10 +25,13 @@ class Relay:
 
     def __init__(self, token: str):
         self.token, self.answers, self.devices, self.unlinked = token, [], {}, set()
+        self.signed: list[str] = []
 
-    def __call__(self, method, url, body=None, *, opener=None):
+    def __call__(self, method, url, body=None, *, opener=None, sign=False):
         assert url.startswith(RELAY), url
         path = url[len(RELAY):]
+        if sign:
+            self.signed.append(f"{method} {path}")
         if method == "GET" and path == f"/api/passbook/link-requests/{REQUEST_ID}":
             return 200, {"ok": True, "pairingToken": self.token, "site": "hivemindos.app", "label": "Chrome on Mac"}
         if method == "POST" and path == f"/api/passbook/link-requests/{REQUEST_ID}/answer":
@@ -100,6 +103,8 @@ def test_sync_keeps_a_linked_browser_current_skips_a_locked_workspace_and_stops_
     synced = owner(root, "web-link-sync")
     assert synced["synced"] == ["Chrome on Mac"]
     assert opened(relay.devices[did], browser, first["issuerFingerprint"])["ADDED_LATER"] == "synthetic-added"
+    assert any(row.startswith("POST /api/passbook/devices/") for row in relay.signed), "a refresh is signed"
+    assert any(row.endswith("/answer") for row in relay.signed), "and so was the answer that linked it"
 
     broker._forget_dek()
     locked = owner(root, "web-link-sync")
@@ -153,3 +158,37 @@ def test_a_workspace_without_a_password_is_refused_by_name_not_as_a_wrong_passwo
                    workspace="hivemindos", code=code, password=PASSWORD)
     assert answer["code"] == "workspace-unprotected"
     assert relay.answers == [], "nothing is sent for a workspace that cannot be linked"
+
+
+def test_what_passbook_sends_a_browser_is_signed_by_the_machine_sending_it(monkeypatch, tmp_path):
+    """The answer and every refresh carry X-PassBook-Proof, so the relay knows which PassBook a browser
+    belongs to and takes fresh envelopes for it from that machine alone. Reads are not signed: they
+    carry nothing only this machine could say."""
+    import hashlib
+    import io
+    import passbook_join
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+    monkeypatch.setenv("HIVE_HOME", str(tmp_path))
+    monkeypatch.setenv("PASSBOOK_WEB_RELAYS", RELAY)
+    seen = []
+
+    class Answer(io.BytesIO):
+        status = 200
+
+    def opener(request, timeout=None):
+        seen.append(request)
+        return Answer(b'{"ok": true}')
+
+    body = {"envelope": "passbook-env:v1:abc"}
+    path = "/api/passbook/devices/did:key:zExample/envelope"
+    assert web_link._http("POST", RELAY + path, body, opener=opener, sign=True) == (200, {"ok": True})
+    assert web_link._http("GET", RELAY + "/api/passbook/link-requests/x", opener=opener) == (200, {"ok": True})
+    signed, plain = seen
+    assert plain.get_header("X-passbook-proof") is None
+    did, seconds, signature = signed.get_header("X-passbook-proof").split(" ")
+    assert did == link.identity()["did"]
+    text = signed.data.decode()
+    message = f"passbook-relay:v1\nPOST\n{path}\n{seconds}\n{hashlib.sha256(text.encode()).hexdigest()}"
+    Ed25519PublicKey.from_public_bytes(link.public_from_did(did)).verify(passbook_join._unb64(signature), message.encode())
+    assert json.loads(text) == body, "the bytes signed are the bytes sent"

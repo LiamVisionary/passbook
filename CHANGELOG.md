@@ -4,6 +4,8 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [1.10.29] — 2026-11-26
+
 ### The relay's source, and plans: PassBook Sync and PassBook Teams
 
 Liam, 2026-11-26: "I want to monetize Passbook ... still free for most users for most functionality", then, of the

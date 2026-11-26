@@ -134,6 +134,7 @@
     <a href="#activity">Activity</a>
     <a href="#agents">Agents</a>
     <p class="grp">Operating</p>
+    <a href="#machines">Your other machines</a>
     <a href="#backup">Backup</a>
     <a href="#reference">Command reference</a>
     <a href="#limits">What it does not claim</a>
@@ -396,6 +397,44 @@ and they should not be handed the whole environment.</p>
 refusal. It never implements token refresh, and it never sees the rest of the
 store.</p>
 
+<h2 id="machines">Your other machines</h2>
+<p>A bot, a server, or another laptop of yours can get keys from this machine
+with one line. Not the store. The keys you choose.</p>
+<p>In the app, open Devices and press <b>Add a device</b>. Choose what it gets:
+everything that may leave this machine, whole groups, projects, or single keys.
+Then run the line it shows on the new machine:</p>
+<pre><code>passbook join pbj1.…</code></pre>
+<p>That is the whole setup on the other end. PassBook answers the join itself,
+the keys arrive sealed to that machine, and nobody types a code. From a
+terminal, the same invite is:</p>
+<pre><code>passbook link invite --group AI          # or --keys, --project, --umbrella, --all
+passbook link invite --keys OPENAI_API_KEY --host api.openai.com --days 7</code></pre>
+<p><b>Advanced</b> sets how long the grant lasts, and limits that apply where the
+keys land: which hosts they may reach, which commands receive them, and which
+apps may read them. The limits are signed into the grant, so nothing that carries
+it can strip them.</p>
+<p>The keys stay current. Change one here and the other machine has it within
+twenty minutes, while this machine's vault is open. Unlink it from Devices,
+or let a grant run out, and the machine removes the keys itself the next time it
+checks in. A key it changed on its own is left alone.</p>
+<pre><code>passbook link pull --unschedule          # on the other machine: stop checking in
+passbook link revoke DID                 # here: unlink it</code></pre>
+<p>Only keys whose reach is <code>tailnet</code> leave. The rest are shown as
+staying here, so a key you scoped to one workspace cannot go out by accident.</p>
+<div class="note warn">
+  <p><b>The invite line is a secret for fifteen minutes.</b> Whoever has it can
+  join, once. That replaces comparing codes on two screens, the same trade every
+  "join this network" command makes. Paste it only into the machine you mean.</p>
+  <p>Unlinking cannot unsend a key. A machine that stopped checking in keeps what
+  it had, so unlinking lists the keys to rotate at the provider. And PassBook
+  cannot enforce a spending limit on a key: set that at the provider.</p>
+</div>
+<p>The relay that carries invites and updates never sees a key or the invite's
+secret. Every request to it is signed by the machine making it. If you would
+rather use no relay at all, <code>passbook link request</code>,
+<code>approve</code> and <code>accept</code> still move a grant as plain
+strings, by whatever means you like.</p>
+
 <h2 id="backup">Backup</h2>
 <pre><code>passbook export --out backup.json   # sealed, portable
 passbook import backup.json
@@ -427,7 +466,8 @@ and for agents that prefer one binary per action.</p>
   <tr><td><code>github</code></td><td>Connect GitHub and send keys as Actions secrets</td></tr>
   <tr><td><code>oauth</code></td><td>Grants that know how to refresh themselves</td></tr>
   <tr><td><code>mcp</code></td><td>Serve the store to an agent</td></tr>
-  <tr><td><code>export</code> / <code>import</code> / <code>sync</code> / <code>link</code></td><td>Move a store between machines</td></tr>
+  <tr><td><code>join</code> / <code>link</code></td><td>Lend chosen keys to another machine, and keep them current there</td></tr>
+  <tr><td><code>export</code> / <code>import</code> / <code>sync</code></td><td>Move a store between machines</td></tr>
   <tr><td><code>install</code> / <code>forget</code> / <code>group</code></td><td>Set up, and tidy up</td></tr>
 </table>
 <p>Run <code>passbook &lt;command&gt; --help</code> for the flags. The help is

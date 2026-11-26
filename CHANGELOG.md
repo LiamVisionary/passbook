@@ -4,6 +4,8 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [1.10.28] — 2026-11-26
+
 ### Devices: add a computer with one line, choose what it gets, and keep it current
 
 Liam, 2026-11-26: "does passbook have easy pairing to other machines? say for example, a user wants to create a bot

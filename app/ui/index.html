@@ -35,6 +35,13 @@
     --warn-soft: rgba(179,38,30,0.10);
     --radius: 12px;
     --shadow: 0 1px 2px rgba(16,24,40,.05), 0 6px 16px rgba(16,24,40,.05);
+    /* The sheets (Add to PassBook, Add a device, Plan) are written against these three names, which
+       were never given a value: every `var(--soft)` track and note box was transparent, and bold
+       text in a sheet's lead was the same gray as the rest. They follow the tokens above, so the
+       dark values come with them. */
+    --ink: var(--ink1);
+    --paper: var(--card);
+    --soft: var(--chip);
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -1163,6 +1170,46 @@
   @keyframes dspin { to { transform: rotate(360deg); } }
   @media (prefers-reduced-motion: reduce) { .dspin { animation: none; } }
   .arefused { margin: 0; font-size: 11.5px; color: var(--ink3); line-height: 1.5; }
+  .dtabs.two { grid-template-columns: 1fr 1fr; }
+  .dtabs button[aria-checked="true"] { background: var(--card); color: var(--ink1); box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  /* A refusal, or something a paid plan adds, with the button that does something about it under
+     the sentence that mentions it. */
+  .aoffer { display: grid; gap: 8px; justify-items: start; }
+  .aoffer > p { justify-self: stretch; }
+
+  /* ── Plan, backup on the relay, a phone, people (plan.js) ─────────────────
+     The same sheet as Add a device. What is new is small: a table of what the
+     plan includes, a stepper for how many people, and lists whose rows carry
+     their own buttons and their own question before anything is removed. */
+  .awrap:focus { outline: 0; }
+  .pgood { margin: 0; font-size: 12.5px; color: var(--good); line-height: 1.5; }
+  .pfacts { display: grid; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .pfact { display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+    padding: 8px 12px; font-size: 13px; }
+  .pfact + .pfact { border-top: 1px solid var(--line); }
+  .pfact dt { color: var(--ink2); }
+  .pfact dd { font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; }
+  .pfact dd.pno { font-weight: 400; color: var(--ink3); }
+  .pfact dd.pfull { color: var(--warn); }
+  .poffer { display: grid; gap: 12px; padding-top: 16px; border-top: 1px solid var(--line); }
+  .poffer h2 { font-size: 14px; font-weight: 650; letter-spacing: -.01em; }
+  .apick .pprice { float: right; color: var(--ink3); font-weight: 400; }
+  .pline { display: flex; align-items: center; gap: 12px; font-size: 13px; }
+  .pline .grow { flex: 1; min-width: 0; }
+  .pstep { display: inline-flex; align-items: center; gap: 2px; padding: 2px; border-radius: 9px; background: var(--chip); }
+  .pstep button { width: 28px; height: 26px; border: 0; border-radius: 7px; background: var(--card); color: var(--ink1);
+    font-size: 15px; line-height: 1; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,.12); }
+  .pstep button:disabled { opacity: .4; cursor: default; }
+  .pstep button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .pstep output { min-width: 78px; text-align: center; font-size: 12.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .pacts { display: flex; flex-wrap: wrap; gap: 8px; }
+  .plist { display: grid; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .prow { display: flex; align-items: center; gap: 8px; padding: 9px 12px; font-size: 13px; }
+  .plist > * + .prow { border-top: 1px solid var(--line); }
+  .prow .grow { flex: 1; min-width: 0; display: grid; gap: 1px; word-break: break-word; }
+  .plist .confirmstrip { margin: 0 12px 10px; }
+  /* A question about paying, not about removing: the same strip without the warning color. */
+  .confirmstrip.calm { background: var(--accent-soft); margin-top: 0; }
 
   /* The confirmation. A tick that draws itself, because "it worked" should be
      something you see rather than a sentence you have to read. */
@@ -1310,6 +1357,7 @@
 <script src="/authorize.js"></script>
 <script src="/weblink.js"></script>
 <script src="/adddevice.js"></script>
+<script src="/plan.js"></script>
 <script>
 (() => {
   const invoke = window.__TAURI__?.core?.invoke;
@@ -1432,6 +1480,9 @@ Use the copy button to put it on the clipboard."
     folder: '<path d="M3.5 7.4a1.6 1.6 0 0 1 1.6-1.6h3.6l2 2.4h7.7a1.6 1.6 0 0 1 1.6 1.6v8.4a1.6 1.6 0 0 1-1.6 1.6H5.1a1.6 1.6 0 0 1-1.6-1.6Z"/>',
     power: '<path d="M12 4v8"/><path d="M17.3 7a7.4 7.4 0 1 1-10.6 0"/>',
     link: '<path d="M10.2 13.8a3.6 3.6 0 0 0 5.1 0l3-3a3.6 3.6 0 0 0-5.1-5.1l-1.3 1.3"/><path d="M13.8 10.2a3.6 3.6 0 0 0-5.1 0l-3 3a3.6 3.6 0 0 0 5.1 5.1l1.3-1.3"/>',
+    card: '<rect x="3" y="5.5" width="18" height="13" rx="2.4"/><path d="M3 10h18"/><path d="M7 14.6h3.4"/>',
+    cloud: '<path d="M7.3 18.6h9.6a3.6 3.6 0 0 0 .6-7.15 5.6 5.6 0 0 0-10.9-1.2A4.2 4.2 0 0 0 7.3 18.6Z"/>',
+    phone: '<rect x="7" y="3" width="10" height="18" rx="2.4"/><path d="M10.6 17.6h2.8"/>',
     out: '<path d="M6 18 18 6"/><path d="M9 6h9v9"/>',
     into: '<path d="M18 6 6 18"/><path d="M15 18H6V9"/>',
   };
@@ -1479,6 +1530,14 @@ Use the copy button to put it on the clipboard."
     ["apps", "Apps", "chip", "Which apps can read what"],
     ["broker", "Advanced", "hub", "Background access and diagnostics"],
     ["updates", "Updates", "download", "This version, and the newest"],
+  ];
+
+  /** Settings rows that open a sheet rather than a page: the plan, and the two things a plan keeps on
+   *  the relay. Sheets, because each is one short job with an end, not a place to stay. */
+  const SHEETS = [
+    ["plan", "Plan", "card", "What this PassBook includes"],
+    ["backup", "Backup on the relay", "cloud", "An encrypted copy of your keys"],
+    ["phone", "Approve from your phone", "phone", "Answer requests when you are away from this computer"],
   ];
 
   let state = null, page = "keys", busy = false, notice = "";
@@ -2051,6 +2110,15 @@ Use the copy button to put it on the clipboard."
             <span class="grow"><span class="settingname">${esc(label)}</span>
               <span class="sub">${esc(blurb)}</span></span>
             ${(id === "access" && pending) || (id === "updates" && updatesWaiting()) ? '<span class="dot"></span>' : ""}
+            ${icon("chevron", "tinyicon")}
+          </button>`).join("")}
+      </div>
+      <div class="group tight">
+        ${SHEETS.map(([id, label, glyph, blurb]) => `
+          <button class="settingrow" data-plan-open="${id}">
+            <span class="statustile plain sm">${icon(glyph)}</span>
+            <span class="grow"><span class="settingname">${esc(label)}</span>
+              <span class="sub">${esc(id === "plan" ? planBlurb(blurb) : blurb)}</span></span>
             ${icon("chevron", "tinyicon")}
           </button>`).join("")}
       </div>
@@ -4867,8 +4935,10 @@ Use the copy button to put it on the clipboard."
     // was established. They belong here — they hold the store — but a grant
     // had a fingerprint compared on two screens and an adoption did not, and
     // one badge is the difference between saying so and implying otherwise.
+    // A grant to another person is not one of your computers: it is listed under People, below,
+    // with their name and what they may do, and not a second time here as a machine.
     const rows = [
-      ...(l.lent || []).map((r) => ({ ...r, lent: true })),
+      ...(l.lent || []).filter((r) => r.kind !== "member").map((r) => ({ ...r, lent: true })),
       ...(l.tailnet || []).map((r) => ({ ...r, lent: true })),
       ...(l.borrowed || []),
     ];
@@ -4879,6 +4949,7 @@ Use the copy button to put it on the clipboard."
           : `<button class="act primary" data-add-device ${busy ? "disabled" : ""}>Add a device</button>`}</div>
       <p class="lede">Every device that holds this store \u2014 the ones you paired with,
       and the ones that have it because they are on your network.</p>
+      ${planLine()}
       ${syncPanel()}
       <div class="group">
         <h3>This device</h3>
@@ -4921,7 +4992,63 @@ Use the copy button to put it on the clipboard."
           here. It is not the only way a device ends up holding this store \u2014 see
           below.</p>`)}
       </div>
+      ${peoplePanel()}
       ${fleetPanel()}`;
+  }
+
+  /** The plan, in one line at the top of Devices: its name, how many computers it has room for, and
+   *  the one button. Asked of the relay after the page is up, so it can also be "still asking" or
+   *  "could not ask", and neither of those is an error worth a banner. */
+  function planLine() {
+    const line = plan.line();
+    if (line.state !== "ok") {
+      return `<div class="group quiet"><div class="row">
+        <span class="statustile plain sm">${icon("card")}</span>
+        <div class="grow" role="status">${line.state === "failed" ? "Plan: could not check" : "Checking your plan\u2026"}</div>
+        ${line.state === "failed" ? `<button class="act" data-plan-retry="1">Retry</button>` : ""}
+      </div></div>`;
+    }
+    return `<div class="group"><div class="row">
+      <span class="statustile plain sm">${icon("card")}</span>
+      <div class="grow"><strong>${esc(line.name)}</strong> <span class="sub">\u00b7 ${esc(line.usage)}</span></div>
+      <button class="act" data-plan-open="plan">${esc(line.action)}</button>
+    </div></div>`;
+  }
+  const planBlurb = (fallback) => { const line = plan.line(); return line.state === "ok" ? `${line.name} \u00b7 ${line.usage}` : fallback; };
+
+  /** The people keys are shared with. Under the computers, because a person is another computer
+   *  that holds some of these keys; it just is not yours. */
+  function peoplePanel() {
+    const people = plan.people();
+    if (!people) return "";
+    const rows = people.members.map((m) => `
+      <div class="row">
+        <span class="statustile plain sm">${icon("person")}</span>
+        <div class="grow">
+          <div><b>${esc(m.name || "Someone")}</b>
+            <span class="viatag" title="${m.role === "read" ? "They can use these keys and see them." : "Their apps can use these keys. PassBook never shows the keys to them."}">${m.role === "read" ? "can use and see" : "can use"}</span></div>
+          ${(m.keys || []).length > 8
+            ? `<div class="sub">${(m.keys || []).length} keys</div>`
+            : `<div class="chips inline">${(m.keys || []).map((k) =>
+                `<span class="chip mono">${esc(k)}</span>`).join("") || `<span class="sub">no keys</span>`}</div>`}
+          ${m.sentAt || m.expires ? `<div class="sub">${[m.sentAt ? `last sent ${esc(String(m.sentAt).slice(0, 16).replace("T", " "))}` : "",
+            m.expires ? `until ${esc(String(m.expires).slice(0, 10))}` : ""].filter(Boolean).join(" \u00b7 ")}</div>` : ""}</div>
+        <button class="act" data-member-remove="${esc(m.did)}" ${busy ? "disabled" : ""}>Remove</button>
+      </div>`).join("");
+    const share = addPerson.waiting()
+      ? `<button class="act" data-resume-person="1">Invite waiting\u2026</button>`
+      : people.can ? `<button class="act" data-add-person="1" ${busy ? "disabled" : ""}>Share with a person</button>`
+      : people.offer ? `<button class="act" data-plan-open="teams">${esc(people.offer)}</button>` : "";
+    return `<div class="group">
+        <h3>People${people.total ? ` \u00b7 ${people.taken} of ${people.total}` : ""}</h3>
+        ${rows}
+        <div class="row">
+          <div class="grow ${rows ? "sub" : ""}">${people.can
+            ? (rows ? "Each person gets only the keys you choose, on their own computer." : "Share some of your keys with someone else, on their own computer.")
+            : esc(people.why)}</div>
+          ${share}
+        </div>
+      </div>`;
   }
 
   /** Machines that hold this store without a PassBook grant.
@@ -5191,7 +5318,38 @@ Use the copy button to put it on the clipboard."
               }>${esc(ago(row.at) || "")}</span>
           </div>`; }).join("") || `<div class="empty">Nothing recorded yet.</div>`}
       </div>
+      ${teamActivity()}
       ${broken ? "" : check}`;
+  }
+
+  /** What the people keys are shared with did with them, on their computers. Only when there are
+   *  people: an empty heading about nobody is not something to scroll past. */
+  function teamActivity() {
+    if (!plan.people()?.members.length) return "";
+    const rows = [...plan.events()].sort((a, b) => (Date.parse(b.at) || 0) - (Date.parse(a.at) || 0)).slice(0, 40);
+    return `<div class="group">
+        <h3>From people you share with</h3>
+        ${rows.map((row) => {
+          const names = row.keys || [];
+          const ok = row.granted !== false;
+          const said = OP_WORD[row.op];
+          const verb = said ? (ok ? said.did : said.didnt) : (row.op || "used");
+          const wrong = !ok && !said?.partial;
+          const what = said?.bare ? ""
+            : names.length === 1 ? `<span class="mono">${esc(names[0])}</span>`
+            : names.length ? `${names.length} keys` : "";
+          const more = [row.app ? `with ${row.app}` : "", !ok && said?.partial ? said.partial : "", row.reason || "",
+                        names.length > 1 && names.length <= 4 ? names.join(", ") : ""].filter(Boolean).join(" \u00b7 ");
+          return `
+          <div class="row">
+            <span class="statustile ${wrong ? "warn" : "plain"} sm">${icon(OP_ICON[row.op] || "person")}</span>
+            <div class="grow">
+              <div><strong>${esc(row.member || "Someone")}</strong> ${esc(verb)} ${what}</div>
+              ${more ? `<div class="sub">${esc(more)}</div>` : ""}
+            </div>
+            <span class="tag">${esc(ago(row.at) || "")}</span>
+          </div>`; }).join("") || `<div class="empty">Nothing from them yet.</div>`}
+      </div>`;
   }
 
   /** The last thing that happened, said once, in the colour it deserves. */
@@ -6102,6 +6260,8 @@ Use the copy button to put it on the clipboard."
     if (webLink.paint()) return;
     if (authorization.paint()) return;
     if (addDevice.paint()) return;
+    if (addPerson.paint()) return;
+    if (plan.paint()) return;
     if (ghShouldShow()) { paintGithub(); return; }
     if (impShouldShow() || impView.done) { paintImport(); return; }
     paintAsk();
@@ -7575,10 +7735,21 @@ Use the copy button to put it on the clipboard."
       call("resolve", { id: b.dataset.no, approve: false, remember: "" }));
     main.querySelectorAll("[data-broker]").forEach((b) => b.onclick = () =>
       call("broker", { action: b.dataset.broker }));
-    main.querySelectorAll("[data-revoke]").forEach((b) => b.onclick = () =>
-      call("revoke", { did: b.dataset.revoke }));
+    main.querySelectorAll("[data-revoke]").forEach((b) => b.onclick = async () => {
+      // One computer fewer is one more the plan has room for.
+      if (await call("revoke", { did: b.dataset.revoke })) void plan.load();
+    });
     main.querySelectorAll("[data-add-device]").forEach((b) => b.onclick = () => { void addDevice.start(); });
     main.querySelectorAll("[data-resume-device]").forEach((b) => b.onclick = () => addDevice.resume());
+    main.querySelectorAll("[data-add-person]").forEach((b) => b.onclick = () => { void addPerson.start(); });
+    main.querySelectorAll("[data-resume-person]").forEach((b) => b.onclick = () => addPerson.resume());
+    main.querySelectorAll("[data-member-remove]").forEach((b) => b.onclick = () =>
+      plan.open("people", { remove: b.dataset.memberRemove }));
+    // The plan, the backup and the phone are sheets; "teams" is the plan sheet opened at Teams.
+    main.querySelectorAll("[data-plan-open]").forEach((b) => b.onclick = () => {
+      if (b.dataset.planOpen === "teams") plan.open("plan", { want: "teams" }); else plan.open(b.dataset.planOpen);
+    });
+    main.querySelectorAll("[data-plan-retry]").forEach((b) => b.onclick = () => { void plan.load(); });
     main.querySelectorAll("[data-forget]").forEach((b) => b.onclick = () =>
       call("forget_machine", { host: b.dataset.forget }));
     main.querySelectorAll("[data-reveal]").forEach((b) => b.onclick = async () => {
@@ -7771,8 +7942,18 @@ Use the copy button to put it on the clipboard."
 
   const authorization = window.createPassbookAuthorization({ invoke, container: ask, esc, repaint: paint });
   const webLink = window.createPassbookWebLink({ invoke, container: ask, esc, repaint: paint });
-  const addDevice = window.createPassbookAddDevice({ invoke, container: ask, esc, repaint: paint,
-                                                    onJoined: () => { void call("state"); } });
+  /** Text that is already on screen (a backup's code, the link a phone opens), put on the clipboard.
+   *  Never a key's value: that is `copy_key`, which keeps the value out of this page. */
+  const copyShown = (copytext) => navigator.clipboard.writeText(copytext);
+  const plan = window.createPassbookPlan({ invoke, container: ask, esc, repaint: paint, copy: copyShown,
+                                           onStoreChanged: () => { void call("state"); },
+                                           invitePerson: () => { void addPerson.start(); } });
+  // A computer or a person that joined is one more the plan counts, so the plan is asked again.
+  const joined = () => { void call("state"); void plan.load(); };
+  const addDevice = window.createPassbookAddDevice({ invoke, container: ask, esc, repaint: paint, onJoined: joined,
+    plans: { refused: plan.refused, offer: () => plan.offer("machine_limit"), open: () => plan.open("plan") } });
+  const addPerson = window.createPassbookAddDevice({ invoke, container: ask, esc, repaint: paint, onJoined: joined, mode: "person",
+    plans: { refused: plan.refused, offer: () => plan.offer("seat_limit"), open: () => plan.open("plan", { want: "teams" }) } });
 
   async function boot() {
     if (!invoke) {
@@ -7793,6 +7974,9 @@ Use the copy button to put it on the clipboard."
       if (appLocked && !canProveIdentity(activeRow())) unlockWindow();
       paint();
       paintGate();
+      // The plan comes from the relay, so it is asked for after the page is up and never waited on.
+      // A relay that does not answer leaves one quiet line on Devices, not a banner.
+      void plan.load();
       await readyNotifications();
       try { biometry = await invoke("biometric_status") || biometry; } catch { /* older build */ }
       // Two of the three protections are conditional, so the window asks rather
@@ -7873,6 +8057,7 @@ Use the copy button to put it on the clipboard."
     return [
       go("attention", "Attention", "bell"), ...PAGES.map(([id, label, glyph]) => go(id, label, glyph)),
       go("settings", "Settings", "sliders"), ...SETTINGS.map(([id, label, glyph]) => go(id, label, glyph)),
+      ...SHEETS.map(([id, label, glyph]) => ({ kind: "Open", label, glyph, run: () => plan.open(id) })),
       { kind: "Do", label: "Add a key", glyph: "plus", run: () => openAdd() },
       { kind: "Do", label: "Sync with my other devices now", glyph: "monitor", run: () => { page = "machines"; paint(); syncNow(); } },
       { kind: "Do", label: "Check for updates", glyph: "download", run: () => { page = "updates"; paint(); loadUpdates(); } },

@@ -773,8 +773,10 @@ def grants(*, root: Path | None = None) -> dict[str, Any]:
             "active": not expired and not entry.get("revoked"),
             # Set by a machine that joined with `passbook join` (passbook_join):
             # how it is named, what it was given and whether it stays current.
+            # `kind` is "member" for a grant to another person (passbook_team), who is listed with
+            # people and not among the owner's own computers.
             **{name: entry[name] for name in ("label", "live", "selection", "caveats", "sentAt",
-                                              "pulledAt", "unlinkedAt", "relay")
+                                              "pulledAt", "unlinkedAt", "relay", "kind")
                if entry.get(name) not in (None, "", [], {})},
         }
 

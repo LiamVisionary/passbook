@@ -1772,3 +1772,269 @@ def test_the_security_page_asks_for_a_password_only_where_one_exists():
     panel = ui[ui.index("function encryptionPanel("):]
     panel = panel[:panel.index("\n  }\n")]
     assert "data-unsealopen" in panel and panel.index("unsealing ?") < panel.index('id="sl-pw"')
+
+
+# ── plans, the backup on the relay, a phone, and people (2026-11-26) ──────────
+#
+# Four sheets in app/ui/plan.js, and sharing with a person as a second mode of the Add a device sheet.
+# The app side is nineteen thin commands over `passbook plan`, `backup`, `phone` and `team`. What is
+# pinned here is what would be expensive to get wrong: a command the window calls that the app does not
+# have, a button that takes money where nothing is for sale, a phone accepted without a person saying
+# so, and a passphrase on a command line.
+
+PLAN_UI = REPO / "app" / "ui" / "plan.js"
+ADD_UI = REPO / "app" / "ui" / "adddevice.js"
+PLAN_COMMANDS = {
+    "plan_status", "plan_subscribe", "plan_cancel", "plan_resume", "plan_seats", "plan_billing",
+    "backup_list", "backup_store", "backup_restore", "backup_remove",
+    "phone_add", "phone_check", "phone_confirm", "phone_list", "phone_remove",
+    "team_invite", "team_list", "team_remove", "team_activity",
+}
+
+
+def _js_function(source: str, name: str) -> str:
+    """One function of a sheet module, from its name to the brace that closes it."""
+    start = re.search(rf"^  (?:async )?function {name}\(", source, re.M)
+    assert start, f"{name} is no longer a function of this module"
+    return source[start.start():source.index("\n  }\n", start.start())]
+
+
+def _rust_function(name: str) -> str:
+    rust = RUST.read_text(encoding="utf-8")
+    start = rust.index(f"fn {name}(")
+    return rust[start:rust.index("\n}\n", start)]
+
+
+def _called_from(source: str) -> set[str]:
+    """Every app command a sheet module calls: by name, or handed to `change` to call."""
+    return set(re.findall(r'invoke\("(\w+)"', source)) | set(re.findall(r'change\("\w+", "(\w+)"', source))
+
+
+def test_every_command_the_plan_sheets_call_is_one_the_app_has():
+    """A sheet that calls a command the app does not have fails when its button is pressed, with
+    "Command plan_seats not found" where a sentence should be. And the other way round: a command no
+    sheet calls is one more thing the window is allowed to do for no reason."""
+    commands = _commands()
+    rust = RUST.read_text(encoding="utf-8")
+    handler = re.search(r"tauri::generate_handler!\[(.*?)\]", rust, re.S).group(1)
+    listed = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", handler))
+    plan = PLAN_UI.read_text(encoding="utf-8")
+    assert "invoke(command, args)" in plan, "`change` no longer calls the command it is handed"
+    called = _called_from(plan) | _called_from(ADD_UI.read_text(encoding="utf-8"))
+    assert called, "no invoke() calls found: has the module changed shape?"
+    for name in sorted(called):
+        assert name in commands, f'the window calls invoke("{name}") and main.rs has no such command'
+        assert name in listed, f"{name} is a command but is not in generate_handler!"
+    unused = PLAN_COMMANDS - called
+    assert not unused, f"commands nothing in the window calls: {sorted(unused)}"
+    assert PLAN_COMMANDS <= set(commands), f"missing from main.rs: {sorted(PLAN_COMMANDS - set(commands))}"
+
+
+def test_the_plan_sheets_are_sheets_and_the_source_list_did_not_grow():
+    """Plan, Backup and Phone are rows on the Settings shelf that open a sheet. None of them is a
+    page, so none costs a slot in the source list or needs a route and a way back."""
+    ui = UI.read_text(encoding="utf-8")
+    pages = _page_keys()
+    assert len(pages) <= 5 and not {"plan", "backup", "phone", "people"} & set(pages)
+    shelf = re.search(r"const SHEETS = \[(.*?)\n  \];", ui, re.S)
+    assert shelf, "the settings rows that open a sheet were not found"
+    rows = re.findall(r'\["(\w+)", "([^"]+)"', shelf.group(1))
+    assert [label for _, label in rows] == ["Plan", "Backup on the relay", "Approve from your phone"]
+    views = re.search(r"const VIEWS = \{(.*?)\n  \};", PLAN_UI.read_text(encoding="utf-8"), re.S)
+    assert views, "plan.js no longer lists its sheets"
+    drawn = set(re.findall(r"^\s+(\w+): \{", views.group(1), re.M))
+    assert {sheet for sheet, _ in rows} <= drawn, f"settings rows opening a sheet that is not drawn: {rows}"
+    settings = ui[ui.index("function settingsPage()"):]
+    settings = settings[:settings.index("\n  }\n")]
+    assert 'data-plan-open="${id}"' in settings, "the rows are listed but not drawn on the shelf"
+    assert 'main.querySelectorAll("[data-plan-open]")' in ui, "the rows are drawn but open nothing"
+    # A sheet only shows if the one function that decides what is on the sheet asks it to.
+    order = ui[ui.index("function paintSheet()"):]
+    order = order[:order.index("\n  }\n")]
+    assert "if (addPerson.paint()) return;" in order and "if (plan.paint()) return;" in order
+
+
+def test_nothing_is_for_sale_without_billing_or_before_plans_are_on_sale():
+    """A relay somebody runs themselves has no billing (`billing` is null), and the hosted one can say
+    paid plans are not on sale yet. In both, the plan sheet shows what the plan includes and never a
+    button that starts a payment. One question (`canBuy`) guards the drawing and the doing."""
+    plan = PLAN_UI.read_text(encoding="utf-8")
+    assert "const canBuy = () => Boolean(status?.billing && status.billing.onSale);" in plan
+    # The button is drawn in one place, reached only through `selling`, which is `canBuy()` and more.
+    assert plan.count("data-plan-subscribe ") == 1 and "data-plan-subscribe " in _js_function(plan, "buyHtml")
+    home = _js_function(plan, "planHome")
+    assert "const selling = canBuy() && " in home
+    assert "${selling ? offersHtml() :" in home and "${selling && (status.plan === \"free\" || teamsOpen)" in home
+    assert not re.search(r"(?<!function )\b(buyHtml|offersHtml)\(\)", plan.replace(home, "")), \
+        "the buy button is drawn somewhere `canBuy()` does not guard"
+    # And pressing is refused by the same question, whatever was on screen when it was pressed.
+    assert _js_function(plan, "subscribe").split("\n")[2].strip() == "if (!canBuy() || busy) return;"
+    again = plan[plan.index('on("[data-plan-again]"'):]
+    assert "if (!canBuy() || !lastOrder || busy) return;" in again[:200]
+    assert _called_from(plan) >= {"plan_subscribe"} and plan.count('invoke("plan_subscribe"') == 2
+
+    # The same thing, drawn: load a plan and open the sheet, outside the window.
+    drawn = _run_in_node(r"""
+      const fs = require("fs");
+      globalThis.window = {};
+      globalThis.document = { addEventListener() {}, activeElement: null, body: {} };
+      new Function(fs.readFileSync(%s, "utf8"))();
+      const esc = (v) => String(v ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+      const prices = { sync: { month: 5, year: 48 }, teams: { seatMonth: 8, minSeats: 2, maxSeats: 50 } };
+      const free = (billing) => ({ ok: true, plan: billing ? "free" : "self-hosted", more: null, billing,
+        limits: { machines: 3, seats: 0, backup: false, approvals: false }, used: { machines: 1, members: 0, backups: 0, phones: 0 } });
+      const bill = (onSale) => ({ source: "free", onSale, prices, interval: null, seats: null, status: null, paidUntil: null, renews: null, checkoutOpen: false });
+      async function sheet(status) {
+        const container = { dataset: {}, hidden: true, innerHTML: "", contains: () => false, querySelector: () => null, querySelectorAll: () => [] };
+        const plan = window.createPassbookPlan({ container, esc, repaint() {}, copy: async () => {},
+          invoke: async (name) => { if (name === "plan_status") return status; throw new Error("not asked for in this test: " + name); } });
+        await plan.load();
+        plan.open("plan");
+        return { html: container.innerHTML, line: plan.line(), offer: plan.offer("machine_limit") };
+      }
+      (async () => {
+        console.log(JSON.stringify({ own: await sheet(free(null)), early: await sheet(free(bill(false))), sale: await sheet(free(bill(true))) }));
+      })();
+    """ % json.dumps(str(PLAN_UI)))
+    for name in ("own", "early"):
+        html = drawn[name]["html"]
+        assert "3" in html and "Computers" in html, f"{name}: the limits are not shown"
+        assert "data-plan-subscribe" not in html and "Subscribe" not in html, f"{name}: a buy button is drawn"
+        assert drawn[name]["offer"] == "", f"{name}: a refusal would be given a button that buys something"
+        assert drawn[name]["line"]["action"] == "Plan details"
+    assert "Paid plans are not on sale yet." in drawn["early"]["html"]
+    assert "Paid plans are not on sale yet." not in drawn["own"]["html"], "a relay with no billing has nothing coming"
+    assert "data-plan-subscribe" in drawn["sale"]["html"] and "Subscribe for $5 a month" in drawn["sale"]["html"]
+    assert drawn["sale"]["line"] == {"state": "ok", "name": "PassBook Free", "full": False,
+                                     "usage": "1 of 3 computers", "action": "Get PassBook Sync"}
+
+
+def test_a_phone_is_only_accepted_by_a_person_pressing_confirm():
+    """The link a phone opens is a secret for fifteen minutes, and whoever opens it first is the phone
+    that is waiting. So the window never accepts one by itself: finding that a phone opened the link
+    only puts the question on screen, and `phone_confirm` is called from the Confirm button alone.
+    Not recognizing it is Cancel, which turns the phone away."""
+    plan = PLAN_UI.read_text(encoding="utf-8")
+    assert plan.count('invoke("phone_confirm"') == 1 and "phone_confirm" not in ADD_UI.read_text(encoding="utf-8")
+    confirm = _js_function(plan, "confirmPhone")
+    assert 'invoke("phone_confirm", { id: pending.id })' in confirm
+    assert 'step !== "ask"' in confirm.split("\n")[1], "it can be reached from a step that asked nothing"
+    # Named in two places: where it is written, and the one button that calls it.
+    uses = [line.strip() for line in plan.splitlines() if "confirmPhone(" in line]
+    assert uses == ["async function confirmPhone() {", 'on("[data-phone-confirm]", () => void confirmPhone());'], uses
+    check = _js_function(plan, "checkPhone")
+    assert 'invoke("phone_check", { id })' in check and 'step = "ask"' in check
+    assert "confirm" not in check.lower().replace("phone_check", ""), "the poll does more than ask the question"
+    # The question is drawn with both answers, and starts on Cancel so Enter is never the yes.
+    ask = _js_function(plan, "phoneAsk")
+    assert "data-phone-cancel" in ask and "data-phone-confirm" in ask and plan.count("data-phone-confirm ") == 1
+    assert 'paint(true, "[data-phone-cancel]")' in check
+    assert 'invoke("phone_remove", { id })' in _js_function(plan, "cancelPhone")
+    # And the one sentence about what a phone can do is on the sheet.
+    assert "A phone can only allow a request to use a key. It can never add, change or delete one." \
+        in _js_function(plan, "phoneHome")
+
+
+def test_a_passphrase_never_rides_an_argument_and_ids_cannot_pass_for_flags():
+    """A backup's passphrase reaches the CLI on stdin, like a vault password: an argument is in every
+    process listing on the machine. And what the window sends as an id is checked and put after `--`,
+    because an id from the relay can begin with a dash."""
+    helper = _rust_function("run_json_with_passphrase")
+    assert 'Zeroizing::new(format!("{passphrase}\\n"))' in helper and "run_with_stdin(args, line.as_str())" in helper
+    assert ".arg(" not in helper and ".args(" not in helper
+    for name in ("backup_store", "backup_restore"):
+        body = _rust_function(name)
+        assert "let passphrase = Zeroizing::new(passphrase);" in body, f"{name} keeps the passphrase unwiped"
+        assert '"--password-stdin"' in body and "run_json_with_passphrase(" in body
+        # Every use of the variable after it is wrapped: a length check, or the last argument to the
+        # helper. (Sentences in quotes say the word too, so they are emptied first.)
+        rest = re.sub(r'"[^"\n]*"', '""', body.split("Zeroizing::new(passphrase);", 1)[1])
+        uses = re.findall(r"(?<![\w.])passphrase\b[^\n]*", rest)
+        assert uses and all(re.match(r"passphrase\.(chars\(\)\.count\(\)|is_empty\(\)|as_str\(\)\)\s*$)", use) for use in uses), uses
+        assert "push(passphrase" not in body and "push(&passphrase" not in body
+    for name in PLAN_COMMANDS:
+        body = _rust_function(name)
+        assert not re.search(r'"--pass(word|phrase)(?!-stdin)[^"]*"', body), f"{name} names a password option that is not stdin"
+        assert "run_json" in body, f"{name} does something other than run the CLI and return what it printed"
+    # Only the store and the restore take a passphrase at all.
+    takes = {name for name in PLAN_COMMANDS if re.search(r"pass(word|phrase): String", _rust_function(name))}
+    assert takes == {"backup_store", "backup_restore"}, takes
+
+    checks = {"backup_restore": "is_backup_code(code) && !is_relay_id(code)", "backup_remove": "is_relay_id(",
+              "phone_check": "is_relay_id(", "phone_confirm": "is_relay_id(", "phone_remove": "is_relay_id(",
+              "team_remove": "is_member_did("}
+    for name, check in checks.items():
+        body = _rust_function(name)
+        assert check in body, f"{name} passes what the window sent without checking it"
+        assert '"--"' in body or 'push("--")' in body, f"{name} puts what the window sent where a flag could be read"
+    subscribe = _rust_function("plan_subscribe")
+    assert '"sync" =>' in subscribe and '"teams" =>' in subscribe and "(2..=50).contains(count)" in subscribe
+    assert "(2..=50).contains(&seats)" in _rust_function("plan_seats")
+    invite = _rust_function("team_invite_args")
+    assert 'role != "use" && role != "read"' in invite and 'format!("--name={name}")' in invite
+    assert "selection_flags(selection, advanced)" in invite and "selection_flags(selection, advanced)" in _rust_function("invite_args")
+
+
+def test_sharing_with_a_person_is_the_add_a_device_sheet_and_not_a_copy_of_it():
+    """Choosing what goes, the one line and waiting for the join are the same for a computer and for a
+    person, so they are one module with a `mode`. Two copies would drift the first time one was fixed."""
+    add = ADD_UI.read_text(encoding="utf-8")
+    assert 'mode = "device", plans = null })' in add and 'const person = mode === "person";' in add
+    make = _js_function(add, "make")
+    assert 'await invoke("team_invite", { name: who.name.trim(), role: who.role, ...chosen })' in make
+    assert 'await invoke("link_invite", chosen)' in make
+    assert add.count('invoke("link_complete")') == 1, "a person's join is asked for some other way than a computer's"
+    # Use or see: said in words on the sheet, because the difference is the whole point of the choice.
+    who = _js_function(add, "whoHtml")
+    assert "PassBook never shows the keys to them." in who and "they can also see them." in who
+    # A refusal by the plan carries the button that opens the plans, and only when there is one to open.
+    assert "refused = Boolean(sentence && plans?.refused?.(sentence, code))" in add
+    assert "fail(row.detail ||" in add and 'row.code || "")' in add
+    assert 'on("[data-dev-plan]", () => { close(); plans?.open?.(); });' in add
+    ui = UI.read_text(encoding="utf-8")
+    assert ui.count("window.createPassbookAddDevice(") == 2 and 'mode: "person"' in ui
+    assert 'offer: () => plan.offer("machine_limit")' in ui and 'offer: () => plan.offer("seat_limit")' in ui
+    plan = PLAN_UI.read_text(encoding="utf-8")
+    assert 'new Set(["machine_limit", "seat_limit", "not_included"])' in plan
+    assert "if (!canBuy()) return \"\";" in _js_function(plan, "offerLabel")
+
+
+def test_the_plan_is_asked_for_after_the_page_is_up_and_its_failure_is_quiet():
+    """The plan comes from the relay. A relay that is slow or away must not hold the first paint, and
+    must not put an error bar on a window whose keys are all still here: Devices says "Plan: could not
+    check" with a Retry, and that is all."""
+    ui = UI.read_text(encoding="utf-8")
+    boot = ui[ui.index("async function boot()"):]
+    boot = boot[:boot.index("\n  }\n")]
+    assert boot.index("paint();") < boot.index("void plan.load();"), "the plan is asked for before the first paint"
+    assert "await plan.load()" not in ui, "something waits on the relay"
+    line = ui[ui.index("function planLine()"):]
+    line = line[:line.index("\n  }\n")]
+    assert "Plan: could not check" in line and 'data-plan-retry="1"' in line and "notice" not in line
+    assert 'main.querySelectorAll("[data-plan-retry]")' in ui
+    plan = PLAN_UI.read_text(encoding="utf-8")
+    load = _js_function(plan, "load")
+    assert "catch (caught) { statusError = " in load and "throw" not in load
+    # Devices and Activity draw what the plan module knows, and nothing when it knows nothing.
+    assert "${planLine()}" in ui and "${peoplePanel()}" in ui and "${teamActivity()}" in ui
+    people = ui[ui.index("function peoplePanel()"):]
+    assert 'if (!people) return "";' in people[:people.index("\n  }\n")]
+    activity = ui[ui.index("function teamActivity()"):]
+    assert 'if (!plan.people()?.members.length) return "";' in activity[:activity.index("\n  }\n")]
+    assert "From people you share with" in activity[:activity.index("\n  }\n")]
+
+
+def test_what_is_shown_once_is_copied_the_way_a_pairing_code_is():
+    """A backup's code and the link a phone opens are text on screen, so they may go to the clipboard
+    from the page, by the one path the page has for that. plan.js is handed that path; it does not
+    reach for the clipboard itself, and it asks nothing through the webview's own dialogs."""
+    plan = PLAN_UI.read_text(encoding="utf-8")
+    assert "clipboard" not in plan and "await copy(text)" in plan
+    assert "const copyShown = (copytext) => navigator.clipboard.writeText(copytext);" in UI.read_text(encoding="utf-8")
+    code = "\n".join(line.split("//")[0] for line in plan.splitlines())
+    assert not re.search(r"(?<![\w.])(confirm|alert|prompt)\(", code), "a native dialog is called"
+    # The code is shown once, and the sheet says what it is for before it can be closed.
+    shown = _js_function(plan, "backupCode")
+    assert "This code is shown once." in shown and "you need this code and your passphrase" in shown
+    assert 'data-backup-done ${saved ? "" : "disabled"}' in shown
+    assert 'if (sheet === "backup" && step === "code") return;' in plan, "Escape closes the only showing of the code"

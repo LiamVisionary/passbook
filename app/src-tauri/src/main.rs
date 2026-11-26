@@ -336,6 +336,14 @@ fn link_choices() -> Result<Value, String> {
 /// Each list becomes repeated flags. Names arrive as separate arguments, never through a shell.
 fn invite_args(selection: &Value, advanced: &Value) -> Vec<String> {
     let mut args: Vec<String> = ["link", "invite", "--json", "--no-wait"].iter().map(|s| s.to_string()).collect();
+    args.extend(selection_flags(selection, advanced));
+    args
+}
+
+/// What an invite carries, as flags: which keys, and the limits that travel with them. `link invite`
+/// (a computer) and `team invite` (a person) take the same ones, so both are built from this.
+fn selection_flags(selection: &Value, advanced: &Value) -> Vec<String> {
+    let mut args: Vec<String> = Vec::new();
     if selection.get("all").and_then(Value::as_bool).unwrap_or(false) {
         args.push("--all".into());
     }
@@ -396,6 +404,283 @@ mod invite_tests {
                                &json!({"hosts": ["api.openai.com"], "days": 900, "fixed": true}));
         assert_eq!(args, ["link", "invite", "--json", "--no-wait", "--keys", "OPENAI_API_KEY", "--group", "AI",
                           "--host", "api.openai.com", "--days", "365", "--fixed"]);
+    }
+}
+
+// ── plans, the backup on the relay, a phone, and people ───────────────────
+//
+// The relay sells what is beyond the free plan: more computers, an encrypted backup it keeps, answering
+// requests from a phone, and sharing keys with other people. Every command below is the CLI's own
+// (`passbook plan`, `backup`, `phone`, `team`) and returns what it printed. Nothing here opens an
+// address: paying and billing happen in the person's browser, which the CLI opens, the way
+// `balances open` does. A passphrase reaches the CLI on stdin and never as an argument.
+//
+// What the window sends is checked before it becomes an argument, and anything that is not a flag goes
+// after `--`: an id is 22 URL-safe characters, and one of those can begin with a dash.
+
+fn url_safe(text: &str, least: usize, most: usize) -> bool {
+    (least..=most).contains(&text.len())
+        && text.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+/// An id the relay made, for a backup, a phone or an invite.
+fn is_relay_id(id: &str) -> bool {
+    url_safe(id, 22, 22)
+}
+
+/// Who a person is to PassBook: `did:key:z` and the letters and digits after it.
+fn is_member_did(did: &str) -> bool {
+    did.strip_prefix("did:key:z")
+        .is_some_and(|rest| (1..=128).contains(&rest.len()) && rest.bytes().all(|b| b.is_ascii_alphanumeric()))
+}
+
+/// The code a backup is restored with on a machine that has nothing: `pbb1.<id>.<secret>`, and
+/// sometimes a fourth part naming the relay.
+fn is_backup_code(code: &str) -> bool {
+    let parts: Vec<&str> = code.split('.').collect();
+    matches!(parts.len(), 3 | 4)
+        && parts[0] == "pbb1"
+        && is_relay_id(parts[1])
+        && url_safe(parts[2], 20, 64)
+        && parts.get(3).map_or(true, |tail| url_safe(tail, 4, 200))
+}
+
+/// Run a command that reads a passphrase from stdin and answers in JSON.
+///
+/// The passphrase is one line on stdin, like a vault password, and the copy made to add the line
+/// ending is overwritten on the way out.
+fn run_json_with_passphrase(args: &[&str], passphrase: &str) -> Result<Value, String> {
+    let line = Zeroizing::new(format!("{passphrase}\n"));
+    let (worked, printed, complaint) = run_with_stdin(args, line.as_str())?;
+    if !worked {
+        return Err(if complaint.is_empty() {
+            "PassBook could not do that, and did not say why.".to_string()
+        } else {
+            complaint
+        });
+    }
+    serde_json::from_str(printed.trim()).map_err(|error| format!("PassBook returned something unreadable: {error}"))
+}
+
+/// The plan this PassBook is on, what it includes, and how much of it is used.
+#[tauri::command(async)]
+fn plan_status() -> Result<Value, String> {
+    run_json(&["plan", "--json"])
+}
+
+/// Start paying for a plan, or change the one already paid for. The CLI opens the payment page in the
+/// person's browser; the window is only told that it did.
+#[tauri::command(async)]
+fn plan_subscribe(plan: String, yearly: bool, seats: Option<u32>) -> Result<Value, String> {
+    let mut args: Vec<String> = vec!["plan".into(), "subscribe".into()];
+    match plan.as_str() {
+        "sync" => {
+            args.push("sync".into());
+            if yearly {
+                args.push("--yearly".into());
+            }
+        }
+        "teams" => {
+            if yearly {
+                return Err("PassBook Teams is paid by the month.".into());
+            }
+            let seats = seats.filter(|count| (2..=50).contains(count))
+                .ok_or("A team is between 2 and 50 people.")?;
+            args.push("teams".into());
+            args.push("--seats".into());
+            args.push(seats.to_string());
+        }
+        _ => return Err("Which plan?".into()),
+    }
+    args.push("--json".into());
+    let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
+    run_json(&borrowed)
+}
+
+/// Stop the plan renewing. It stays until the date already paid for.
+#[tauri::command(async)]
+fn plan_cancel() -> Result<Value, String> {
+    run_json(&["plan", "cancel", "--json"])
+}
+
+/// Undo a cancel that has not taken effect yet.
+#[tauri::command(async)]
+fn plan_resume() -> Result<Value, String> {
+    run_json(&["plan", "resume", "--json"])
+}
+
+/// Change how many people a Teams plan covers.
+#[tauri::command(async)]
+fn plan_seats(seats: u32) -> Result<Value, String> {
+    if !(2..=50).contains(&seats) {
+        return Err("A team is between 2 and 50 people.".into());
+    }
+    let count = seats.to_string();
+    run_json(&["plan", "seats", count.as_str(), "--json"])
+}
+
+/// Open the page where the card and the invoices are, in the person's browser.
+#[tauri::command(async)]
+fn plan_billing() -> Result<Value, String> {
+    run_json(&["plan", "billing", "--json"])
+}
+
+/// The backups the relay keeps for this PassBook: a label, a size and a date each.
+#[tauri::command(async)]
+fn backup_list() -> Result<Value, String> {
+    run_json(&["backup", "list", "--json"])
+}
+
+/// Encrypt the store under a passphrase and keep the copy on the relay. What comes back includes the
+/// code that restores it on a machine that has nothing: shown once, never kept by this app.
+#[tauri::command(async)]
+fn backup_store(passphrase: String) -> Result<Value, String> {
+    let passphrase = Zeroizing::new(passphrase);
+    if passphrase.chars().count() < 8 {
+        return Err("A backup passphrase must be at least 8 characters.".into());
+    }
+    run_json_with_passphrase(&["backup", "store", "--password-stdin", "--json"], passphrase.as_str())
+}
+
+/// Read a backup into this store, or with `dry_run` only say what it would add. Names, never values.
+#[tauri::command(async)]
+fn backup_restore(code: String, passphrase: String, dry_run: bool) -> Result<Value, String> {
+    let passphrase = Zeroizing::new(passphrase);
+    let code = code.trim();
+    if !is_backup_code(code) && !is_relay_id(code) {
+        return Err("That is not a backup code. It starts with pbb1 and has no spaces.".into());
+    }
+    if passphrase.is_empty() {
+        return Err("Enter the passphrase this backup was made with.".into());
+    }
+    let mut args: Vec<&str> = vec!["backup", "restore", "--password-stdin", "--json"];
+    if dry_run {
+        args.push("--dry-run");
+    }
+    args.push("--");
+    args.push(code);
+    run_json_with_passphrase(&args, passphrase.as_str())
+}
+
+/// Delete one backup from the relay.
+#[tauri::command(async)]
+fn backup_remove(id: String) -> Result<Value, String> {
+    if !is_relay_id(id.trim()) {
+        return Err("Which backup?".into());
+    }
+    run_json(&["backup", "remove", "--json", "--", id.trim()])
+}
+
+/// Make the link a phone opens to become the one that answers requests.
+#[tauri::command(async)]
+fn phone_add() -> Result<Value, String> {
+    run_json(&["phone", "add", "--json"])
+}
+
+/// Whether a phone has opened that link yet, and what it calls itself.
+#[tauri::command(async)]
+fn phone_check(id: String) -> Result<Value, String> {
+    if !is_relay_id(id.trim()) {
+        return Err("Which phone?".into());
+    }
+    run_json(&["phone", "check", "--json", "--", id.trim()])
+}
+
+/// Accept the phone that opened the link. Only ever called from the person pressing Confirm.
+#[tauri::command(async)]
+fn phone_confirm(id: String) -> Result<Value, String> {
+    if !is_relay_id(id.trim()) {
+        return Err("Which phone?".into());
+    }
+    run_json(&["phone", "confirm", "--json", "--", id.trim()])
+}
+
+#[tauri::command(async)]
+fn phone_list() -> Result<Value, String> {
+    run_json(&["phone", "list", "--json"])
+}
+
+/// Unlink a phone, or turn away one that opened the link and was not recognized.
+#[tauri::command(async)]
+fn phone_remove(id: String) -> Result<Value, String> {
+    if !is_relay_id(id.trim()) {
+        return Err("Which phone?".into());
+    }
+    run_json(&["phone", "remove", "--json", "--", id.trim()])
+}
+
+/// The arguments for `team invite`: who, what they may do with the keys, and the same choice of keys
+/// an invite for a computer takes. The name rides as `--name=…`, so one that begins with a dash is
+/// still a name.
+fn team_invite_args(name: &str, role: &str, selection: &Value, advanced: &Value) -> Result<Vec<String>, String> {
+    let name = name.trim();
+    if name.is_empty() || name.chars().count() > 60 || name.chars().any(char::is_control) {
+        return Err("Give this person a name, up to 60 characters.".into());
+    }
+    if role != "use" && role != "read" {
+        return Err("Choose whether they can use the keys or also see them.".into());
+    }
+    let mut args: Vec<String> = vec!["team".into(), "invite".into(), format!("--name={name}"),
+                                     "--role".into(), role.to_string()];
+    args.extend(selection_flags(selection, advanced));
+    args.push("--json".into());
+    args.push("--no-wait".into());
+    Ok(args)
+}
+
+/// Make an invite for a person. Whether they joined is asked with `link_complete`, as for a computer.
+#[tauri::command(async)]
+fn team_invite(name: String, role: String, selection: Value, advanced: Value) -> Result<Value, String> {
+    let args = team_invite_args(&name, &role, &selection, &advanced)?;
+    let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
+    run_json(&borrowed)
+}
+
+/// The people keys are shared with, and how many seats the plan has.
+#[tauri::command(async)]
+fn team_list() -> Result<Value, String> {
+    run_json(&["team", "list", "--json"])
+}
+
+/// Stop sharing with one person. The answer names the keys worth replacing at their provider.
+#[tauri::command(async)]
+fn team_remove(did: String) -> Result<Value, String> {
+    if !is_member_did(did.trim()) {
+        return Err("Which person?".into());
+    }
+    run_json(&["team", "remove", "--json", "--", did.trim()])
+}
+
+/// What the people keys are shared with did with them: names and times, never a value.
+#[tauri::command(async)]
+fn team_activity() -> Result<Value, String> {
+    run_json(&["team", "activity", "--json"])
+}
+
+#[cfg(test)]
+mod plan_tests {
+    use super::{is_backup_code, is_member_did, is_relay_id, team_invite_args};
+    use serde_json::json;
+
+    #[test]
+    fn only_what_the_relay_makes_passes_for_an_id_a_person_or_a_code() {
+        let id = "AbCdEfGhIjKlMnOpQrStU-";
+        assert!(is_relay_id(id) && !is_relay_id("short") && !is_relay_id("AbCdEfGhIjKlMnOpQrSt U"));
+        assert!(is_member_did("did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK"));
+        assert!(!is_member_did("did:key:z") && !is_member_did("--all") && !is_member_did("did:key:z6Mk haX"));
+        assert!(is_backup_code(&format!("pbb1.{id}.{}", "s".repeat(32))));
+        assert!(is_backup_code(&format!("pbb1.{id}.{}.{}", "s".repeat(20), "relay")));
+        assert!(!is_backup_code(&format!("pbb1.{id}.short")) && !is_backup_code(&format!("pbj1.{id}.{}", "s".repeat(32))));
+        assert!(!is_backup_code(&format!("pbb1.{id}.{}.", "s".repeat(32))));
+    }
+
+    #[test]
+    fn a_person_is_invited_with_the_same_choice_of_keys_as_a_computer() {
+        let args = team_invite_args(" -Ada ", "use", &json!({"groups": ["AI"]}), &json!({"days": 30})).unwrap();
+        assert_eq!(args, ["team", "invite", "--name=-Ada", "--role", "use", "--group", "AI", "--days", "30",
+                          "--json", "--no-wait"]);
+        assert!(team_invite_args("Ada", "own", &json!({}), &json!({})).is_err());
+        assert!(team_invite_args("  ", "read", &json!({}), &json!({})).is_err());
     }
 }
 
@@ -2527,6 +2812,7 @@ mod ui {
     // 1.10.28 with neither, so the window asked for it, got "404 not here", and stopped at the first
     // line that used it. tests/test_passbook_app_contract.py now checks both for every script tag.
     const ADDDEVICE: &[u8] = include_bytes!("../../ui/adddevice.js");
+    const PLAN: &[u8] = include_bytes!("../../ui/plan.js");
     const MARK: &[u8] = include_bytes!("../../ui/mark.png");
 
     /// The port this window prefers, and why it is not simply left to the OS.
@@ -2709,6 +2995,7 @@ mod ui {
             "/authorize.js" => ("200 OK", "text/javascript; charset=utf-8", AUTHORIZE),
             "/weblink.js" => ("200 OK", "text/javascript; charset=utf-8", WEBLINK),
             "/adddevice.js" => ("200 OK", "text/javascript; charset=utf-8", ADDDEVICE),
+            "/plan.js" => ("200 OK", "text/javascript; charset=utf-8", PLAN),
             "/mark.png" => ("200 OK", "image/png", MARK),
             _ => ("404 Not Found", "text/plain", b"not here"),
         };
@@ -3270,7 +3557,11 @@ fn main() {
             add_pasted, sync_status, sync_now, oauth_add, rotate_status, rotate_start, rotate_finish, rotate_verify,
             account_set, account_lookup,
             update_state, update_install,
-            link_choices, link_invite, link_complete, link_cancel, link_refresh
+            link_choices, link_invite, link_complete, link_cancel, link_refresh,
+            plan_status, plan_subscribe, plan_cancel, plan_resume, plan_seats, plan_billing,
+            backup_list, backup_store, backup_restore, backup_remove,
+            phone_add, phone_check, phone_confirm, phone_list, phone_remove,
+            team_invite, team_list, team_remove, team_activity
         ])
         .run(tauri::generate_context!())
         .expect("PassBook failed to start");

@@ -108,7 +108,26 @@
     "allow-link-invite",
     "allow-link-complete",
     "allow-link-cancel",
-    "allow-link-refresh"
+    "allow-link-refresh",
+    "allow-plan-status",
+    "allow-plan-subscribe",
+    "allow-plan-cancel",
+    "allow-plan-resume",
+    "allow-plan-seats",
+    "allow-plan-billing",
+    "allow-backup-list",
+    "allow-backup-store",
+    "allow-backup-restore",
+    "allow-backup-remove",
+    "allow-phone-add",
+    "allow-phone-check",
+    "allow-phone-confirm",
+    "allow-phone-list",
+    "allow-phone-remove",
+    "allow-team-invite",
+    "allow-team-list",
+    "allow-team-remove",
+    "allow-team-activity"
   ],
   "remote": {
     "urls": [

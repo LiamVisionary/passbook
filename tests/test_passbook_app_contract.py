@@ -642,6 +642,27 @@ def test_every_command_the_window_calls_is_allowed_by_the_acl():
     assert not missing, f"commands the window may not call: {missing}"
 
 
+def test_every_script_the_window_loads_is_embedded_and_served():
+    """A script tag the embedded server does not answer stops the whole window.
+
+    The window is not read from disk: `mod ui` in main.rs embeds each file with
+    `include_bytes!` and answers a fixed list of paths, 404 for anything else.
+    1.10.28 added `<script src="/adddevice.js">` and neither embedded nor routed
+    it. The running app answered 404, `window.createPassbookAddDevice` was
+    undefined, and the first statement that called it threw before `boot()` was
+    ever reached. Nothing here failed, because nothing here looked.
+    """
+    page = UI.read_text(encoding="utf-8")
+    rust = (REPO / "app/src-tauri/src/main.rs").read_text(encoding="utf-8")
+    scripts = re.findall(r'<script src="(/[^"]+)"', page)
+    assert scripts, "no script tags found: has the page changed shape?"
+    for path in scripts:
+        name = path.lstrip("/")
+        assert (REPO / "app/ui" / name).exists(), f"{path} is loaded but app/ui/{name} does not exist"
+        assert f'include_bytes!("../../ui/{name}")' in rust, f"{path} is loaded but not embedded in mod ui"
+        assert re.search(r'"%s"\s*=>\s*\("200 OK"' % re.escape(path), rust), f"{path} is embedded but no route serves it"
+
+
 def test_the_source_list_stays_short():
     """Eight destinations is a filing cabinet, not an app.
 

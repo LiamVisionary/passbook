@@ -2523,6 +2523,10 @@ mod ui {
     const INDEX: &[u8] = include_bytes!("../../ui/index.html");
     const AUTHORIZE: &[u8] = include_bytes!("../../ui/authorize.js");
     const WEBLINK: &[u8] = include_bytes!("../../ui/weblink.js");
+    // Every script index.html loads has to be embedded AND routed below. `adddevice.js` shipped in
+    // 1.10.28 with neither, so the window asked for it, got "404 not here", and stopped at the first
+    // line that used it. tests/test_passbook_app_contract.py now checks both for every script tag.
+    const ADDDEVICE: &[u8] = include_bytes!("../../ui/adddevice.js");
     const MARK: &[u8] = include_bytes!("../../ui/mark.png");
 
     /// The port this window prefers, and why it is not simply left to the OS.
@@ -2704,6 +2708,7 @@ mod ui {
             "/" | "/index.html" => ("200 OK", "text/html; charset=utf-8", INDEX),
             "/authorize.js" => ("200 OK", "text/javascript; charset=utf-8", AUTHORIZE),
             "/weblink.js" => ("200 OK", "text/javascript; charset=utf-8", WEBLINK),
+            "/adddevice.js" => ("200 OK", "text/javascript; charset=utf-8", ADDDEVICE),
             "/mark.png" => ("200 OK", "image/png", MARK),
             _ => ("404 Not Found", "text/plain", b"not here"),
         };

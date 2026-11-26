@@ -991,7 +991,7 @@ Four things worth knowing before you pay for anything.
 text on the relay instead.
 
 ```bash
-passbook backup store               # asks for a passphrase, twice
+passbook backup store               # press Return and PassBook makes the passphrase
 passbook backup list
 passbook backup restore pbb1.…      # on any machine, with the recovery code
 passbook backup restore pbb1.… --dry-run
@@ -1002,10 +1002,17 @@ What leaves your machine is exactly what `passbook export` makes: scrypt over yo
 AES-256-GCM over the body. The passphrase never leaves, so the relay holds something it cannot
 open.
 
-`store` prints a **recovery code** once and does not save it here, because a recovery code kept
-on the machine it recovers is not one. A machine that has nothing needs the code *and* the
-passphrase. The relay has only the SHA-256 of the code's secret. Lose the passphrase and the
-backup is gone: nobody can reset it, the relay least of all.
+The passphrase is the whole of the protection. Whoever gets a copy of the backup can guess at it
+for as long as they like, and a short one can be guessed. So **PassBook makes the passphrase**:
+125 random bits, shown once, for your password manager. It waits until you say it is saved before
+anything is uploaded. You can type your own instead, at 16 characters or more. An agent cannot be
+shown a made passphrase at all: it goes to a terminal or to the app, never into a pipe.
+
+Then `store` prints a **recovery code**, once, and does not save it here, because a recovery code
+kept on the machine it recovers is not one. Keep it somewhere other than the passphrase. The code
+fetches the backup and the passphrase opens it: a machine that has nothing needs both. The relay
+has only the SHA-256 of the code's secret. Lose the passphrase and the backup is gone: nobody can
+reset it, the relay least of all.
 
 ### Answering from your phone
 

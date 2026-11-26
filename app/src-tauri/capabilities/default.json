@@ -116,6 +116,7 @@
     "allow-plan-seats",
     "allow-plan-billing",
     "allow-backup-list",
+    "allow-backup-passphrase",
     "allow-backup-store",
     "allow-backup-restore",
     "allow-backup-remove",

@@ -4,6 +4,27 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+### A backup's passphrase is made by PassBook, not chosen
+
+Liam, 2026-11-26, asking whether a backup on the relay "cant be stolen", and of the answer (use a passphrase you
+generate, keep the code apart from it, there is no reset): "do this first". The honest answer was that the copy can
+be taken and only the passphrase stands in the way, and PassBook was asking people to invent one of at least 8
+characters. So the three pieces of advice are what the product does now.
+
+- **PassBook makes the passphrase.** `passbook backup store`, and Back up now in the window, show one it generated:
+  25 characters in five groups, 125 random bits, in the alphabet recovery codes already use. It is shown once, for a
+  password manager, and nothing is uploaded until you say it is saved. Typed back later in lower case, with spaces
+  or without its dashes, it still opens the backup.
+- **Your own passphrase is the second choice, and held to 16 characters** (it was 8). Press a key at the prompt, or
+  "Use my own passphrase instead". An export to a file on your own disk keeps its old floor; this one is for a copy
+  kept on somebody else's computer.
+- **The recovery code comes after, on its own screen, with one instruction:** keep it somewhere other than the
+  passphrase. The code fetches the backup and the passphrase opens it.
+- **There is no reset, and it says so** where the passphrase is shown, not only in the README.
+- A passphrase PassBook made is never printed into a pipe. It goes to a terminal or to the app; anything else is
+  refused, so an agent's transcript cannot hold one.
+
+
 ## [1.10.29] — 2026-11-26
 
 ### The relay's source, and plans: PassBook Sync and PassBook Teams

@@ -531,13 +531,22 @@ fn backup_list() -> Result<Value, String> {
     run_json(&["backup", "list", "--json"])
 }
 
+/// A passphrase PassBook made for a backup: 125 random bits, for a password manager. The backup's
+/// passphrase is all that protects a copy kept on the relay, so the window offers this one first
+/// and a person's own second. It protects nothing until `backup_store` is called with it.
+#[tauri::command(async)]
+fn backup_passphrase() -> Result<Value, String> {
+    run_json(&["backup", "passphrase", "--json"])
+}
+
 /// Encrypt the store under a passphrase and keep the copy on the relay. What comes back includes the
 /// code that restores it on a machine that has nothing: shown once, never kept by this app.
 #[tauri::command(async)]
 fn backup_store(passphrase: String) -> Result<Value, String> {
     let passphrase = Zeroizing::new(passphrase);
-    if passphrase.chars().count() < 8 {
-        return Err("A backup passphrase must be at least 8 characters.".into());
+    // The CLI holds the same floor; said here too so a short one is refused before a process starts.
+    if passphrase.chars().count() < 16 {
+        return Err("A backup passphrase needs at least 16 characters, or let PassBook make one.".into());
     }
     run_json_with_passphrase(&["backup", "store", "--password-stdin", "--json"], passphrase.as_str())
 }
@@ -3559,7 +3568,7 @@ fn main() {
             update_state, update_install,
             link_choices, link_invite, link_complete, link_cancel, link_refresh,
             plan_status, plan_subscribe, plan_cancel, plan_resume, plan_seats, plan_billing,
-            backup_list, backup_store, backup_restore, backup_remove,
+            backup_list, backup_passphrase, backup_store, backup_restore, backup_remove,
             phone_add, phone_check, phone_confirm, phone_list, phone_remove,
             team_invite, team_list, team_remove, team_activity
         ])

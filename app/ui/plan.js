@@ -41,6 +41,9 @@ window.createPassbookPlan = function ({ invoke, container, esc, repaint, copy, o
   let offer = "sync", yearly = false, seats = 0, seatsTouched = false, teamsOpen = false, before = "", lastOrder = null;
   // Backup: the list, the backup just made (its code is shown once), and a restore in progress.
   let backups = null, backupAllowed = null, made = null, saved = false;
+  // The passphrase for a backup being made: one PassBook generated (the default, shown once, held
+  // only until the backup is stored), or the person's own when they ask for that instead.
+  let phrase = { made: "", own: false, kept: false, failed: "" };
   let restoring = { id: "", label: "", code: "", passphrase: "", preview: null, result: null };
   // Phone: the list, and the phone that has been given a link but is not confirmed yet.
   let phones = null, pending = null;
@@ -120,6 +123,7 @@ window.createPassbookPlan = function ({ invoke, container, esc, repaint, copy, o
     restoring.passphrase = "";
     restoring = { id: "", label: "", code: "", passphrase: "", preview: null, result: null };
     made = null; saved = false; pending = null; removed = null; copied = false; clearTimeout(copiedTimer);
+    phrase = { made: "", own: false, kept: false, failed: "" };
   }
 
   function close() {
@@ -413,26 +417,53 @@ window.createPassbookPlan = function ({ invoke, container, esc, repaint, copy, o
         <button class="aprimary" data-backup-new ${busy || backups === null || !allowed ? "disabled" : ""}>Back up now</button></div>`;
   }
 
+  /** Ask PassBook for a passphrase when the step opens. Asked once; the person may ask for another. */
+  async function makePhrase() {
+    phrase = { made: "", own: false, kept: false, failed: "" };
+    paint(true);
+    try {
+      const answer = await invoke("backup_passphrase");
+      phrase.made = String(answer?.passphrase || "");
+      if (!phrase.made) phrase.failed = "PassBook could not make a passphrase.";
+    } catch (caught) { phrase.failed = String(caught || "").replace(/^Error:\s*/, "") || "PassBook could not make a passphrase."; }
+    if (sheet === "backup" && step === "store") paint(true, phrase.made ? "[data-plan-copy]" : "[data-phrase-own]");
+  }
+
   function backupStore() {
-    return `<div class="ahead"><h1>Choose a passphrase</h1>
-        <p class="aorigin">It encrypts the backup before it leaves this computer. You need it to restore, and PassBook cannot recover it for you.</p></div>
-      <form class="akeys" id="pb-store">
-        <div class="akey"><label class="aplain" for="pb-pass">Passphrase</label>
-          <input id="pb-pass" type="password" autocomplete="new-password" maxlength="4096" ${busy ? "disabled" : ""}>
-          <span class="ahint">At least 8 characters.</span></div>
-        <div class="akey"><label class="aplain" for="pb-pass2">The same passphrase again</label>
-          <input id="pb-pass2" type="password" autocomplete="new-password" maxlength="4096" ${busy ? "disabled" : ""}></div>
-        <p class="aerr" role="alert" data-plan-says hidden></p>${errorHtml("not_included")}
-        <div class="arow"><button class="aghost" type="button" data-plan-home ${busy ? "disabled" : ""}>Back</button>
-          <button class="aprimary" type="submit" ${busy ? "disabled" : ""}>${busy ? "Backing up\u2026" : "Back up"}</button></div>
-      </form>`;
+    const why = `It encrypts the backup before it leaves this computer, so the relay holds something it cannot open.
+      Nobody can reset it. If it is lost, so is the backup.`;
+    if (phrase.own) {
+      return `<div class="ahead"><h1>Use your own passphrase</h1>
+          <p class="aorigin">${why}</p></div>
+        <form class="akeys" id="pb-store">
+          <div class="akey"><label class="aplain" for="pb-pass">Passphrase</label>
+            <input id="pb-pass" type="password" autocomplete="new-password" maxlength="4096" ${busy ? "disabled" : ""}>
+            <span class="ahint">At least 16 characters. Five random words is a good one. A short one can be guessed by anyone who gets a copy of the backup.</span></div>
+          <div class="akey"><label class="aplain" for="pb-pass2">The same passphrase again</label>
+            <input id="pb-pass2" type="password" autocomplete="new-password" maxlength="4096" ${busy ? "disabled" : ""}></div>
+          <p class="aerr" role="alert" data-plan-says hidden></p>${errorHtml("not_included")}
+          <button class="alink" type="button" data-phrase-made ${busy ? "disabled" : ""}>Let PassBook make one instead</button>
+          <div class="arow"><button class="aghost" type="button" data-plan-home ${busy ? "disabled" : ""}>Back</button>
+            <button class="aprimary" type="submit" ${busy ? "disabled" : ""}>${busy ? "Backing up\u2026" : "Back up"}</button></div>
+        </form>`;
+    }
+    return `<div class="ahead"><h1>Save this passphrase</h1>
+        <p class="aorigin">PassBook made it for this backup. Put it in your password manager now: it is shown once.</p></div>
+      ${phrase.made ? copyHtml(phrase.made, "Copy the passphrase")
+        : phrase.failed ? `<p class="aerr" role="alert">${esc(phrase.failed)}</p>` : waitHtml("Making a passphrase.")}
+      <p class="anote">${why}</p>
+      ${phrase.made ? `<label class="drow"><input type="checkbox" data-phrase-kept ${phrase.kept ? "checked" : ""} ${busy ? "disabled" : ""}><span class="grow">I have saved this passphrase</span></label>` : ""}
+      ${errorHtml("not_included")}
+      <button class="alink" type="button" data-phrase-own ${busy ? "disabled" : ""}>Use my own passphrase instead</button>
+      <div class="arow"><button class="aghost" type="button" data-plan-home ${busy ? "disabled" : ""}>Back</button>
+        <button class="aprimary" type="button" data-phrase-store ${busy || !phrase.made || !phrase.kept ? "disabled" : ""}>${busy ? "Backing up\u2026" : "Back up now"}</button></div>`;
   }
 
   function backupCode() {
     return `<div class="ahead"><h1>Save this code</h1>
         <p class="aorigin">${made.count === undefined ? "Your keys are" : `${plural(Number(made.count) || 0, "key")} ${Number(made.count) === 1 ? "is" : "are"}`} backed up. This code is shown once.</p></div>
       ${copyHtml(made.code, "Copy the backup code")}
-      <p class="anote">To restore on a computer that has nothing, you need this code and your passphrase. PassBook does not keep the code, so save it now, somewhere apart from the passphrase.</p>
+      <p class="anote">Keep it somewhere other than the passphrase. The code fetches the backup and the passphrase opens it: a computer that has nothing needs both, and PassBook keeps neither.</p>
       <label class="drow"><input type="checkbox" data-backup-saved ${saved ? "checked" : ""}><span class="grow">I have saved this code</span></label>
       ${errorHtml()}
       ${one("Done", `data-backup-done ${saved ? "" : "disabled"}`)}`;
@@ -482,14 +513,18 @@ window.createPassbookPlan = function ({ invoke, container, esc, repaint, copy, o
 
   async function storeBackup(first, second) {
     if (busy) return;
-    if (first.length < 8) { complain("A backup passphrase must be at least 8 characters.", "#pb-pass"); return; }
-    if (first !== second) { complain("The two passphrases are not the same.", "#pb-pass2"); return; }
+    if (phrase.own) {
+      if (first.length < 16) { complain("A passphrase of your own needs at least 16 characters, or let PassBook make one.", "#pb-pass"); return; }
+      if (first !== second) { complain("The two passphrases are not the same.", "#pb-pass2"); return; }
+    } else if (!first || !phrase.kept) return;
     clearSaid(); busy = "store"; paint(true);
     try {
       made = await invoke("backup_store", { passphrase: first });
+      // Stored: the passphrase has done its work here and is not kept a moment longer.
+      phrase = { made: "", own: false, kept: false, failed: "" };
       saved = false; copied = false; step = "code"; void load();
     } catch (caught) { fail(caught); }
-    finally { busy = ""; paint(true, step === "code" ? "[data-plan-copy]" : "#pb-pass"); }
+    finally { busy = ""; paint(true, step === "code" ? "[data-plan-copy]" : phrase.own ? "#pb-pass" : "[data-phrase-store]"); }
   }
 
   /** Read a backup: first only to say what it would add, then (pressed again) for real. */
@@ -727,12 +762,12 @@ window.createPassbookPlan = function ({ invoke, container, esc, repaint, copy, o
       else if (kind === "member") void removeMember(id);
     });
     on("[data-plan-copy]", async () => {
-      const text = sheet === "backup" ? made?.code : pending?.url;
+      const text = sheet === "backup" ? (step === "store" ? phrase.made : made?.code) : pending?.url;
       if (!text) return;
       try {
         await copy(text); copied = true; paint(true);
         clearTimeout(copiedTimer);
-        copiedTimer = setTimeout(() => { copied = false; if (sheet && (step === "code" || step === "link")) paint(true); }, 1400);
+        copiedTimer = setTimeout(() => { copied = false; if (sheet && (step === "code" || step === "link" || step === "store")) paint(true); }, 1400);
       } catch { error = "Could not copy. Select it and copy it by hand."; errorRefused = false; paint(true); }
     });
 
@@ -759,7 +794,16 @@ window.createPassbookPlan = function ({ invoke, container, esc, repaint, copy, o
     on("[data-plan-billing]", () => void openBilling());
 
     // Backup
-    on("[data-backup-new]", () => { clearSaid(); step = "store"; paint(true, "#pb-pass"); });
+    on("[data-backup-new]", () => { clearSaid(); step = "store"; copied = false; void makePhrase(); });
+    on("[data-phrase-own]", () => { clearSaid(); phrase = { made: "", own: true, kept: false, failed: "" }; copied = false; paint(true, "#pb-pass"); });
+    on("[data-phrase-made]", () => { clearSaid(); copied = false; void makePhrase(); });
+    on("[data-phrase-store]", () => void storeBackup(phrase.made, phrase.made));
+    const keptBox = container.querySelector("[data-phrase-kept]");
+    if (keptBox) keptBox.onchange = () => {
+      phrase.kept = keptBox.checked;
+      const go = container.querySelector("[data-phrase-store]");
+      if (go) go.disabled = !phrase.kept || !phrase.made;
+    };
     on("[data-backup-code]", () => { clearSaid(); forget(); step = "restore"; paint(true, "#pb-code"); });
     on("[data-backup-restore]", (event) => {
       const id = event.currentTarget.dataset.backupRestore, row = (backups || []).find((item) => item.id === id);

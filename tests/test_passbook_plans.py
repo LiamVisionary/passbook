@@ -13,6 +13,7 @@ import base64
 import hashlib
 import hmac
 import json
+import re
 import secrets
 import sys
 import time
@@ -657,3 +658,93 @@ def test_removing_a_person_stops_their_reports_and_names_what_to_rotate(world, r
         passbook_stamp.stamp(op="use", keys=["OPENAI_API_KEY"], app="late", granted=True, root=home)
         assert team.report()["sent"] == 0
     assert relay.events == []
+
+
+# ── the passphrase is made here, not chosen ─────────────────────────────────
+
+
+def test_a_made_passphrase_is_125_bits_and_reads_back_however_it_was_copied():
+    made = cloud.generate_passphrase()
+    groups = made.split("-")
+    assert [len(group) for group in groups] == [5, 5, 5, 5, 5]
+    import passbook_vault
+    assert set("".join(groups)) <= set(passbook_vault.RECOVERY_ALPHABET) and len(passbook_vault.RECOVERY_ALPHABET) == 32
+    assert len({cloud.generate_passphrase() for _ in range(50)}) == 50
+    cloud.check_passphrase(made)
+    # Read off paper in lower case, with spaces, or run together: still the same passphrase.
+    for copied in (made.lower(), made.replace("-", " "), made.replace("-", ""), f"  {made.lower().replace('-', '  ')} "):
+        assert made in cloud.candidates(copied)
+    assert cloud.candidates(made) == [made]
+    assert cloud.candidates("five ordinary words go here") == ["five ordinary words go here"], "somebody's own passphrase is never rewritten"
+
+
+def test_a_passphrase_somebody_types_is_held_to_sixteen_characters():
+    cloud.check_passphrase("x" * 16)
+    with pytest.raises(cloud.CloudBackupError, match="at least 16 characters.*let PassBook make one"):
+        cloud.check_passphrase("x" * 15)
+
+
+def _cli(monkeypatch, capsys, args, *, typed=(), stdin="", tty=True):
+    """Run the command line the way a person at a terminal would: `typed` answers each hidden prompt."""
+    import io
+    import passbook_cli
+    answers = list(typed)
+    monkeypatch.setattr(passbook_cli, "hidden_input", lambda prompt="", **_: answers.pop(0))
+    monkeypatch.setattr("builtins.input", lambda prompt="": "")
+    monkeypatch.setattr(sys, "stdin", io.StringIO(stdin))
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: tty, raising=False)
+    code = passbook_cli.main(args)
+    out = capsys.readouterr()
+    return code, out.out, out.err
+
+
+def test_pressing_return_has_passbook_make_the_passphrase_and_the_backup_opens_with_it(world, relay, monkeypatch, capsys):
+    relay.plan["backup"] = True
+    with world["at"]("owner"):
+        code, out, _ = _cli(monkeypatch, capsys, ["backup", "store"], typed=[""])
+    assert code == 0
+    made = re.search(r"^    ([0-9A-Z]{5}(?:-[0-9A-Z]{5}){4})$", out, re.M).group(1)
+    recovery = re.search(r"^    (pbb1\.\S+)$", out, re.M).group(1)
+    assert out.index(made) < out.index("Press Return") if "Press Return" in out else True
+    assert out.index(made) < out.index(recovery), "the passphrase is shown and saved before the code exists"
+    assert "Nobody can reset it" in out and "somewhere other than the passphrase" in out
+    assert made not in "\n".join(relay.seen), "the passphrase never reaches the relay"
+
+    # On a machine that has nothing, typed back the way a person reads it off paper.
+    with world["at"]("bot"):
+        code, out, err = _cli(monkeypatch, capsys, ["backup", "restore", recovery, "--password-stdin", "--json"],
+                              stdin=made.lower().replace("-", " ") + "\n")
+        assert code == 0, err
+        assert json.loads(out)["added"] == ["ANTHROPIC_API_KEY", "LOCAL_ONLY", "OPENAI_API_KEY", "STRIPE_SECRET_KEY"]
+        code, _, err = _cli(monkeypatch, capsys, ["backup", "restore", recovery, "--password-stdin"], stdin="not-the-passphrase-at-all\n")
+        assert code == 1 and "does not open" in err
+
+
+def test_a_short_passphrase_of_your_own_is_refused_before_anything_leaves(world, relay, monkeypatch, capsys):
+    relay.plan["backup"] = True
+    with world["at"]("owner"):
+        code, _, err = _cli(monkeypatch, capsys, ["backup", "store"], typed=["only-12-char"])
+        assert code == 1 and "at least 16 characters" in err
+        code, _, err = _cli(monkeypatch, capsys, ["backup", "store", "--password-stdin"], stdin="short-one\n")
+        assert code == 1 and "at least 16 characters" in err
+        code, _, err = _cli(monkeypatch, capsys, ["backup", "store"], typed=["a passphrase of my own choosing", "a different one entirely here"])
+        assert code == 1 and "did not match" in err
+        assert relay.backups == {}
+        code, out, _ = _cli(monkeypatch, capsys, ["backup", "store", "--json"], typed=["a passphrase of my own choosing"] * 2)
+        assert code == 0 and json.loads(out)["count"] == 4 and len(relay.backups) == 1
+
+
+def test_a_made_passphrase_is_never_printed_into_a_pipe(world, relay, monkeypatch, capsys):
+    """An agent's stdout is a transcript. A passphrase PassBook makes is shown to a terminal or handed to
+    the window, and to nothing else."""
+    relay.plan["backup"] = True
+    with world["at"]("owner"):
+        for args in (["backup", "store"], ["backup", "store", "--generate"]):
+            code, out, err = _cli(monkeypatch, capsys, args, typed=[""], tty=False)
+            assert code == 1 and "only shown in a terminal or in the app" in err and not re.search(r"[0-9A-Z]{5}-[0-9A-Z]{5}", out)
+        assert relay.backups == {}
+        code, out, err = _cli(monkeypatch, capsys, ["backup", "passphrase"], tty=False)
+        assert code == 1 and out == ""
+        code, out, _ = _cli(monkeypatch, capsys, ["backup", "passphrase", "--json"], tty=False)
+        answer = json.loads(out)
+        assert code == 0 and answer["minimum"] == 16 and cloud.candidates(answer["passphrase"]) == [answer["passphrase"]]

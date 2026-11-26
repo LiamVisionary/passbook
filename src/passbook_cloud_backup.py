@@ -24,6 +24,16 @@ and the passphrase. Neither alone opens anything.
 
 The code is shown once, when the backup is made. It is not written anywhere on this machine,
 because a recovery code kept on the machine it recovers is not one.
+
+**The passphrase is the whole of the protection, so PassBook makes it.** Whoever holds the
+ciphertext (the relay, or anybody who breaks into it) can guess at the passphrase for as long as
+they like; scrypt makes each guess slow and a short passphrase is still short. A file on your own
+disk is one thing. A copy of every credential kept on somebody else's computer is another, and
+"at least 8 characters" is the wrong floor for it. So by default the passphrase is generated here
+(`generate_passphrase`, 125 random bits, in the alphabet recovery codes already use), shown once
+for a password manager, and never chosen. A person who wants their own may have it, at 16
+characters or more (`check_passphrase`). Liam, 2026-11-26, of the advice to "use a passphrase you
+generate, not one you invent": "do this first".
 """
 from __future__ import annotations
 
@@ -37,6 +47,9 @@ import passbook_backup
 import passbook_join as join
 import passbook_link as link
 
+# The floor for a passphrase somebody types themselves. Five ordinary words clear it.
+MIN_PASSPHRASE = 16
+PASSPHRASE_GROUPS, PASSPHRASE_GROUP = 5, 5
 CODE_VERSION = "pbb1"
 CODE_SHAPE = re.compile(r"^pbb1\.([A-Za-z0-9_-]{22})\.([A-Za-z0-9_-]{20,64})(?:\.([A-Za-z0-9_-]{4,200}))?$")
 ID_SHAPE = re.compile(r"^[A-Za-z0-9_-]{22}$")
@@ -49,6 +62,47 @@ class CloudBackupError(join.JoinError):
     def __init__(self, message: str, code: str = "") -> None:
         super().__init__(message)
         self.code = code
+
+
+def _alphabet() -> str:
+    # The one recovery codes use: no I, L, O or U, so nothing in it is mistaken for something else.
+    import passbook_vault
+    return passbook_vault.RECOVERY_ALPHABET
+
+
+def generate_passphrase() -> str:
+    """A passphrase nobody could guess: 25 characters of 32, which is 125 bits, in five groups.
+
+    Made to be kept in a password manager and pasted, not remembered. Grouped so that a person who
+    does have to read it off paper one day can keep their place.
+    """
+    alphabet = _alphabet()
+    return "-".join("".join(secrets.choice(alphabet) for _ in range(PASSPHRASE_GROUP)) for _ in range(PASSPHRASE_GROUPS))
+
+
+def check_passphrase(passphrase: str) -> None:
+    """Refuse a passphrase too short to protect a backup that is kept on a relay."""
+    if len(str(passphrase)) < MIN_PASSPHRASE:
+        raise CloudBackupError(
+            f"A passphrase for a backup kept on the relay needs at least {MIN_PASSPHRASE} characters: whoever holds the backup "
+            "can guess at it for as long as they like. Five random words would do, or let PassBook make one.")
+
+
+def candidates(passphrase: str) -> list[str]:
+    """The passphrase as typed, and, if it looks like one PassBook made, as PassBook wrote it.
+
+    A made passphrase read back off paper arrives in lower case, with spaces, or without its
+    dashes. That is the same passphrase, and refusing it would lose a backup over a hyphen.
+    """
+    typed = str(passphrase)
+    alphabet = set(_alphabet())
+    bare = "".join(typed.split()).replace("-", "").upper()
+    out = [typed]
+    if len(bare) == PASSPHRASE_GROUPS * PASSPHRASE_GROUP and set(bare) <= alphabet:
+        made = "-".join(bare[i:i + PASSPHRASE_GROUP] for i in range(0, len(bare), PASSPHRASE_GROUP))
+        if made != typed:
+            out.append(made)
+    return out
 
 
 def _ask(method: str, path: str, body: Mapping[str, Any] | None = None, *, relay: str = "",

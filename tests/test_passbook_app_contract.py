@@ -2035,6 +2035,30 @@ def test_what_is_shown_once_is_copied_the_way_a_pairing_code_is():
     assert not re.search(r"(?<![\w.])(confirm|alert|prompt)\(", code), "a native dialog is called"
     # The code is shown once, and the sheet says what it is for before it can be closed.
     shown = _js_function(plan, "backupCode")
-    assert "This code is shown once." in shown and "you need this code and your passphrase" in shown
+    assert "This code is shown once." in shown
+    assert "somewhere other than the passphrase" in shown and "needs both" in shown, "the code screen says to keep the two apart"
     assert 'data-backup-done ${saved ? "" : "disabled"}' in shown
     assert 'if (sheet === "backup" && step === "code") return;' in plan, "Escape closes the only showing of the code"
+
+
+def test_a_backups_passphrase_is_made_by_passbook_unless_somebody_asks_to_type_one():
+    """A copy of every credential kept on a relay is only as safe as its passphrase, and people choose
+    short ones. So the sheet shows one PassBook made, will not back up until the person says they
+    saved it, says there is no reset, and holds a typed one to 16 characters (Liam, 2026-11-26)."""
+    plan = PLAN_UI.read_text(encoding="utf-8")
+    rust = (REPO / "app/src-tauri/src/main.rs").read_text(encoding="utf-8")
+    step = _js_function(plan, "backupStore")
+    assert 'copyHtml(phrase.made, "Copy the passphrase")' in step, "the made passphrase is shown with the page's own copy"
+    assert "Nobody can reset it. If it is lost, so is the backup." in step
+    assert 'data-phrase-store ${busy || !phrase.made || !phrase.kept ? "disabled" : ""}' in step, "no backup until it is saved"
+    assert "At least 16 characters." in step and "data-phrase-own" in step and "data-phrase-made" in step
+    # Opening the step asks for a made one; typing your own is the second choice, not the first.
+    assert 'on("[data-backup-new]", () => { clearSaid(); step = "store"; copied = false; void makePhrase(); });' in plan
+    assert 'await invoke("backup_passphrase")' in _js_function(plan, "makePhrase")
+    store = _js_function(plan, "storeBackup")
+    assert "first.length < 16" in store and "8 characters" not in plan
+    assert 'phrase = { made: "", own: false, kept: false, failed: "" };' in store, "the passphrase is dropped once the backup is stored"
+    assert 'phrase = { made: "", own: false, kept: false, failed: "" };' in _js_function(plan, "forget"), "and when the sheet is left"
+    # The shell holds the same floor, and the made one comes from the command line, the one place it is made.
+    assert 'run_json(&["backup", "passphrase", "--json"])' in rust
+    assert "passphrase.chars().count() < 16" in rust

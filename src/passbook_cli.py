@@ -8866,13 +8866,43 @@ def cmd_backup(args: argparse.Namespace) -> int:
             cloud.remove(args.id)
             print(json.dumps({"ok": True}) if args.json else "Removed from the relay.")
             return 0
+        if step == "passphrase":
+            # For the window, which shows it once and hands it straight back on stdin. A terminal
+            # gets one from `backup store`; anything else is refused, because a passphrase printed
+            # into a pipe is a passphrase in somebody's log.
+            if not args.json and not sys.stdout.isatty():
+                return _fail("A passphrase is only shown in a terminal or in the app.", "Run:  passbook backup store")
+            made_one = cloud.generate_passphrase()
+            print(json.dumps({"ok": True, "passphrase": made_one, "minimum": cloud.MIN_PASSPHRASE}) if args.json else made_one)
+            return 0
         if step == "store":
             values = _export_values("passbook-export", "back up to the relay")
             if values is None:
                 return 1
             if not values:
                 return _fail("There is nothing in this store to back up.")
-            passphrase = _ask_password("Passphrase for the backup: ", confirm=True, from_stdin=args.password_stdin)
+            generated = False
+            if args.password_stdin:
+                passphrase = _ask_password(from_stdin=True)
+            else:
+                # The passphrase is the whole of the backup's protection, so by default PassBook
+                # makes it. Typing one is allowed, and held to a floor (passbook_cloud_backup.py).
+                first = "" if args.generate else hidden_input("Passphrase for the backup (press Return and PassBook makes one): ")
+                if first:
+                    cloud.check_passphrase(first)
+                    if hidden_input("Again: ") != first:
+                        raise ValueError("Those did not match")
+                    passphrase = first
+                else:
+                    if not sys.stdout.isatty():
+                        return _fail("A passphrase PassBook makes is only shown in a terminal or in the app.",
+                                     "Run this in a terminal, or pass your own with --password-stdin.")
+                    passphrase, generated = cloud.generate_passphrase(), True
+                    print("\nPassBook made this passphrase. Save it in your password manager now. It is shown once:\n")
+                    print(f"    {passphrase}\n")
+                    print("It encrypts the backup before it leaves this machine. Nobody can reset it: if it is lost, so is the backup.")
+                    input("Press Return once it is saved. ")
+            cloud.check_passphrase(passphrase)
             text = passbook_backup.encrypt(values, passphrase, workspace=passbook.workspace(), machine=platform.node(),
                                            note=args.note or "")
             made = cloud.store(text, label=args.label or "")
@@ -8881,15 +8911,25 @@ def cmd_backup(args: argparse.Namespace) -> int:
             if args.json:
                 print(json.dumps(made, indent=2))
                 return 0
-            print(f"Backed up {len(values)} key(s), encrypted with your passphrase. The relay cannot open it.")
-            print("\nKeep this recovery code. It is shown once and is not saved on this machine:\n")
+            print(f"\nBacked up {len(values)} key(s), encrypted with {'that' if generated else 'your'} passphrase. The relay cannot open it.")
+            print("\nThis is the recovery code. It is shown once and is not saved on this machine:\n")
             print(f"    {made['code']}\n")
-            print("A new machine needs the code AND the passphrase. Nobody can reset either one.")
+            print("Keep it somewhere other than the passphrase. The code fetches the backup; only the passphrase opens it.")
+            print("A new machine needs both, and nobody can reset either one.")
             return 0
         # restore
         text = cloud.fetch(args.code)
-        passphrase = _ask_password("Passphrase for the backup: ", from_stdin=args.password_stdin)
-        incoming = passbook_backup.keys_of(passbook_backup.read(text, passphrase=passphrase))
+        typed = _ask_password("Passphrase for the backup: ", from_stdin=args.password_stdin)
+        document = None
+        for attempt in cloud.candidates(typed):
+            try:
+                document = passbook_backup.read(text, passphrase=attempt)
+                break
+            except passbook_backup.BackupError as wrong:
+                failure = wrong
+        if document is None:
+            raise failure
+        incoming = passbook_backup.keys_of(document)
         if not incoming:
             return _fail("That backup has no keys in it.")
         held = set(passbook.key_names())
@@ -9986,8 +10026,11 @@ def build_parser() -> argparse.ArgumentParser:
     backup_store = backup_subs.add_parser("store", help="encrypt the store with a passphrase and keep it on the relay")
     backup_store.add_argument("--label", default="", help="how the backup is named (default: this machine's name)")
     backup_store.add_argument("--note", default="", help="a note kept inside the encrypted backup")
-    backup_store.add_argument("--password-stdin", action="store_true", help="read the passphrase from stdin")
+    backup_store.add_argument("--password-stdin", action="store_true", help="read your own passphrase from stdin (16 characters or more)")
+    backup_store.add_argument("--generate", action="store_true", help="have PassBook make the passphrase without asking (the default if you press Return)")
     backup_store.add_argument("--json", action="store_true")
+    backup_passphrase = backup_subs.add_parser("passphrase", help="make a passphrase strong enough for a backup kept on the relay")
+    backup_passphrase.add_argument("--json", action="store_true")
     backup_restore = backup_subs.add_parser("restore", help="bring a backup into this store")
     backup_restore.add_argument("code", help="a recovery code (pbb1.…), or the id of one of this machine's backups")
     backup_restore.add_argument("--dry-run", dest="dry_run", action="store_true", help="say what would change and change nothing")

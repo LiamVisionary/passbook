@@ -20,7 +20,7 @@ const SCRIPT = String.raw`
   "use strict";
   var enc = new TextEncoder(), dec = new TextDecoder();
   var main = document.getElementById("main");
-  var links = [], shown = {}, busy = {}, note = "";
+  var links = [], shown = {}, busy = {}, note = "", drawn = null;
 
   function b64(bytes) {
     var s = "", b = new Uint8Array(bytes);
@@ -147,6 +147,8 @@ const SCRIPT = String.raw`
     return signed(link, "GET", "/api/passbook/phones/" + link.id + "/requests", "").then(function (data) {
       if (data.http === 401) { link.status = "gone"; return; }
       if (!data.ok) return;
+      // "Joined, now confirm it" has been acted on once PassBook confirms: stop saying it.
+      if (data.status === "linked" && link.status === "joined" && /^Joined\./.test(note)) note = "";
       link.status = data.status;
       return Promise.all((data.requests || []).map(function (r) {
         return open(link, r.sealed).then(function (ask) { return { id: r.id, expiresAt: r.expiresAt, ask: ask }; }).catch(function () { return null; });
@@ -187,11 +189,16 @@ const SCRIPT = String.raw`
         html += '<p class="where">On ' + esc(ask.machine || "your computer") + (ask.workspace ? ", workspace " + esc(ask.workspace) : "") + "</p>";
         var off = busy[request.id] ? " disabled" : "";
         html += '<div class="acts"><button class="deny" data-id="' + esc(request.id) + '" data-link="' + esc(link.id) + '" data-do="deny" data-for="0"' + off + ">Deny</button>";
-        html += '<button data-id="' + esc(request.id) + '" data-link="' + esc(link.id) + '" data-do="allow" data-for="0"' + off + ">Allow once</button>";
-        html += '<button class="go" data-id="' + esc(request.id) + '" data-link="' + esc(link.id) + '" data-do="allow" data-for="3600"' + off + ">Allow for 1 hour</button></div></article>";
+        // The narrower answer is the prominent one. An hour is there for somebody who means it.
+        html += '<button class="go" data-id="' + esc(request.id) + '" data-link="' + esc(link.id) + '" data-do="allow" data-for="0"' + off + ">Allow once</button>";
+        html += '<button class="wide" data-id="' + esc(request.id) + '" data-link="' + esc(link.id) + '" data-do="allow" data-for="3600"' + off + ">Allow for 1 hour</button></div></article>";
       });
       html += "</section>";
     });
+    // Checked every three seconds, drawn only when something changed. Replacing the buttons under
+    // a finger that is on its way down makes the tap land on nothing.
+    if (html === drawn) return;
+    drawn = html;
     main.innerHTML = html;
     Array.prototype.forEach.call(main.querySelectorAll("[data-do]"), function (button) {
       button.onclick = function () {
@@ -252,6 +259,7 @@ p { margin: 8px 0 0; }
 button { font: inherit; font-weight: 600; min-height: 44px; padding: 0 14px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--ink); flex: 1 1 auto; }
 button.go { background: var(--accent); border-color: var(--accent); color: #fff; }
 button.deny { color: var(--deny); }
+button.wide { flex: 1 1 100%; font-weight: 500; }
 button.quiet { flex: 0 0 auto; min-height: 32px; font-weight: 500; color: var(--ink2); }
 button:disabled { opacity: 0.5; }
 footer { color: var(--ink2); font-size: 13px; margin-top: 18px; }

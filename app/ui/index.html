@@ -914,9 +914,18 @@
     letter-spacing: .1em; color: var(--accent); text-align: center;
   }
   #gate h1 { margin: 6px 0 0; font-size: 28px; font-weight: 650; letter-spacing: -.02em; text-align: center; }
-  .glede { margin: 8px 0 0; color: var(--ink3); font-size: 13px; line-height: 1.55; text-align: center; max-width: 44ch; }
-  .gtiles { display: flex; flex-wrap: wrap; gap: 22px; justify-content: center; padding: 0; margin: 0; list-style: none; }
-  .gtile { display: grid; gap: 10px; justify-items: center; background: none; border: 0; padding: 0; cursor: pointer; font: inherit; color: inherit; }
+  .glede { margin: 8px 0 0; color: var(--ink3); font-size: 13px; line-height: 1.55; text-align: center; max-width: 52ch; text-wrap: balance; }
+  /* Every tile is the same width, whatever its name. Sized by its label, one
+     long workspace name ("International Partnerships and Regulatory Affairs
+     Working Group…") stretched its own tile across half the window and threw
+     every row out of line. The name wraps to two lines and stops; the full
+     name is on hover and in the sign-in card. */
+  .gtiles {
+    display: flex; flex-wrap: wrap; justify-content: center; gap: 26px 18px;
+    width: 100%; padding: 0; margin: 0; list-style: none;
+  }
+  .gtiles > li { width: 124px; display: flex; justify-content: center; }
+  .gtile { width: 100%; display: grid; gap: 9px; justify-items: center; align-content: start; background: none; border: 0; padding: 0; cursor: pointer; font: inherit; color: inherit; }
   /* The tile as an object rather than a swatch.
    *
    *  The first version was the studio's rule copied onto a different page: a
@@ -931,9 +940,9 @@
    *  edge on a pale page, and a letter in the tile's own light rather than in
    *  the page's ink. */
   .gav {
-    position: relative; width: 118px; height: 118px; border-radius: 26px;
+    position: relative; width: 96px; height: 96px; border-radius: 22px;
     display: grid; place-items: center; isolation: isolate;
-    font-size: 46px; font-weight: 700; letter-spacing: -.02em;
+    font-size: 38px; font-weight: 700; letter-spacing: -.02em;
     color: rgba(255, 255, 255, .95);
     text-shadow: 0 1px 2px rgba(0, 0, 0, .22);
     box-shadow:
@@ -970,7 +979,16 @@
     color: var(--ink1); border-color: var(--ink3); box-shadow: none;
   }
   .gtile:focus-visible { outline: none; }
-  .gname { font-size: 14px; color: var(--ink3); transition: color .16s; }
+  /* Scoped to the tile: `.gname` is also the key list's group heading, and an
+     unscoped rule here turned those headings grey and 14px. Two lines are
+     always reserved, so the badges under one-line and two-line names sit on
+     the same line across a row. */
+  .gtile .gname {
+    max-width: 100%; min-height: 2.6em; font-weight: 400; font-size: 13.5px; line-height: 1.3;
+    color: var(--ink3); text-align: center;
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2;
+    overflow: hidden; overflow-wrap: anywhere; transition: color .16s;
+  }
   .gtile:hover .gname, .gtile:focus-visible .gname { color: var(--ink1); }
   .gbadge { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--ink3); }
   .gbadge.on { color: var(--ok); }
@@ -5616,7 +5634,7 @@ Use the copy button to put it on the clipboard."
       </div>
       <ul class="gtiles">
         ${rows.map((row) => `
-          <li><button class="gtile" data-gpick="${esc(row.id)}" aria-label="Open ${esc(row.label)}">
+          <li><button class="gtile" data-gpick="${esc(row.id)}" aria-label="Open ${esc(row.label)}" title="${esc(row.label)}">
             <span class="gav c-${row.colour}">${esc(gateInitial(row.label))}</span>
             <span class="gname">${esc(row.label)}</span>
             ${row.open ? `<span class="gbadge on">Open</span>`

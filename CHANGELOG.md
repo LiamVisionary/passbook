@@ -4,6 +4,19 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+### Who's working? lines up, whatever the workspaces are called
+
+Liam, 2026-11-27, of the workspace picker with eight workspaces on it: "whats with this terrible ui wtf". A tile was
+as wide as its name, so one long name ("International Partnerships and Regulatory Affairs Working Group for Asia
+Pacific") stretched its tile across half the window and threw every row out of line.
+
+- **Every tile is the same width.** A name wraps to two lines and stops with an ellipsis; the full name is on hover.
+  The "No key yet" and "Open" labels sit on one line across a row, whether the name above took one line or two.
+- **Smaller tiles** (96px, from 118px), so six fit on a row in a normal window instead of four or five.
+- **The subtitle no longer leaves "key." on a line by itself.**
+- **Group headings in the key list are back to their own style.** The picker's name rule shared a class with them and
+  had been turning them grey and 14px; it now applies to the picker only.
+
 ## [1.10.30] — 2026-11-26
 
 ### A backup's passphrase is made by PassBook, not chosen

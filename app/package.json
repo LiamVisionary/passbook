@@ -1,6 +1,6 @@
 {
   "name": "passbook-app",
-  "version": "1.10.30",
+  "version": "1.10.31",
   "private": true,
   "description": "PassBook — the credentials this machine shares",
   "scripts": {

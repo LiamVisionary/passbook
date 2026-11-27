@@ -4,6 +4,8 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [1.10.31] — 2026-11-27
+
 ### Who's working? lines up, whatever the workspaces are called
 
 Liam, 2026-11-27, of the workspace picker with eight workspaces on it: "whats with this terrible ui wtf". A tile was

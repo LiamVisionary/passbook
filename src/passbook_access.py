@@ -40,6 +40,7 @@ import json
 import os
 import re
 import secrets
+import time
 from datetime import datetime, time as clock, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, MutableMapping
@@ -872,10 +873,38 @@ def read_guards(policy: Mapping[str, Any]) -> dict[str, Any]:
     return dict(guards) if isinstance(guards, Mapping) else {}
 
 
+# When each key's guard last changed, set or cleared, in epoch seconds: a section of its own, so the guard rules and
+# everything that reads them are unchanged. A collector that serves this machine's keys to its peers holds a grant taken
+# when it started, and a guard decides what that grant could take. So a guard set or cleared after the grant is a reason
+# to take a fresh one (hivemindos hive-env-add `waiting_on_a_fresh_grant`), the way a key added after it is. Before
+# this, `passbook guard KEY --clear` changed no time anywhere, and a cleared key stayed sealed to every peer until the
+# collector happened to restart (2026-11-28: CLOUDFLARE_GATEWAY_RELEASE_TOKEN on the M2 Max).
+GUARD_CHANGES = "guardChanges"
+
+
+def read_guard_changes(policy: Mapping[str, Any]) -> dict[str, float]:
+    changes = policy.get(GUARD_CHANGES)
+    if not isinstance(changes, Mapping):
+        return {}
+    out: dict[str, float] = {}
+    for name, when in changes.items():
+        try:
+            out[str(name)] = float(when)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _note_guard_change(name: str, policy: MutableMapping[str, Any], now: float | None) -> None:
+    changes = read_guard_changes(policy)
+    changes[name] = float(time.time() if now is None else now)
+    policy[GUARD_CHANGES] = changes
+
+
 def set_guard(key: str, policy: MutableMapping[str, Any], *,
               commands: Iterable[str] | None = None,
               destinations: Iterable[str] | None = None,
-              replace: bool = False) -> dict[str, Any]:
+              replace: bool = False, now: float | None = None) -> dict[str, Any]:
     """Bind a key to the commands that may receive it and the hosts it may reach.
 
     Additive by default. A guard is written one line at a time — `--to` today,
@@ -898,18 +927,22 @@ def set_guard(key: str, policy: MutableMapping[str, Any], *,
             *existing,
             *(str(d).strip().lower().lstrip("*") for d in destinations if str(d).strip())})
 
+    if guards.get(name) != rule:
+        _note_guard_change(name, policy, now)
     guards[name] = rule
     policy["guards"] = guards
     return rule
 
 
-def clear_guard(key: str, policy: MutableMapping[str, Any]) -> bool:
-    """Unbind a key entirely. Returns whether there was anything to remove."""
+def clear_guard(key: str, policy: MutableMapping[str, Any], *, now: float | None = None) -> bool:
+    """Unbind a key entirely. Returns whether there was anything to remove. The time it was cleared is kept
+    (GUARD_CHANGES), so a collector holding a grant from while it was guarded knows to take a fresh one."""
     guards = read_guards(policy)
     if str(key).strip() not in guards:
         return False
     guards.pop(str(key).strip())
     policy["guards"] = guards
+    _note_guard_change(str(key).strip(), policy, now)
     return True
 
 

@@ -557,3 +557,23 @@ def test_a_present_caller_still_gets_its_child_run_to_completion():
     """The other half: the check must not cut short a caller that is still there."""
     answer = grant.stream(["sh", "-c", "echo done"], {}, caller_present=lambda: True)
     assert answer["ok"] and answer["exit_code"] == 0
+
+
+def test_a_guard_set_or_cleared_says_when(tmp_path, monkeypatch):
+    """A collector serving this machine's keys holds a grant taken when it started. A guard set or cleared after that
+    is a reason to take a fresh one, so each change keeps its time (2026-11-28: a cleared guard left its key sealed to
+    every peer until the collector happened to restart)."""
+    monkeypatch.setenv("HIVE_HOME", str(tmp_path / "hive"))
+    passbook.ensure(app="test")
+    policy = access.read_policy()
+    access.set_guard("K", policy, commands=["wrangler *"], now=100.0)
+    assert access.read_guard_changes(policy) == {"K": 100.0}
+    access.set_guard("K", policy, commands=["wrangler *"], now=200.0)
+    assert access.read_guard_changes(policy) == {"K": 100.0}, "the same guard again is no change"
+    assert access.clear_guard("K", policy, now=300.0) is True
+    assert access.read_guard_changes(policy) == {"K": 300.0}
+    assert access.clear_guard("K", policy, now=400.0) is False
+    assert access.read_guard_changes(policy) == {"K": 300.0}, "clearing nothing is no change"
+    access.write_policy(policy)
+    assert access.read_guard_changes(access.read_policy()) == {"K": 300.0}, "kept on disk"
+    assert grant.commands_for("K", access.read_policy()) == []

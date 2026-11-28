@@ -4,6 +4,26 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+### A guard change reaches the other machines, and a guarded key is said as guarded
+
+Liam, 2026-11-28: "why are my macs passbooks not sync … i designed passbook to keep keys in sync". The M2 Max held
+`CLOUDFLARE_GATEWAY_RELEASE_TOKEN` back from the NYC Mac. The Devices summary said it would come once that machine was
+signed in, and it was signed in. Clearing its guard (`passbook guard KEY --clear`) still sent nothing until the
+collector there was restarted by hand.
+
+- **Every guard set or cleared keeps when** (`guardChanges` in the policy file; `set_guard`, `clear_guard`). A
+  collector holding a grant from before the change takes a fresh one (hivemindos `hive-env-add`), so a cleared key
+  goes out on the next pass. Setting the same guard again is not a change.
+- **A key a guard keeps on its machine is said as guarded there** (`guardedThere` in `passbook sync --status` and on
+  the Devices page), not "held … until that machine is signed in". It is not counted as missing there either.
+- **`passbook check` for a key not on this machine** says that another machine may hold it, and where to see which.
+- Verification: the whole suite passes (1,761, 3 skipped), with two new tests: a guard change keeps its time and on
+  disk, and a guarded key is reported apart and is not missing.
+- Found, not changed here (2026-11-28, in code): a key guarded only `--to` a host is allowed into a collector's grant
+  (`command_allowed` reads only `--into` commands), and `sendable` (what `passbook add` replicates) checks no guard.
+  Both send a guarded key to every paired machine in plaintext, where it lands unguarded. HivemindOS's collector also
+  serves guarded keys that are stored as plaintext on its machine.
+
 ## [1.10.31] — 2026-11-27
 
 ### Who's working? lines up, whatever the workspaces are called

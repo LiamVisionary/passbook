@@ -4117,9 +4117,10 @@ Use the copy button to put it on the clipboard."
         ...(r.missingThere.length ? [`lacks ${r.missingThere.length} of this device's`] : []),
         ...(r.missingHere.length ? [`has ${r.missingHere.length} this device lacks`] : []),
         ...(r.heldBack.length ? [`holds ${r.heldBack.length} it cannot hand over yet`] : []),
+        ...((r.guardedThere || []).length ? [`keeps ${r.guardedThere.length} guarded`] : []),
       ];
       const tag = !r.reachable ? ["off", "Not answering"] : r.missingThere.length || r.missingHere.length || r.heldBack.length ? ["", "Catching up"] : ["on", "In step"];
-      const detail = r.missingThere.length || r.missingHere.length || r.heldBack.length;
+      const detail = r.missingThere.length || r.missingHere.length || r.heldBack.length || (r.guardedThere || []).length;
       return `<div class="row top">
         <span class="statustile ${!r.reachable ? "warn" : detail ? "plain" : "good"} sm">${icon("monitor")}</span>
         <div class="grow"><strong>${esc(deviceName(r.host))}</strong>
@@ -4128,7 +4129,9 @@ Use the copy button to put it on the clipboard."
           ${open ? `${r.missingThere.length ? `<div class="synclist"><span class="dlabel">Not on it yet</span><div class="chips inline">${names(r.missingThere)}</div></div>` : ""}
             ${r.missingHere.length ? `<div class="synclist"><span class="dlabel">Not on this device yet</span><div class="chips inline">${names(r.missingHere)}</div></div>` : ""}
             ${r.heldBack.length ? `<div class="synclist"><span class="dlabel">Held there, not handed over</span><div class="chips inline">${names(r.heldBack)}</div>
-              <div class="note flat">${r.restartWouldServe.length ? "It will hand these over once its background collector restarts, which it now does by itself." : "That device keeps these to itself, or cannot open them until someone signs in there."}</div></div>` : ""}` : ""}
+              <div class="note flat">${r.restartWouldServe.length ? "It will hand these over once its background collector restarts, which it now does by itself." : "That device keeps these to itself, or cannot open them until someone signs in there."}</div></div>` : ""}
+            ${(r.guardedThere || []).length ? `<div class="synclist"><span class="dlabel">Guarded there</span><div class="chips inline">${names(r.guardedThere)}</div>
+              <div class="note flat">A guard keeps a key on the device it was guarded on, so signing in changes nothing. Clear the guard there to share it.</div></div>` : ""}` : ""}
         </div>
         <span class="tag ${tag[0]}">${tag[1]}</span>
         ${detail ? `<button class="act" data-sync-open="${esc(r.host)}">${open ? "Hide" : "Which keys"}</button>` : ""}

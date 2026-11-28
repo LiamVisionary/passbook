@@ -493,14 +493,18 @@ def summarize(local_names: Iterable[str], payloads: Iterable[tuple[str, Mapping[
     for host, payload in payloads:
         serves = set((payload.get("values") or {}).keys())
         kept = set(payload.get("withheldByPolicy") or [])
-        held = (set(payload.get("withheldSealed") or []) | set(payload.get("withheldStale") or [])) - kept
-        there = serves | held | kept
+        # Guarded there (`passbook guard`): kept by its owner's guard, not waiting on a sign-in or a restart. Said apart
+        # so a held key is never reported as "until that machine is signed in" when signing in changes nothing
+        # (2026-11-28: CLOUDFLARE_GATEWAY_RELEASE_TOKEN). An older collector does not say, and its keys stay "held".
+        guarded = set(payload.get("withheldGuarded") or []) - kept
+        held = (set(payload.get("withheldSealed") or []) | set(payload.get("withheldStale") or [])) - kept - guarded
+        there = serves | held | kept | guarded
         lacks = sorted(travels - there)
         for key in lacks:
             missing.setdefault(key, []).append(host)
         times = (exchanges or {}).get(host) or {}
         devices.append({
-            "host": host, "reachable": True, "serves": len(serves), "heldBack": sorted(held),
+            "host": host, "reachable": True, "serves": len(serves), "heldBack": sorted(held), "guardedThere": sorted(guarded),
             "restartWouldServe": sorted(set(payload.get("withheldUntilRestart") or [])),
             "keptByPolicy": len(kept), "missingThere": lacks,
             "missingHere": sorted(key for key in serves - here if not is_local_only(key)),
@@ -508,7 +512,7 @@ def summarize(local_names: Iterable[str], payloads: Iterable[tuple[str, Mapping[
         })
     for host in unreachable:
         times = (exchanges or {}).get(host) or {}
-        devices.append({"host": host, "reachable": False, "serves": 0, "heldBack": [], "restartWouldServe": [],
+        devices.append({"host": host, "reachable": False, "serves": 0, "heldBack": [], "guardedThere": [], "restartWouldServe": [],
                         "keptByPolicy": 0, "missingThere": [], "missingHere": [],
                         "pulledAt": times.get("pulled"), "sentAt": times.get("sent")})
     return {"devices": sorted(devices, key=lambda row: row["host"]), "notEverywhere": missing,

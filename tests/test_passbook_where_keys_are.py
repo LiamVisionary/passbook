@@ -181,3 +181,18 @@ def test_status_asks_every_machine_at_once_and_says_so_as_each_answers(home, mon
     assert {s["host"]: s["ok"] for s in steps[2:]} == {"slow-a": True, "slow-b": False}
     assert "10.9.0" not in said.err + said.out, "an address never leaves this machine's check"
     assert "a-value-that-must-not-travel" not in said.err + said.out
+
+
+def test_a_key_guarded_there_is_said_as_guarded_not_as_waiting_on_a_sign_in():
+    """2026-11-28: the M2 Max held CLOUDFLARE_GATEWAY_RELEASE_TOKEN back, and the summary said it would come once that
+    machine was signed in. It was signed in; the key was guarded there. A guarded key is its own line."""
+    payload = _payload(serves=["SHARED"], sealed=["GUARDED", "NEW_KEY"])
+    payload["withheldGuarded"] = ["GUARDED"]
+    said = sync.summarize(["SHARED", "GUARDED"], [("m2", payload)])
+    row = said["devices"][0]
+    assert row["guardedThere"] == ["GUARDED"]
+    assert row["heldBack"] == ["NEW_KEY"], "only what a sign-in or a restart would release is held"
+    assert row["missingThere"] == [], "a key guarded there is there"
+    # An older collector does not say which are guarded: every one stays held, as before.
+    old = sync.summarize(["SHARED"], [("m2", _payload(serves=["SHARED"], sealed=["GUARDED"]))])["devices"][0]
+    assert old["heldBack"] == ["GUARDED"] and old["guardedThere"] == []

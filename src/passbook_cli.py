@@ -243,7 +243,10 @@ def cmd_check(args: argparse.Namespace) -> int:
             "Nothing is wrong with them — sign in to read them:  passbook signin",
         )
     if missing:
-        remedy = f"Add with: passbook-add {missing[0]}"
+        # Not here is not the same as nowhere: another of the owner's machines may hold it and not hand it over (guarded
+        # there, or sealed to a collector that has not taken a fresh grant). Adding it again would make a second copy.
+        remedy = (f"Add with: passbook-add {missing[0]}\n"
+                  f"If another of your machines has it, `passbook sync --status` says which one and why it is held there.")
         if locked:
             remedy += (f"\nSeparately, these are encrypted rather than absent: "
                        f"{', '.join(locked)} — run `passbook signin`.")
@@ -6050,6 +6053,8 @@ def _sync_status(args: argparse.Namespace) -> int:
         parts = [f"serves {row['serves']} keys"]
         if row["heldBack"]:
             parts.append(f"holds {len(row['heldBack'])} it cannot hand over yet")
+        if row.get("guardedThere"):
+            parts.append(f"keeps {len(row['guardedThere'])} guarded there (passbook guard; never sent to a peer)")
         if row["missingThere"]:
             parts.append(f"lacks {len(row['missingThere'])} of this machine's")
         if row["missingHere"]:

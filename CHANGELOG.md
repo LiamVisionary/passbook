@@ -4,6 +4,47 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+### Guarded keys travel between your paired machines, sealed to each and still guarded
+
+Liam, 2026-11-28: "i designed passbook to keep keys in sync", then "Yes, build it". A guarded key may not leave its
+machine as plaintext (1.10.33), which left his two Macs out of step on exactly the keys that matter most. Now:
+
+- **`passbook pair`** (`code`, `add`, `list`, `remove`). Run `passbook pair code` on each machine and
+  `passbook pair add CODE --fingerprint …` on the other, both ways. Adding asks for this vault's password (or
+  `--recovery`). A process running as the owner can approve a broker request, but it does not know the password, so
+  it cannot pair a device of its own and have every guarded key sealed to it. `add` lists the guarded keys that will
+  go to that machine.
+- **Sealed to the machine, signed by this one.** On each `passbook sync --apply` (the collector runs it every ten
+  minutes) the broker seals every guarded key whose reach is `tailnet` to each paired machine. That is an ephemeral
+  X25519 exchange with HKDF and AES-GCM, signed with Ed25519, as `passbook link` seals a grant. The collector serves
+  only the ciphertext, as `guardedFor` beside the values.
+- **Opened only in the broker.** This machine's guard-sync keys and its paired machines are store keys sealed under
+  the vault's data key (`PASSBOOK_GUARD_SYNC_DEVICE`, `PASSBOOK_GUARD_SYNC_PEERS`), and only the guard-sync steps can
+  read or write them:
+  - every other door (a request, `passbook run`, a proxy, a standing read) leaves them out;
+  - `seal_values` refuses to write them;
+  - a line written into the store file by hand is ignored;
+  - they never sync.
+- **The guard first, then the value, sealed at rest.** Each key arrives guarded as it was on the sender. A guard
+  cleared on one machine travels as a dated note and clears the other.
+- **The rules plain sync keeps.**
+  - The newer value wins, by the sender's own stamp.
+  - An identical value is not rewritten and moves no stamp.
+  - A key removed here is not brought back.
+  - Stamps from the future are refused.
+  - An envelope is bound to its issuer, its audience and its issue time, so a replay is refused.
+- Verification: `tests/test_passbook_guardsync.py` (8 tests) passes.
+  - The format and the rules are tested directly.
+  - Two real brokers over two sealed stores, end to end:
+    - pairing refuses a wrong password and a swapped fingerprint;
+    - the key arrives sealed and guarded, and a second pass leaves the same envelope, changes nothing and moves no
+      stamp;
+    - a rotation arrives as a new envelope, and the old one offered after it is refused as a replay.
+  - The two attacks found in review are both checked; each test fails with its fix removed:
+    - a request that opens an ordinary key does not open the device keys;
+    - a paired machine written through `seal_values`, or by hand into the store file, is not trusted.
+  - The sync pass takes only the envelope addressed to this machine, and seals nothing on a dry run.
+
 ## [1.10.33] — 2026-11-28
 
 1.10.32 was tagged and never published: its build failed two GitHub-push tests because the release commit's

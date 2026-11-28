@@ -58,6 +58,7 @@ passbook-disconnect = "passbook_cli:main"
 passbook-get = "passbook_cli:main"
 passbook-grants = "passbook_cli:main"
 passbook-guard = "passbook_cli:main"
+passbook-pair = "passbook_cli:main"
 passbook-harden = "passbook_cli:main"
 passbook-history = "passbook_cli:main"
 passbook-install = "passbook_cli:main"
@@ -161,6 +162,7 @@ py-modules = [
     "passbook_integrations",
     "passbook_join",
     "passbook_keystore",
+    "passbook_guardsync",
     "passbook_link",
     "passbook_web_link",
     "passbook_signin_ask",

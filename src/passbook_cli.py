@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import getpass
 import json
 import os
 import platform
@@ -38,6 +39,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import socket
 import sys
 import time
 import urllib.parse
@@ -6291,6 +6293,8 @@ def cmd_sync(args: argparse.Namespace) -> int:
         # This pass runs every ten minutes on every machine: a pull that changed a value is looked for at once,
         # and the whole home folder once a day (passbook_stale.py).
         _stale_tick(bool(pulled))
+    # Guarded keys with paired machines: sealed to each, carrying their guard (passbook_guardsync).
+    guarded_sync = _guardsync_pass(payloads, apply=args.apply)
 
     if args.json:
         print(json.dumps({
@@ -6318,9 +6322,16 @@ def cmd_sync(args: argparse.Namespace) -> int:
             "wouldRetry": retry,
             "sent": sent,
             "stillOwed": {k: v["owed"] for k, v in passbook_sync.read_pending().items()},
+            **({"guardedSync": guarded_sync} if guarded_sync else {}),
         }, indent=2))
         return 0
 
+    if guarded_sync:
+        print(f"guarded keys with {guarded_sync.get('paired', 0)} paired machine(s): "
+              f"sealed for {guarded_sync.get('sealedFor', 0)}, took {len(guarded_sync.get('written') or [])}, "
+              f"guarded {len(guarded_sync.get('guarded') or [])}"
+              + (f"; refused {len(guarded_sync['refused'])}" if guarded_sync.get("refused") else "")
+              + (f"; {guarded_sync['error']}" if guarded_sync.get("error") else ""))
     print(f"peers with a collector: {len(peers)}")
     for peer in peers:
         mark = "unreachable" if peer["host"] in unreachable else "ok"
@@ -7715,6 +7726,109 @@ def cmd_guard(args: argparse.Namespace) -> int:
         print(f"   may be sent to:       {', '.join(rule['destinations'])}")
     print("   it is never printed, by get, by reveal, or to an agent.")
     return 0
+
+
+def cmd_pair(args: argparse.Namespace) -> int:
+    """Pair this machine with another of yours, so guarded keys travel between them, sealed and still guarded.
+
+    Run `passbook pair code` on each machine and `passbook pair add CODE --fingerprint …` on the other, both ways.
+    Adding asks for this vault's password (or `--recovery` code): a process running as you can approve a broker
+    request, but it does not know the password, so it cannot pair a device of its own (passbook_guardsync).
+    """
+    import passbook_broker
+
+    def ask(payload: dict) -> dict:
+        answer = passbook_broker._ask({"op": "guardsync", **payload}, timeout=60)
+        if answer is None:
+            return {"ok": False, "error": "PassBook is not running here. Open PassBook, or run `passbook signin`."}
+        return answer
+
+    action = args.action
+    if action == "code":
+        answer = ask({"step": "code", "name": args.name or socket.gethostname().split(".")[0]})
+        if not answer.get("ok"):
+            return _fail(str(answer.get("error") or "No code."))
+        if args.json:
+            print(json.dumps({"code": answer["code"], "fingerprint": answer["fingerprint"]}))
+            return 0
+        print("On the other machine, run:")
+        print(f"   passbook pair add {answer['code']} --fingerprint {answer['fingerprint']}")
+        print(f"\nThis machine's fingerprint: {answer['fingerprint']}")
+        print("Check it there before you type it: a swapped code cannot show the same fingerprint.")
+        return 0
+    if action == "add":
+        if not args.code or not args.fingerprint:
+            return _fail("Pair with what?", "passbook pair add CODE --fingerprint XXXX-XXXX-XXXX-XXXX  (from `passbook pair code` there)")
+        if args.recovery:
+            secret = getpass.getpass("This vault's recovery code: ")
+            factor = {"recovery": secret}
+        elif args.password_stdin:
+            factor = {"password": sys.stdin.readline().rstrip("\n")}
+        else:
+            factor = {"password": getpass.getpass("This vault's password: ")}
+        answer = ask({"step": "pair", "code": args.code, "fingerprint": args.fingerprint, **factor})
+        factor.clear()
+        if not answer.get("ok"):
+            return _fail(str(answer.get("error") or "Not paired."))
+        sending = answer.get("sending") or []
+        print(f"Paired with {answer.get('name') or 'that machine'} ({answer['fingerprint']}).")
+        print(f"   {len(sending)} guarded key(s) here go to it sealed, guarded there as here:")
+        for name in sending:
+            print(f"      {name}")
+        print("   Pair it back the same way on that machine, so its guarded keys come here too.")
+        return 0
+    if action == "list":
+        answer = ask({"step": "peers"})
+        if not answer.get("ok"):
+            return _fail(str(answer.get("error") or "Could not read the paired machines."))
+        if args.json:
+            print(json.dumps(answer))
+            return 0
+        print(f"This machine: {answer.get('fingerprint') or '(no guard-sync keys yet)'}")
+        peers = answer.get("peers") or []
+        if not peers:
+            print("No machines paired. Run `passbook pair code` here and `passbook pair add` there.")
+        for peer in peers:
+            print(f"   {peer['fingerprint']}  {peer.get('name') or ''}")
+        return 0
+    if action == "remove":
+        answer = ask({"step": "unpair", "fingerprint": args.code or args.fingerprint})
+        if not answer.get("ok"):
+            return _fail(str(answer.get("error") or "Not removed."))
+        print("Unpaired. Nothing more is sealed to it; what it already received stays there, so rotate a key that mattered.")
+        return 0
+    return _fail(f"Unknown: passbook pair {action}", "passbook pair code | add | list | remove")
+
+
+def _guardsync_pass(payloads: list, *, apply: bool) -> dict:
+    """Guarded keys with paired machines, inside the broker (passbook_guardsync): seal this machine's for each paired
+    machine (the collector serves them as `guardedFor`), and take what a peer sealed for this one. Never a value
+    here: names and counts only. Quiet when nothing is paired, or the broker is not running."""
+    import passbook_broker
+
+    try:
+        peers = passbook_broker._ask({"op": "guardsync", "step": "peers"}, timeout=30) or {}
+    except Exception:  # noqa: BLE001 — sync never fails on this
+        return {}
+    mine = str(peers.get("fingerprint") or "")
+    if not peers.get("ok") or not mine or not peers.get("peers"):
+        return {}
+    envelopes = []
+    for _host, got in payloads:
+        sealed = got.get("guardedFor") if isinstance(got, dict) else None
+        if isinstance(sealed, dict) and isinstance(sealed.get(mine), str):
+            envelopes.append(sealed[mine])
+    report: dict = {"paired": len(peers["peers"])}
+    if envelopes:
+        answer = passbook_broker._ask({"op": "guardsync", "step": "receive", "envelopes": envelopes,
+                                       "dry_run": not apply}, timeout=60) or {}
+        report.update({key: answer.get(key) for key in ("written", "guarded", "cleared", "refused") if answer.get(key)})
+        if not answer.get("ok"):
+            report["error"] = str(answer.get("error") or "could not take what was sealed for this machine")
+    if apply:
+        answer = passbook_broker._ask({"op": "guardsync", "step": "seal"}, timeout=60) or {}
+        report["sealedFor"] = answer.get("sealedFor", 0)
+    return report
 
 
 def _identity_lines(record) -> list[str]:
@@ -10110,6 +10224,16 @@ def build_parser() -> argparse.ArgumentParser:
                            help="replace what is bound rather than adding to it")
     guard_cmd.add_argument("--clear", action="store_true", help="unguard this key")
     guard_cmd.set_defaults(func=cmd_guard)
+
+    pair_cmd = subs.add_parser("pair", help="pair with another of your machines, so guarded keys travel sealed and stay guarded")
+    pair_cmd.add_argument("action", choices=["code", "add", "list", "remove"])
+    pair_cmd.add_argument("code", nargs="?", default="", metavar="CODE")
+    pair_cmd.add_argument("--fingerprint", default="", help="the other machine's fingerprint, as it shows it")
+    pair_cmd.add_argument("--name", default="", help="what this machine is called in the other's list")
+    pair_cmd.add_argument("--recovery", action="store_true", help="use this vault's recovery code instead of its password")
+    pair_cmd.add_argument("--password-stdin", action="store_true", help=argparse.SUPPRESS)
+    pair_cmd.add_argument("--json", action="store_true")
+    pair_cmd.set_defaults(func=cmd_pair)
 
     pin_cmd = subs.add_parser(
         "pin", help="bind an app to the code it may run, so a changed program must be re-approved")

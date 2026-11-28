@@ -673,8 +673,17 @@ def _held_dek(workspace: str = "") -> tuple[bytes | None, str]:
         return bytes(session["dek"]), str(session.get("profile", ""))
 
 
-def _unsealer(values: dict[str, str], workspace: str = "") -> dict[str, str]:
-    """Installed into `passbook` so every read through this process can open."""
+_GUARD_SYNC_PREFIX = "PASSBOOK_GUARD_SYNC_"
+
+
+def _unsealer(values: dict[str, str], workspace: str = "", *, guardsync: bool = False) -> dict[str, str]:
+    """Installed into `passbook` so every read through this process can open.
+
+    Never this machine's guard-sync keys (passbook_guardsync), except for the guard-sync steps themselves
+    (`guardsync`): no request, `run`, proxy or standing read may receive the keys that open what paired machines
+    send, or the list of machines this one seals to."""
+    if not guardsync:
+        values = {name: value for name, value in values.items() if not name.startswith(_GUARD_SYNC_PREFIX)}
     try:
         import passbook_vault
     except ImportError:
@@ -734,6 +743,10 @@ def _seal_values(payload: Mapping[str, Any], root: Path | None,
     for name, value in incoming.items():
         name = str(name)
         if not isinstance(value, str) or not value:
+            continue
+        if name.startswith(_GUARD_SYNC_PREFIX):
+            # Written only by the guard-sync steps, after a password check: a caller writing the list of paired
+            # machines here would pair a device of its own without one.
             continue
         # Already sealed by someone else's key is not something to re-wrap: it
         # would be wrapped around a blob rather than a secret.
@@ -1240,7 +1253,7 @@ def _refresh_standing(workspace: str, root: Path | None) -> None:
 
 
 def _resolve_values(keys: Iterable[str], *, workspace: str = "", root: Path | None = None,
-                    app: str = "") -> dict[str, str]:
+                    app: str = "", guardsync: bool = False) -> dict[str, str]:
     """Open exactly these keys, here, inside the broker. Never sent onward.
 
     `app` is who the values are for. It only matters to a key with standing
@@ -1267,13 +1280,15 @@ def _resolve_values(keys: Iterable[str], *, workspace: str = "", root: Path | No
         owner = workspace if path == selected else passbook.ROOT_WORKSPACE_ID
         if passbook_integrations.managed_workspace(owner, store_root(root)):
             continue
-        opened = _unsealer(raw, owner)
+        opened = _unsealer(raw, owner, guardsync=guardsync)
         opened.update(_standing(app, owner, raw, opened, wanted, root))
         available.update(opened)
     if workspace == passbook.ROOT_WORKSPACE_ID:
         # Preserve standalone process overrides. A different workspace must
         # not inherit credentials from the daemon's own startup environment.
         available.update({name: value for name, value in source.items() if value})
+    if not guardsync:
+        available = {name: value for name, value in available.items() if not name.startswith(_GUARD_SYNC_PREFIX)}
     return {key: available[key] for key in keys if available.get(key)}
 
 
@@ -1850,6 +1865,245 @@ def _package_version() -> str:
 _RUNNING_VERSION = _package_version()
 
 
+# ── guarded keys between paired machines (passbook_guardsync) ─────────────
+#
+# Liam, 2026-11-28: "Yes, build it". Everything that touches a guarded value or the keys that seal it runs
+# here, in the broker, because only the broker holds the vault's data key: the device keys and the list of
+# paired machines are store keys sealed under it, so a process reading files opens nothing. Pairing also
+# asks for the vault's password or recovery code, which a process running as the owner does not have: it
+# can approve a broker request, so an approval alone would let it pair a device of its own.
+
+
+def _gs_place(root: Path | None) -> tuple[dict[str, str], Path]:
+    source = _workspace_environ(passbook.ROOT_WORKSPACE_ID, root)
+    return source, passbook.workspace_env_path(passbook.ROOT_WORKSPACE_ID, source)
+
+
+def _gs_write_sealed(values: Mapping[str, str], root: Path | None) -> None:
+    import passbook_vault
+
+    dek, profile = _held_dek(passbook.ROOT_WORKSPACE_ID)
+    if dek is None:
+        raise RuntimeError("the vault is shut")
+    source, _ = _gs_place(root)
+    sealed = {name: passbook_vault.seal_value(name, value, dek, profile_id=profile) for name, value in values.items()}
+    passbook.set_values(sealed, overwrite=True, exact=True, workspace_id=passbook.ROOT_WORKSPACE_ID, environ=source)
+
+
+def _gs_state(root: Path | None, *, create: bool = False) -> tuple[dict[str, Any] | None, list[dict[str, Any]], str]:
+    """(this machine's device, its paired machines, why not). Opened here, never sent anywhere."""
+    import passbook_guardsync as gs
+
+    dek, _profile = _held_dek(passbook.ROOT_WORKSPACE_ID)
+    if dek is None:
+        return None, [], "the vault is shut: sign in (passbook signin)"
+    opened = _resolve_values([gs.DEVICE_KEY, gs.PEERS_KEY], workspace=passbook.ROOT_WORKSPACE_ID, root=root,
+                             app="passbook-guardsync", guardsync=True)
+    # Trusted only as this vault sealed them. A plaintext line in the store file is something any process running as
+    # the owner could have written: a paired machine of its own, or its own device keys. A sealed value is bound to its
+    # name and this vault's key, which only the broker holds, so it cannot be made outside.
+    import passbook_vault
+
+    _source, store = _gs_place(root)
+    try:
+        raw = passbook.parse_env_text(store.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError):
+        raw = {}
+    for name in (gs.DEVICE_KEY, gs.PEERS_KEY):
+        if name in opened and not passbook_vault.is_sealed(raw.get(name) or ""):
+            opened.pop(name)
+    device_text = opened.get(gs.DEVICE_KEY)
+    if not device_text:
+        if not create:
+            return None, [], "no guard-sync keys yet: run `passbook pair code`"
+        device_text = gs.new_device()
+        _gs_write_sealed({gs.DEVICE_KEY: device_text}, root)
+    return gs.load_device(device_text), gs.read_peers(opened.get(gs.PEERS_KEY)), ""
+
+
+def _gs_guarded_here(root: Path | None) -> tuple[dict[str, Any], dict[str, float], dict[str, bool]]:
+    import passbook_sync
+
+    policy = read_policy(root)
+    guards = access.read_guards(policy)
+    changes = access.read_guard_changes(policy)
+    travels = {}
+    for key in {*guards, *changes}:
+        scope = access.scope_for(key, policy).get("scope", access.DEFAULT_SCOPE)
+        travels[key] = scope == "tailnet" and not passbook_sync.is_local_only(key)
+    return guards, changes, travels
+
+
+def _guardsync(payload: Mapping[str, Any], root: Path | None,
+               caller: Mapping[str, Any] | None) -> dict[str, Any]:
+    import passbook_guardsync as gs
+    import passbook_sync
+    import passbook_vault
+
+    step = str(payload.get("step") or "")
+    try:
+        if step == "code":
+            device, _peers, why = _gs_state(root, create=True)
+            if device is None:
+                return {"ok": False, "error": why}
+            return {"ok": True, "code": gs.pairing_code(device, str(payload.get("name") or "")),
+                    "fingerprint": device["fingerprint"]}
+
+        if step == "pair":
+            device, peers, why = _gs_state(root, create=True)
+            if device is None:
+                return {"ok": False, "error": why}
+            code = gs.read_pairing_code(str(payload.get("code") or ""))
+            if code["did"] == device["did"]:
+                return {"ok": False, "error": "That is this machine's own code."}
+            if not gs.same_fingerprint(str(payload.get("fingerprint") or ""), code["fingerprint"]):
+                return {"ok": False, "error": "That fingerprint does not match the code. Compare both screens again."}
+            source, _ = _gs_place(root)
+            vault_root = passbook_vault.workspace_root(passbook.ROOT_WORKSPACE_ID, source)
+            profile = passbook_vault.active_profile_id(root=vault_root)
+            try:
+                if payload.get("password"):
+                    passbook_vault.unlock_with_password(profile, str(payload["password"]), root=vault_root)
+                elif payload.get("recovery"):
+                    passbook_vault.unlock_with_recovery(profile, str(payload["recovery"]), root=vault_root)
+                else:
+                    return {"ok": False, "error": "Pairing needs this vault's password or recovery code."}
+            except passbook_vault.VaultError as error:
+                _record("link", ["*"], app="passbook-guardsync", granted=False, reason=f"refused: {error}", root=root)
+                return {"ok": False, "error": f"Not paired: {error}"}
+            _gs_write_sealed({gs.PEERS_KEY: gs.write_peers(gs.with_peer(peers, code, time.time()))}, root)
+            guards, _changes, travels = _gs_guarded_here(root)
+            sending = sorted(key for key in guards if travels.get(key))
+            _record("link", sending or ["*"], app="passbook-guardsync", granted=True,
+                    reason=f"paired {code['fingerprint']} ({code['name'] or 'unnamed'}) for guarded keys", root=root)
+            return {"ok": True, "fingerprint": code["fingerprint"], "name": code["name"], "sending": sending}
+
+        if step == "peers":
+            device, peers, why = _gs_state(root)
+            return {"ok": True, "fingerprint": device["fingerprint"] if device else "",
+                    "peers": [{k: peer[k] for k in ("fingerprint", "name", "pairedAt", "lastIssued")} for peer in peers],
+                    **({"note": why} if why else {})}
+
+        if step == "unpair":
+            device, peers, why = _gs_state(root)
+            if device is None:
+                return {"ok": False, "error": why}
+            target = str(payload.get("fingerprint") or "")
+            kept = [peer for peer in peers if not gs.same_fingerprint(target, peer["fingerprint"])]
+            if len(kept) == len(peers):
+                return {"ok": False, "error": "No paired machine has that fingerprint."}
+            _gs_write_sealed({gs.PEERS_KEY: gs.write_peers(kept)}, root)
+            _gs_write_outbox(root, {})  # the next seal writes envelopes for the machines still paired
+            _record("unlink", ["*"], app="passbook-guardsync", granted=True, reason=f"unpaired {target}", root=root)
+            return {"ok": True, "left": len(kept)}
+
+        if step == "seal":
+            device, peers, why = _gs_state(root)
+            if device is None or not peers:
+                return {"ok": True, "sealedFor": 0, **({"note": why} if why else {})}
+            guards, changes, travels = _gs_guarded_here(root)
+            wanted = sorted(key for key in guards if travels.get(key))
+            values = _resolve_values(wanted, workspace=passbook.ROOT_WORKSPACE_ID, root=root, app="passbook-guardsync")
+            _source, store = _gs_place(root)
+            items, cleared = gs.bundle_items(guards=guards, guard_changes=changes, values=values,
+                                             stamps=passbook_sync.read_meta(store), travels=travels)
+            secret = _resolve_values([gs.DEVICE_KEY], workspace=passbook.ROOT_WORKSPACE_ID, root=root,
+                                     app="passbook-guardsync", guardsync=True).get(gs.DEVICE_KEY, "")
+            before = _gs_read_outbox(root)
+            now = time.time()
+            outbox, digests, fresh = {}, {}, 0
+            for peer in peers:
+                digest = gs.content_digest(secret, peer["fingerprint"], items, cleared)
+                if before["digests"].get(peer["fingerprint"]) == digest and before["for"].get(peer["fingerprint"]):
+                    outbox[peer["fingerprint"]] = before["for"][peer["fingerprint"]]
+                else:
+                    outbox[peer["fingerprint"]] = gs.seal_bundle(device, peer, items, cleared, issued=now)
+                    fresh += 1
+                digests[peer["fingerprint"]] = digest
+            if fresh or set(outbox) != set(before["for"]):
+                _gs_write_outbox(root, outbox, digests)
+            return {"ok": True, "sealedFor": len(outbox), "fresh": fresh, "keys": sorted(items), "cleared": sorted(cleared)}
+
+        if step == "receive":
+            device, peers, why = _gs_state(root)
+            if device is None:
+                return {"ok": False, "error": why}
+            envelopes = [str(item) for item in (payload.get("envelopes") or []) if isinstance(item, str)]
+            dry = bool(payload.get("dry_run"))
+            _source, store = _gs_place(root)
+            report: dict[str, Any] = {"ok": True, "written": [], "guarded": [], "cleared": [], "refused": [], "kept": {}}
+            for text in envelopes:
+                try:
+                    peer, body = gs.open_bundle(text, device, peers)
+                except gs.AlreadyTaken:
+                    continue  # unchanged there since the last pass
+                except gs.GuardSyncError as error:
+                    report["refused"].append(str(error))
+                    continue
+                items = body.get("items") if isinstance(body.get("items"), dict) else {}
+                local = _resolve_values(sorted(items), workspace=passbook.ROOT_WORKSPACE_ID, root=root,
+                                        app="passbook-guardsync")
+                policy = read_policy(root)
+                plan = gs.plan_apply(body, local=local, stamps=passbook_sync.read_meta(store),
+                                     guards=access.read_guards(policy), guard_changes=access.read_guard_changes(policy))
+                report["kept"].update(plan["kept"])
+                if dry:
+                    report["guarded"] += sorted(plan["guard"])
+                    report["written"] += sorted(plan["values"])
+                    report["cleared"] += sorted(plan["clear"])
+                    continue
+                # The guard is written before the value, so the value is never here unguarded; if the guard cannot
+                # be written, no value is.
+                for key, (rule, at) in plan["guard"].items():
+                    access.set_guard(key, policy, commands=rule.get("commands") or None,
+                                     destinations=rule.get("destinations") or None, replace=True, now=at)
+                for key, at in plan["clear"].items():
+                    access.clear_guard(key, policy, now=at)
+                if plan["guard"] or plan["clear"]:
+                    access.write_policy(policy, root)
+                if plan["values"]:
+                    _gs_write_sealed({key: value for key, (value, _at) in plan["values"].items()}, root)
+                    for key, (_value, at) in plan["values"].items():
+                        passbook_sync.touch_meta(store, [key], when=at)
+                peers = [{**row, "lastIssued": peer["issued"]} if row["did"] == peer["did"] else row for row in peers]
+                _gs_write_sealed({gs.PEERS_KEY: gs.write_peers(peers)}, root)
+                report["written"] += sorted(plan["values"])
+                report["guarded"] += sorted(plan["guard"])
+                report["cleared"] += sorted(plan["clear"])
+                if plan["values"] or plan["guard"] or plan["clear"]:
+                    _record("write", sorted({*plan["values"], *plan["guard"], *plan["clear"]}), app="passbook-guardsync",
+                            granted=True, reason=f"from paired {peer['fingerprint']}", root=root)
+            return report
+    except gs.GuardSyncError as error:
+        return {"ok": False, "error": str(error)}
+    except Exception as error:  # noqa: BLE001 — surface, never crash the daemon
+        return {"ok": False, "error": f"guard sync failed: {type(error).__name__}"}
+    return {"ok": False, "error": f"unknown guard-sync step {step!r}"}
+
+
+def _gs_read_outbox(root: Path | None) -> dict[str, dict[str, str]]:
+    import passbook_guardsync as gs
+
+    try:
+        data = json.loads((store_root(root) / gs.OUTBOX_FILENAME).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = {}
+    return {"for": dict(data.get("for") or {}), "digests": dict(data.get("digests") or {})} if isinstance(data, dict) \
+        else {"for": {}, "digests": {}}
+
+
+def _gs_write_outbox(root: Path | None, outbox: Mapping[str, str], digests: Mapping[str, str] | None = None) -> None:
+    import passbook_guardsync as gs
+
+    path = store_root(root) / gs.OUTBOX_FILENAME
+    text = json.dumps({"v": gs.SPEC, "at": time.time(), "for": dict(outbox), "digests": dict(digests or {})},
+                      separators=(",", ":"))
+    handle = os.open(str(path) + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(handle, "w", encoding="utf-8") as stream:
+        stream.write(text)
+    os.replace(str(path) + ".tmp", path)
+
+
 def _handle(payload: Mapping[str, Any], root: Path | None = None,
             caller: Mapping[str, Any] | None = None) -> dict[str, Any]:
     operation = str(payload.get("op") or "").strip().lower()
@@ -1878,6 +2132,8 @@ def _handle(payload: Mapping[str, Any], root: Path | None = None,
         return {"ok": True, "default": policy["default"], "apps": sorted(policy["apps"]),
                 "keys": passbook.key_names(selected), "workspace": selected["HIVE_WORKSPACE"],
                 "sessions": access.sessions(root=root), "pending": pending()}
+    if operation == "guardsync":
+        return _guardsync(payload, root, caller)
     if operation == "pending":
         return {"ok": True, "pending": pending()}
     if operation == "resolve":

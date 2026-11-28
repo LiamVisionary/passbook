@@ -196,3 +196,23 @@ def test_a_key_guarded_there_is_said_as_guarded_not_as_waiting_on_a_sign_in():
     # An older collector does not say which are guarded: every one stays held, as before.
     old = sync.summarize(["SHARED"], [("m2", _payload(serves=["SHARED"], sealed=["GUARDED"]))])["devices"][0]
     assert old["heldBack"] == ["GUARDED"] and old["guardedThere"] == []
+
+
+def test_a_guarded_key_never_leaves_by_sync(tmp_path, monkeypatch):
+    """2026-11-28: a key guarded `--to` a host, and any guarded key on `passbook add`, went to every paired machine in
+    plaintext and landed there unguarded. A guard keeps its key on its machine."""
+    import passbook_access as access
+    monkeypatch.setenv("HIVE_HOME", str(tmp_path / "hive"))
+    passbook.ensure(app="test")
+    policy = access.read_policy()
+    access.set_guard("TO_ONLY", policy, destinations=["api.example.com"])
+    access.set_guard("INTO", policy, commands=["wrangler *"])
+    access.write_policy(policy)
+    policy = access.read_policy()
+    allowed, withheld = sync.sendable({"TO_ONLY": "v", "INTO": "v", "PLAIN": "v"}, policy=policy)
+    assert sorted(allowed) == ["PLAIN"]
+    assert sorted(withheld) == ["INTO", "TO_ONLY"]
+    assert sync.may_leave_machine("TO_ONLY", policy)["why"].startswith("guarded")
+    # Cleared, it travels again.
+    access.clear_guard("INTO", policy)
+    assert sync.may_leave_machine("INTO", policy)["allowed"] is True

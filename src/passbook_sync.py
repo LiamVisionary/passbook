@@ -357,6 +357,11 @@ def may_leave_machine(key: str, policy: Mapping[str, Any] | None = None) -> dict
         return {"allowed": True, "why": "no policy installed; historic behaviour"}
     if policy is None:
         policy = passbook_access.read_policy()
+    # A guarded key says which commands may receive it and which hosts it may reach; another machine is neither. Sent,
+    # it landed there unguarded, in plaintext (found 2026-11-28 for `--to` guards and for every guard on `passbook add`;
+    # Liam: "Yes, close it now"). It stays here until it can travel sealed, with its guard, to a paired machine.
+    if key in passbook_access.read_guards(policy):
+        return {"allowed": False, "why": "guarded here; a guard keeps it on this machine"}
     rule = passbook_access.scope_for(key, policy)
     scope = rule.get("scope", passbook_access.DEFAULT_SCOPE)
     if scope == "tailnet":

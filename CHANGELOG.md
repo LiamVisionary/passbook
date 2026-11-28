@@ -4,6 +4,20 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+### A guarded key never leaves its machine by sync
+
+Liam, 2026-11-28: "Yes, close it now". A key guarded only `--to` a host was let into the collector's grant, and
+`sendable` (what `passbook add` and `passbook sync` send) checked no guard at all. So a guarded key went to every
+paired machine in plaintext and landed there unguarded.
+
+- **`may_leave_machine` refuses a guarded key** ("guarded here; a guard keeps it on this machine"). That covers
+  `passbook sync` pushes, `passbook add`'s replication, and what the Devices summary expects on other machines.
+  Clearing the guard lets it travel again.
+- Keys already copied to other machines stay there. A rotation of a guarded key no longer reaches them, until a guarded
+  key can travel sealed to a paired machine with its guard (the design is with Liam).
+- Verification: the whole suite passes (1,762, 3 skipped). The new test covers a `--to` guard and an `--into` guard
+  kept, a plain key sent, and a cleared guard travelling again.
+
 ### A guard change reaches the other machines, and a guarded key is said as guarded
 
 Liam, 2026-11-28: "why are my macs passbooks not sync … i designed passbook to keep keys in sync". The M2 Max held
@@ -19,10 +33,7 @@ collector there was restarted by hand.
 - **`passbook check` for a key not on this machine** says that another machine may hold it, and where to see which.
 - Verification: the whole suite passes (1,761, 3 skipped), with two new tests: a guard change keeps its time and on
   disk, and a guarded key is reported apart and is not missing.
-- Found, not changed here (2026-11-28, in code): a key guarded only `--to` a host is allowed into a collector's grant
-  (`command_allowed` reads only `--into` commands), and `sendable` (what `passbook add` replicates) checks no guard.
-  Both send a guarded key to every paired machine in plaintext, where it lands unguarded. HivemindOS's collector also
-  serves guarded keys that are stored as plaintext on its machine.
+- The plaintext leak found here the same day is closed in the entry above.
 
 ## [1.10.31] — 2026-11-27
 

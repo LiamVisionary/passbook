@@ -4,6 +4,41 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [1.10.35] — 2026-11-28
+
+### Pair your devices from the Devices page, with one press and four matching words
+
+Liam, 2026-11-28: "i really hope the UI has a very simple, easy, intutitive way to do this since most users wont want
+to use command line". Pairing two devices took a code and a fingerprint typed across, in a terminal, both ways. Now:
+
+- **Pair on the device's row.** Each device's PassBook keeps a public card: its pairing code and fingerprint, which
+  devices it is paired with, and whom it asks to pair back. The collector serves it as `guardSync`, and the Devices
+  page reads it with the sync check. A device you are not paired with has a **Pair** button.
+- **Four matching words, checked before anything is paired.** Each device shows four words on the other's row,
+  made from both fingerprints (`pair_words`), before either side pairs. Pair asks you to open PassBook on the other
+  device and go ahead only if this device's row there shows the same words. A card swapped on the other device's
+  collector cannot show the same words on both screens, so it is caught before the password is typed and before any
+  guarded key is sealed to it.
+- **The other device is asked.** After you pair, the other device's Devices page (and Attention) shows "*this device*
+  asks to pair with this device" with those words, and one **Confirm**. Its guarded keys are sealed for the new pair
+  at once (Sync now), not at the next ten-minute pass.
+- **Confirmed with this vault's password.** A program running as you can press a button but does not know the
+  password, so it cannot pair a device of its own. The desktop window's Touch ID opens the device factor, which any
+  such program can open too, so it is not offered for this. A passkey is accepted (`pair add --passkey`), where its
+  ceremony can run.
+- **Paired** rows say so, with **Unpair**. A device whose PassBook is older than this says it needs updating there.
+- `passbook sync --status --json` carries `pairing` (this device's fingerprint) and a `pairing` object on each device
+  row. `passbook pair add`/`remove` take `--json`; a failure's reason goes to stderr, where the window reads it.
+
+### Fixed: a guard set before guards were dated now reaches a paired device
+
+Every guard on the NYC Mac predated guard dates, so each envelope said the guard was set at time 0. The M2 then kept
+all 19 keys as "unguarded here since" and went on serving them in plaintext. Where a device never decided anything
+about a key (no guard, no dated change), an undated guard is now taken, toward guarded. A cleared guard there stays
+cleared, and two different undated rules keep each device's own. `RULES` now goes into each envelope's digest, so
+this release issues every envelope afresh. A device that took an envelope under older rules reads it once more
+under these, whichever of the two devices updates first.
+
 ## [1.10.34] — 2026-11-28
 
 ### Guarded keys travel between your paired machines, sealed to each and still guarded

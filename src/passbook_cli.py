@@ -6039,6 +6039,7 @@ def _sync_status(args: argparse.Namespace) -> int:
     policy = _access().read_policy() if _access() is not None else None
     said = passbook_sync.summarize(passbook.key_names(), payloads, unreachable=unreachable, policy=policy,
                                    exchanges=passbook_sync.read_exchanges())
+    said["pairing"] = _pairing_rows(said, payloads)
     said["checkedAt"] = time.time()
     said["owed"] = {key: sorted((entry or {}).get("hosts") or []) if isinstance(entry, dict) else []
                     for key, entry in passbook_sync.read_pending().items()}
@@ -7759,7 +7760,10 @@ def cmd_pair(args: argparse.Namespace) -> int:
     if action == "add":
         if not args.code or not args.fingerprint:
             return _fail("Pair with what?", "passbook pair add CODE --fingerprint XXXX-XXXX-XXXX-XXXX  (from `passbook pair code` there)")
-        if args.recovery:
+        if args.passkey:
+            # The window's Touch ID: the passkey's PRF output arrives on stdin, never on the command line.
+            factor = {"credential_id": args.passkey, "prf_secret": sys.stdin.readline().strip()}
+        elif args.recovery:
             secret = getpass.getpass("This vault's recovery code: ")
             factor = {"recovery": secret}
         elif args.password_stdin:
@@ -7769,8 +7773,13 @@ def cmd_pair(args: argparse.Namespace) -> int:
         answer = ask({"step": "pair", "code": args.code, "fingerprint": args.fingerprint, **factor})
         factor.clear()
         if not answer.get("ok"):
+            # On stderr, --json or not: the window reads a failure's reason there (run_json_with_passphrase).
             return _fail(str(answer.get("error") or "Not paired."))
         sending = answer.get("sending") or []
+        if args.json:
+            print(json.dumps({"ok": True, "fingerprint": answer["fingerprint"], "name": answer.get("name") or "",
+                              "sending": sending}))
+            return 0
         print(f"Paired with {answer.get('name') or 'that machine'} ({answer['fingerprint']}).")
         print(f"   {len(sending)} guarded key(s) here go to it sealed, guarded there as here:")
         for name in sending:
@@ -7795,9 +7804,48 @@ def cmd_pair(args: argparse.Namespace) -> int:
         answer = ask({"step": "unpair", "fingerprint": args.code or args.fingerprint})
         if not answer.get("ok"):
             return _fail(str(answer.get("error") or "Not removed."))
+        if args.json:
+            print(json.dumps({"ok": True}))
+            return 0
         print("Unpaired. Nothing more is sealed to it; what it already received stays there, so rotate a key that mattered.")
         return 0
     return _fail(f"Unknown: passbook pair {action}", "passbook pair code | add | list | remove")
+
+
+def _pairing_rows(said: dict, payloads: list) -> dict:
+    """For the Devices page: this machine's fingerprint, and on each device row whether the two are paired, which
+    four words both screens show for the pair (passbook_guardsync.pair_words), and whether it asks this one to pair
+    back. Public material only. A machine whose PassBook makes no card yet (older, or its vault shut) has no
+    `pairing` on its row, and the page says it needs updating there."""
+    import passbook_broker
+    import passbook_guardsync as gs
+
+    try:
+        mine = passbook_broker._ask({"op": "guardsync", "step": "peers"}, timeout=10) or {}
+        if mine.get("ok") and not mine.get("fingerprint"):
+            # No card here yet: make one, so the other machine's window can offer to pair with this one.
+            made = passbook_broker._ask({"op": "guardsync", "step": "code"}, timeout=10) or {}
+            if made.get("ok"):
+                mine = {**mine, "fingerprint": made.get("fingerprint")}
+    except Exception:  # noqa: BLE001 — status never fails on this
+        mine = {}
+    fingerprint = str(mine.get("fingerprint") or "")
+    paired_here = {str(peer.get("fingerprint")) for peer in mine.get("peers") or []}
+    cards = {host: gs.read_card(got.get("guardSync")) for host, got in payloads if isinstance(got, dict)}
+    for row in said.get("devices") or []:
+        card = cards.get(row.get("host"))
+        if not card:
+            continue
+        row["pairing"] = {
+            "fingerprint": card["fingerprint"], "name": card["name"], "code": card["code"],
+            "words": gs.pair_words(fingerprint, card["fingerprint"]) if fingerprint else [],
+            "pairedHere": card["fingerprint"] in paired_here,
+            "pairedThere": bool(fingerprint) and fingerprint in card["paired"],
+            "asksMe": bool(fingerprint) and fingerprint in card["asks"],
+            "self": card["fingerprint"] == fingerprint,
+        }
+    return {"fingerprint": fingerprint, "ready": bool(mine.get("ok")) and bool(fingerprint),
+            **({} if mine.get("ok") else {"note": str(mine.get("error") or "PassBook is not running here.")})}
 
 
 def _guardsync_pass(payloads: list, *, apply: bool) -> dict:
@@ -10232,6 +10280,7 @@ def build_parser() -> argparse.ArgumentParser:
     pair_cmd.add_argument("--name", default="", help="what this machine is called in the other's list")
     pair_cmd.add_argument("--recovery", action="store_true", help="use this vault's recovery code instead of its password")
     pair_cmd.add_argument("--password-stdin", action="store_true", help=argparse.SUPPRESS)
+    pair_cmd.add_argument("--passkey", default="", help=argparse.SUPPRESS)  # credential id; its PRF output on stdin
     pair_cmd.add_argument("--json", action="store_true")
     pair_cmd.set_defaults(func=cmd_pair)
 

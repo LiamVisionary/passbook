@@ -1943,9 +1943,10 @@ def _guardsync(payload: Mapping[str, Any], root: Path | None,
     step = str(payload.get("step") or "")
     try:
         if step == "code":
-            device, _peers, why = _gs_state(root, create=True)
+            device, peers, why = _gs_state(root, create=True)
             if device is None:
                 return {"ok": False, "error": why}
+            _gs_publish(root, device, peers, name=str(payload.get("name") or ""))
             return {"ok": True, "code": gs.pairing_code(device, str(payload.get("name") or "")),
                     "fingerprint": device["fingerprint"]}
 
@@ -1966,12 +1967,21 @@ def _guardsync(payload: Mapping[str, Any], root: Path | None,
                     passbook_vault.unlock_with_password(profile, str(payload["password"]), root=vault_root)
                 elif payload.get("recovery"):
                     passbook_vault.unlock_with_recovery(profile, str(payload["recovery"]), root=vault_root)
+                elif payload.get("prf_secret") and payload.get("credential_id"):
+                    # A passkey (Touch ID) is the owner too: a process running as them cannot make one evaluate.
+                    raw = str(payload["prf_secret"])
+                    passbook_vault.unlock_with_passkey(profile, credential_id=str(payload["credential_id"]),
+                                                       prf_secret=base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)),
+                                                       root=vault_root)
                 else:
-                    return {"ok": False, "error": "Pairing needs this vault's password or recovery code."}
+                    return {"ok": False, "error": "Pairing needs this vault's password, a passkey, or its recovery code."}
             except passbook_vault.VaultError as error:
                 _record("link", ["*"], app="passbook-guardsync", granted=False, reason=f"refused: {error}", root=root)
                 return {"ok": False, "error": f"Not paired: {error}"}
-            _gs_write_sealed({gs.PEERS_KEY: gs.write_peers(gs.with_peer(peers, code, time.time()))}, root)
+            peers = gs.with_peer(peers, code, time.time())
+            _gs_write_sealed({gs.PEERS_KEY: gs.write_peers(peers)}, root)
+            # The other machine is asked to pair back: its window shows the request with the same words.
+            _gs_publish(root, device, peers, ask=code["fingerprint"])
             guards, _changes, travels = _gs_guarded_here(root)
             sending = sorted(key for key in guards if travels.get(key))
             _record("link", sending or ["*"], app="passbook-guardsync", granted=True,
@@ -1994,11 +2004,15 @@ def _guardsync(payload: Mapping[str, Any], root: Path | None,
                 return {"ok": False, "error": "No paired machine has that fingerprint."}
             _gs_write_sealed({gs.PEERS_KEY: gs.write_peers(kept)}, root)
             _gs_write_outbox(root, {})  # the next seal writes envelopes for the machines still paired
+            _gs_publish(root, device, kept)
             _record("unlink", ["*"], app="passbook-guardsync", granted=True, reason=f"unpaired {target}", root=root)
             return {"ok": True, "left": len(kept)}
 
         if step == "seal":
-            device, peers, why = _gs_state(root)
+            # Made here if missing, so every machine with PassBook open has a card another's window can pair with.
+            device, peers, why = _gs_state(root, create=True)
+            if device is not None:
+                _gs_publish(root, device, peers)  # kept current every pass: its asks age out, its paired list stays true
             if device is None or not peers:
                 return {"ok": True, "sealedFor": 0, **({"note": why} if why else {})}
             guards, changes, travels = _gs_guarded_here(root)
@@ -2065,7 +2079,8 @@ def _guardsync(payload: Mapping[str, Any], root: Path | None,
                     _gs_write_sealed({key: value for key, (value, _at) in plan["values"].items()}, root)
                     for key, (_value, at) in plan["values"].items():
                         passbook_sync.touch_meta(store, [key], when=at)
-                peers = [{**row, "lastIssued": peer["issued"]} if row["did"] == peer["did"] else row for row in peers]
+                peers = [{**row, "lastIssued": peer["issued"], "lastRules": gs.RULES} if row["did"] == peer["did"] else row
+                         for row in peers]
                 _gs_write_sealed({gs.PEERS_KEY: gs.write_peers(peers)}, root)
                 report["written"] += sorted(plan["values"])
                 report["guarded"] += sorted(plan["guard"])
@@ -2079,6 +2094,32 @@ def _guardsync(payload: Mapping[str, Any], root: Path | None,
     except Exception as error:  # noqa: BLE001 — surface, never crash the daemon
         return {"ok": False, "error": f"guard sync failed: {type(error).__name__}"}
     return {"ok": False, "error": f"unknown guard-sync step {step!r}"}
+
+
+def _gs_publish(root: Path | None, device: Mapping[str, Any], peers: list[dict[str, Any]], *,
+                name: str = "", ask: str = "") -> None:
+    """This machine's public card (passbook_guardsync.public_card), for its collector to serve as `guardSync`: kept
+    current on every step that changes it, and `ask` adds a request that the machine with that fingerprint pair back."""
+    import socket
+    import passbook_guardsync as gs
+
+    path = store_root(root) / gs.PUBLIC_FILENAME
+    try:
+        before = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        before = {}
+    now = time.time()
+    asks = {str(fp): float(at) for fp, at in (before.get("asks") or {}).items() if isinstance(at, (int, float))}
+    paired = {peer["fingerprint"] for peer in peers}
+    if ask:
+        asks[ask] = now
+    asks = {fp: at for fp, at in asks.items() if fp in paired}
+    chosen = (name or str(before.get("name") or "") or socket.gethostname().split(".")[0])[:60]
+    text = json.dumps(gs.public_card(device, chosen, peers, asks, now=now), separators=(",", ":"))
+    handle = os.open(str(path) + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(handle, "w", encoding="utf-8") as stream:
+        stream.write(text)
+    os.replace(str(path) + ".tmp", path)
 
 
 def _gs_read_outbox(root: Path | None) -> dict[str, dict[str, str]]:

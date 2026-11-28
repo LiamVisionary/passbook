@@ -374,6 +374,13 @@
     padding: 9px 14px 10px; border-top: 1px solid var(--line); }
   .bare.refused { color: var(--warn); }
   .synclist { margin-top: 8px; }
+  /* Pairing: the four words both devices show for the pair, and the request or confirm box around them. */
+  .pairwords { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 2px; }
+  .pairwords span { font-weight: 650; font-size: 13.5px; letter-spacing: .01em; padding: 3px 10px; border-radius: 99px;
+    color: var(--accent); background: var(--accent-soft); }
+  .pairline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 7px; }
+  .pairask { margin-top: 9px; padding: 10px 12px; border-radius: var(--radius); border: 1px solid var(--accent-soft); }
+  .pairask .alform input { flex: 1 1 180px; min-width: 0; }
   .synclist .dlabel { font-size: 10.5px; color: var(--ink3); text-transform: uppercase; letter-spacing: .02em; min-height: 0; display: block; margin-bottom: 4px; }
   .rotate { border: 1px solid var(--line); border-radius: 10px; padding: 4px 12px; background: var(--bg2); }
   .rotstep { display: flex; align-items: flex-start; gap: 10px; padding: 10px 0; flex-wrap: wrap; }
@@ -4097,6 +4104,108 @@ Use the copy button to put it on the clipboard."
   /** Seconds since the epoch as "5m ago", or what to say when it never happened. */
   const sinceEpoch = (when, never) => (when ? ago(new Date(when * 1000).toISOString()) : never);
 
+  // ── pairing devices, for guarded keys ──────────────────────────────────
+  //
+  // A guarded key never travels as a plain key. Between two paired devices it goes sealed to the other device's
+  // own key and arrives guarded the same way (passbook_guardsync). Pairing was two commands on each device with a
+  // code and a fingerprint typed across; Liam, 2026-11-28: "most users wont want to use command line". So each
+  // device's card comes with the sync check, Pair is one press, and both screens show the same four words, which
+  // is how a person knows the other end is theirs. The other device then shows "asks to pair" with those words.
+  //
+  // Confirmed with this vault's password: a program running as you can press a button, but it does not know the
+  // password, so it cannot pair a device of its own and have guarded keys sealed to it. The desktop window's Touch
+  // ID opens the device factor, which any such program can open too, so it is not offered here; a passkey is,
+  // where its ceremony can run (a browser).
+  let pairView = { host: "", busy: false, error: "" };
+
+  const pairWords = (p) => `<div class="pairwords" aria-label="Matching words">${(p.words || []).map((w) => `<span>${esc(w)}</span>`).join("")}</div>`;
+
+  function rootPasskey() {
+    const row = workspaceRows().find((w) => w.id === "main") || workspaceRows()[0];
+    return row?.has_passkey && passkeysPossible() ? row : null;
+  }
+
+  /** One device row's pairing: paired, waiting for the other side, asked by it, or a Pair button. */
+  function pairBlock(r) {
+    const p = r.pairing, me = syncView.data?.pairing;
+    if (!r.reachable || !me?.ready || p?.self) return "";
+    if (!p) return `<div class="note flat">Its PassBook cannot pair yet. Update PassBook on ${esc(deviceName(r.host))} to send guarded keys between the two.</div>`;
+    const there = esc(deviceName(r.host)), host = esc(r.host);
+    if (p.pairedHere && p.pairedThere) return `<div class="pairline"><span class="tag on">Paired</span>
+      <span class="note flat">Guarded keys go to it sealed, and stay guarded there.</span>
+      <button class="act" data-pair-remove="${host}" ${pairView.busy ? "disabled" : ""}>Unpair</button></div>`;
+    if (p.pairedHere) return `<div class="pairask"><strong>Waiting for ${there} to confirm</strong>
+      <div class="note flat">Open PassBook on ${there} and go to Devices. It asks to pair and shows these same words:</div>${pairWords(p)}</div>`;
+    if (pairView.host !== r.host) return p.asksMe
+      ? `<div class="pairask"><strong>${there} asks to pair with this device</strong>
+          <div class="note flat">Paired, guarded keys travel between the two sealed, and stay guarded on both. ${there} shows these words:</div>
+          ${pairWords(p)}
+          <div class="pairline"><button class="act primary" data-pair-open="${host}">Confirm</button></div></div>`
+      : `<div class="pairask"><div class="pairline" style="margin-top:0"><span class="note flat">Not paired. Guarded keys stay on this device until it is paired with ${there}.</span>
+          <button class="act" data-pair-open="${host}">Pair</button></div>
+          <div class="note flat">The two of you show these words for each other:</div>${pairWords(p)}</div>`;
+    const passkey = rootPasskey();
+    return `<div class="pairask"><strong>Pair with ${there}</strong>
+      <div class="note flat">First open PassBook on ${there} and go to Devices. This device's row there shows four words.
+        Pair only if they are these. If they are different, stop: the device asking is not yours.</div>
+      ${pairWords(p)}
+      <div class="alform">
+        ${passkey ? `<button class="act primary" data-pair-passkey="${host}" ${pairView.busy ? "disabled" : ""}>Confirm with Touch ID</button><span class="sub">or</span>` : ""}
+        <input id="pair-pw" data-keep type="password" autocomplete="current-password" placeholder="This vault's password" aria-label="This vault's password" />
+        <button class="act ${passkey ? "" : "primary"}" data-pair-go="${host}" ${pairView.busy ? "disabled" : ""}>${pairView.busy ? "Pairing\u2026" : "Pair"}</button>
+        <button class="act" data-pair-cancel="1" ${pairView.busy ? "disabled" : ""}>Cancel</button>
+      </div>
+      <div class="note flat">Your password proves it is you: a program on this device cannot pair one of its own.</div>
+      ${pairView.error ? `<div class="note flat err" role="alert">${esc(pairView.error)}</div>` : ""}
+    </div>`;
+  }
+
+  /** Pair with the device on row `host`, by password or passkey; then send its guarded keys at once. */
+  async function pairWith(host, how) {
+    const r = (syncView.data?.devices || []).find((row) => row.host === host), p = r?.pairing;
+    if (!p) return;
+    // The password is taken out of its box before anything repaints: a repaint carries a typed field over
+    // (heldTyping), so a box emptied afterwards was a detached copy and the password stayed on screen.
+    const box = main.querySelector("#pair-pw");
+    const password = box?.value || "";
+    if (box) box.value = "";
+    pairView = { host, busy: true, error: "" }; paint();
+    const started = Date.now();
+    try {
+      if (how === "passkey") {
+        const row = rootPasskey();
+        const assertion = await navigator.credentials.get({ publicKey: {
+          challenge: crypto.getRandomValues(new Uint8Array(32)), rpId: location.hostname, userVerification: "required",
+          timeout: 60000, extensions: { prf: { eval: { first: await prfSalt(row.id) } } } } });
+        const secret = assertion?.getClientExtensionResults?.()?.prf?.results?.first;
+        if (!secret) throw new Error("That passkey would not return the secret this vault is wrapped under.");
+        await invoke("pair_add_passkey", { code: p.code, fingerprint: p.fingerprint, credentialId: assertion.id, prfSecret: b64url(secret) });
+      } else {
+        if (!password) throw new Error("Type this vault's password to pair.");
+        await invoke("pair_add", { code: p.code, fingerprint: p.fingerprint, password });
+      }
+      pairView = { host: "", busy: false, error: "" };
+      syncView.said = `Paired with ${deviceName(host)}.${p.pairedThere ? "" : " Confirm on it too."}`;
+      // Seal its guarded keys for it now rather than at the next ten-minute pass.
+      try { syncView.data = await invoke("sync_now"); } catch { await loadSync(true); }
+    } catch (e) {
+      pairView = { host, busy: false, error: how === "passkey" ? passkeyReason(e, started, "Confirming with Touch ID") : balanceError(e) };
+    }
+    paint();
+  }
+
+  async function unpair(host) {
+    const p = (syncView.data?.devices || []).find((row) => row.host === host)?.pairing;
+    if (!p) return;
+    pairView = { host: "", busy: true, error: "" }; paint();
+    try {
+      await invoke("pair_remove", { fingerprint: p.fingerprint });
+      syncView.said = `Unpaired from ${deviceName(host)}. Guarded keys it already has stay there; rotate any that matter.`;
+    } catch (e) { syncView.error = balanceError(e); }
+    pairView = { host: "", busy: false, error: "" };
+    await loadSync(true); paint();
+  }
+
   /** The Devices page's first panel: is every key everywhere, and if not, where is it stuck. */
   function syncPanel() {
     const v = syncView, d = v.data;
@@ -4126,6 +4235,7 @@ Use the copy button to put it on the clipboard."
         <div class="grow"><strong>${esc(deviceName(r.host))}</strong>
           <div class="note flat">${esc(facts.join(" \u00b7 "))}</div>
           ${r.pulledAt || r.sentAt ? `<div class="note flat">${esc([r.pulledAt ? `Last received from it ${sinceEpoch(r.pulledAt)}` : "", r.sentAt ? `last sent to it ${sinceEpoch(r.sentAt)}` : ""].filter(Boolean).join(" \u00b7 ").replace(/^l/, "L"))}</div>` : ""}
+          ${pairBlock(r)}
           ${open ? `${r.missingThere.length ? `<div class="synclist"><span class="dlabel">Not on it yet</span><div class="chips inline">${names(r.missingThere)}</div></div>` : ""}
             ${r.missingHere.length ? `<div class="synclist"><span class="dlabel">Not on this device yet</span><div class="chips inline">${names(r.missingHere)}</div></div>` : ""}
             ${r.heldBack.length ? `<div class="synclist"><span class="dlabel">Held there, not handed over</span><div class="chips inline">${names(r.heldBack)}</div>
@@ -4199,6 +4309,10 @@ Use the copy button to put it on the clipboard."
       const down = (d.devices || []).filter((r) => !r.reachable);
       if (down.length) items.push({ tone: "plain", glyph: "monitor", title: `${down.map((r) => deviceName(r.host)).join(", ")} ${down.length === 1 ? "is" : "are"} not answering`,
         detail: "Keys cannot move to or from it until it does.", go: ["machines", "See devices"] });
+      for (const r of (d.devices || []).filter((row) => row.pairing?.asksMe && !row.pairing.pairedHere)) {
+        items.push({ tone: "warn", glyph: "monitor", title: `${deviceName(r.host)} asks to pair with this device`,
+          detail: "Paired, guarded keys travel between the two sealed, and stay guarded on both.", go: ["machines", "Review"] });
+      }
       const apart = Object.keys(d.notEverywhere || {}).length;
       if (apart) items.push({ tone: "plain", glyph: "monitor", title: `${apart} key${apart === 1 ? " is" : "s are"} not on every device`,
         detail: "Devices exchange keys by themselves every ten minutes; this is what has not arrived.", go: ["machines", "See devices"] });
@@ -7122,6 +7236,20 @@ Use the copy button to put it on the clipboard."
     main.querySelectorAll("[data-key-sort]").forEach((b) => b.onchange = () => { keySort = b.value; resetRows(); paint(); });
     main.querySelectorAll("[data-sync-check]").forEach((b) => b.onclick = () => loadSync());
     main.querySelectorAll("[data-sync-now]").forEach((b) => b.onclick = () => syncNow());
+    main.querySelectorAll("[data-pair-open]").forEach((b) => b.onclick = () => {
+      pairView = { host: b.dataset.pairOpen, busy: false, error: "" }; paint();
+      main.querySelector("#pair-pw")?.focus();
+    });
+    main.querySelectorAll("[data-pair-cancel]").forEach((b) => b.onclick = () => {
+      const box = main.querySelector("#pair-pw"); if (box) box.value = "";
+      pairView = { host: "", busy: false, error: "" }; paint();
+    });
+    main.querySelectorAll("[data-pair-go]").forEach((b) => b.onclick = () => pairWith(b.dataset.pairGo, "password"));
+    main.querySelectorAll("[data-pair-passkey]").forEach((b) => b.onclick = () => pairWith(b.dataset.pairPasskey, "passkey"));
+    main.querySelectorAll("#pair-pw").forEach((el) => el.onkeydown = (event) => {
+      if (event.key === "Enter" && pairView.host && !pairView.busy) pairWith(pairView.host, "password");
+    });
+    main.querySelectorAll("[data-pair-remove]").forEach((b) => b.onclick = () => unpair(b.dataset.pairRemove));
     main.querySelectorAll("[data-sync-open]").forEach((b) => b.onclick = () => {
       syncView.open = syncView.open === b.dataset.syncOpen ? "" : b.dataset.syncOpen; paint();
     });

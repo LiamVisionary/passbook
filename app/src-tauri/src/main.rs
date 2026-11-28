@@ -2407,6 +2407,42 @@ fn vault_signin_passkey(
     vault_state()
 }
 
+// ── pairing machines, for guarded keys ─────────────────────────────────────
+
+/// Pair with another of the owner's machines, confirmed with this vault's password
+/// (`passbook pair add CODE --fingerprint FP --password-stdin --json`). The code and fingerprint come from that
+/// machine's card, which `sync_status` read; the four words both screens show are how a person knows it is theirs.
+#[tauri::command(async)]
+fn pair_add(code: String, fingerprint: String, password: String) -> Result<Value, String> {
+    let password = Zeroizing::new(password);
+    if password.is_empty() {
+        return Err("Type this vault's password to pair.".into());
+    }
+    run_json_with_passphrase(
+        &["pair", "add", code.trim(), "--fingerprint", fingerprint.trim(), "--password-stdin", "--json"],
+        password.as_str(),
+    )
+}
+
+/// The same, confirmed with Touch ID: the passkey's PRF output goes to the CLI on stdin, as for sign-in.
+#[tauri::command(async)]
+fn pair_add_passkey(code: String, fingerprint: String, credential_id: String, prf_secret: String) -> Result<Value, String> {
+    let prf_secret = Zeroizing::new(prf_secret);
+    if credential_id.trim().is_empty() || prf_secret.trim().is_empty() {
+        return Err("That passkey returned nothing to confirm with.".into());
+    }
+    run_json_with_passphrase(
+        &["pair", "add", code.trim(), "--fingerprint", fingerprint.trim(), "--passkey", credential_id.trim(), "--json"],
+        prf_secret.trim(),
+    )
+}
+
+/// Stop sending guarded keys to a paired machine (`passbook pair remove FP`).
+#[tauri::command(async)]
+fn pair_remove(fingerprint: String) -> Result<Value, String> {
+    run_json(&["pair", "remove", fingerprint.trim(), "--json"])
+}
+
 /// Whether this device can verify its owner, and what to call it.
 ///
 /// Asked before anything is drawn, so the window never offers a button that
@@ -3563,7 +3599,7 @@ fn main() {
             github_state, github_connect_token, github_connect_gh, github_connect_device,
             github_disconnect, github_targets, github_environments, github_check, github_push,
             balances_state, balances_enable, balances_open, balances_icons, balances_full, balances_known, balances_monthly, console_signin, balances_alerts, appearance, set_appearance,
-            add_pasted, sync_status, sync_now, oauth_add, rotate_status, rotate_start, rotate_finish, rotate_verify,
+            add_pasted, sync_status, sync_now, pair_add, pair_add_passkey, pair_remove, oauth_add, rotate_status, rotate_start, rotate_finish, rotate_verify,
             account_set, account_lookup,
             update_state, update_install,
             link_choices, link_invite, link_complete, link_cancel, link_refresh,

@@ -47,6 +47,9 @@ OUTBOX_FILENAME = "passbook-guardsync-outbox.json"
 CODE_PREFIX = "passbook-guardsync:v1:"
 ENVELOPE_PREFIX = "passbook-guarded:v1:"
 SPEC = 1
+# How a received envelope is taken (plan_apply). Raise it when that changes: content_digest folds it in.
+# 2: an undated guard is taken where nothing was decided (2026-11-28).
+RULES = 2
 # How far ahead of this machine's clock a stamp may be before it is refused as from the future.
 SKEW_SECONDS = 300
 
@@ -146,19 +149,22 @@ def read_peers(text: str | None) -> list[dict[str, Any]]:
             continue
         out.append({"did": row["did"], "seal": row["seal"], "fingerprint": row["fingerprint"],
                     "name": str(row.get("name") or "")[:60], "pairedAt": float(row.get("pairedAt") or 0),
-                    "lastIssued": float(row.get("lastIssued") or 0)})
+                    "lastIssued": float(row.get("lastIssued") or 0),
+                    # The RULES the last envelope was taken under; 0 for one taken before this was kept (RULES 1).
+                    "lastRules": int(row.get("lastRules") or 0)})
     return out
 
 
 def write_peers(peers: Iterable[Mapping[str, Any]]) -> str:
-    rows = [{key: peer[key] for key in ("did", "seal", "fingerprint", "name", "pairedAt", "lastIssued")} for peer in peers]
+    rows = [{**{key: peer[key] for key in ("did", "seal", "fingerprint", "name", "pairedAt", "lastIssued")},
+             "lastRules": int(peer.get("lastRules") or 0)} for peer in peers]
     return json.dumps(sorted(rows, key=lambda row: row["fingerprint"]), separators=(",", ":"))
 
 
 def with_peer(peers: list[dict[str, Any]], code: Mapping[str, Any], now: float) -> list[dict[str, Any]]:
     kept = [peer for peer in peers if peer["fingerprint"] != code["fingerprint"]]
     return kept + [{"did": code["did"], "seal": link._b64(code["seal_public"]), "fingerprint": code["fingerprint"],
-                    "name": code.get("name", ""), "pairedAt": now, "lastIssued": 0.0}]
+                    "name": code.get("name", ""), "pairedAt": now, "lastIssued": 0.0, "lastRules": RULES}]
 
 
 # ── envelopes ──────────────────────────────────────────────────────────────
@@ -219,7 +225,10 @@ def open_bundle(text: str, device: Mapping[str, Any], peers: list[Mapping[str, A
     issued = float(header.get("iat") or 0)
     if issued > moment + SKEW_SECONDS:
         raise GuardSyncError("issued in the future")
-    if issued == float(peer.get("lastIssued") or 0):
+    # The same envelope again is "already taken", unless it was taken under older RULES: then it is read once more
+    # under these. A release that changes plan_apply may reach the receiving machine after the sender re-issued, and
+    # that envelope would otherwise never be read under the rule that was released for it.
+    if issued == float(peer.get("lastIssued") or 0) and int(peer.get("lastRules") or 0) >= RULES:
         raise AlreadyTaken("already taken")
     if issued < float(peer.get("lastIssued") or 0):
         raise GuardSyncError("older than the last one taken from that machine")
@@ -281,7 +290,11 @@ def plan_apply(body: Mapping[str, Any], *, local: Mapping[str, str], stamps: Map
             kept[key] = "guard stamped in the future"
             continue
         local_rule = _rule(guards.get(key))
-        if local_rule != rule and guard_at > float(guard_changes.get(key, 0)):
+        # A guard set before guards were dated arrives at 0. Where this machine never decided anything about the
+        # key (no guard, no dated change) it is taken anyway, toward guarded: 2026-11-28 every guard on the NYC Mac
+        # predated the dates, so the M2 kept all 19 as "unguarded here since" and served them in plaintext.
+        undecided_here = not local_rule and key not in guard_changes
+        if local_rule != rule and (guard_at > float(guard_changes.get(key, 0)) or undecided_here):
             guard[key] = (rule, guard_at)
         will_be_guarded = bool(local_rule) or key in guard
         if not isinstance(value, str) or not value or value.startswith(("hive-sealed:", ENVELOPE_PREFIX)):
@@ -319,7 +332,9 @@ def content_digest(device_secret: str, peer_fingerprint: str, items: Mapping[str
     import hashlib
     import hmac
 
-    text = link._canonical({"to": peer_fingerprint, "items": dict(items), "cleared": dict(cleared)})
+    # RULES is in it so a release that changes how envelopes are taken issues each one afresh: an unchanged envelope
+    # is "already taken" at the other end, and would never be read again under the new rules.
+    text = link._canonical({"to": peer_fingerprint, "items": dict(items), "cleared": dict(cleared), "rules": RULES})
     return hmac.new(hashlib.sha256(device_secret.encode("utf-8")).digest(), text.encode("utf-8"), "sha256").hexdigest()
 
 
@@ -342,3 +357,56 @@ def bundle_items(*, guards: Mapping[str, Any], guard_changes: Mapping[str, float
     cleared = {key: float(at) for key, at in guard_changes.items()
                if key not in guards and travels.get(key, True) and link_key(key)}
     return items, cleared
+
+
+# ── words two screens can compare ──────────────────────────────────────────
+#
+# Pairing in the window shows the same four words on both machines, made from both machines' fingerprints. A person
+# who sees the same words on both screens has checked what typing a fingerprint back checks (a swapped code cannot
+# show the same words on the other screen), without typing anything.
+
+WORDS = tuple("""acid acorn actor adapt agent alarm album alert alley amber anchor angle ankle apple apron arena arrow aspen atlas attic autumn award bacon badge bagel baker bamboo banjo barley basil basin beach beacon beard beetle bell bench berry bison blade blanket blaze bloom blossom board bonfire bottle boulder bounce bracket branch bread breeze brick bridge brook broom bubble bucket buffalo bundle butter button cabin cactus camel candle canoe canyon carbon carpet carrot castle cedar cellar chalk cherry chimney cider cinnamon circle citrus clover cobalt cocoa coffee comet compass copper coral cotton cougar crane crayon cricket crystal cupcake curtain dagger daisy dancer delta denim desert diamond dinner dolphin donkey dragon drum eagle easel echo eclipse elbow ember engine falcon fennel ferry fiddle finch flame flannel flute forest fossil fountain fox galaxy garden garlic gecko ginger glacier globe goblet granite grape gravel guitar hammer harbor harvest hazel helmet heron hickory honey hornet island ivory jacket jaguar jasmine jelly jigsaw juniper kayak kettle kitten koala ladder lagoon lantern laurel lemon lettuce lilac linen lizard lobster locket lotus magnet mango maple marble meadow melon meteor mint mirror mitten moose mosaic muffin mustard napkin nectar needle noodle nutmeg oasis ocean olive onion orange orchid otter oyster paddle palace panda paprika parrot peach pebble pelican pepper piano pickle pigeon pillow pine planet plum pocket pony poppy prism pumpkin puzzle quail quartz rabbit radish raven ribbon river robin rocket saddle salmon sapphire satchel scarf shell shovel silver sparrow spider spruce squash stone sugar summit sunset swan tablet tangerine teapot thistle thunder tiger timber""".split())
+
+
+def pair_words(fingerprint_a: str, fingerprint_b: str, count: int = 4) -> list[str]:
+    """The same `count` words on both machines: from both fingerprints, in an order neither machine chooses."""
+    import hashlib
+
+    clean = sorted("".join(str(fp).split()).upper().replace("-", "") for fp in (fingerprint_a, fingerprint_b))
+    digest = hashlib.sha256(("passbook-pair-words:v1:" + "|".join(clean)).encode("utf-8")).digest()
+    return [WORDS[digest[index]] for index in range(count)]
+
+
+# ── this machine's public card ─────────────────────────────────────────────
+#
+# What other machines may know about this one's guard sync, served by its collector as `guardSync`: its fingerprint, a
+# name, its pairing code (public keys only), which machines it is paired with, and which machine it has asked to pair
+# with it. Nothing here opens or seals anything.
+
+PUBLIC_FILENAME = "passbook-guardsync-public.json"
+ASK_SECONDS = 30 * 60
+
+
+def public_card(device: Mapping[str, Any], name: str, peers: list[Mapping[str, Any]],
+                asks: Mapping[str, float], *, now: float) -> dict[str, Any]:
+    return {"v": SPEC, "fingerprint": device["fingerprint"], "name": str(name)[:60],
+            "code": pairing_code(device, name), "paired": sorted(peer["fingerprint"] for peer in peers),
+            "asks": {fp: at for fp, at in asks.items() if now - float(at) < ASK_SECONDS}}
+
+
+def read_card(value: Any, *, now: float | None = None) -> dict[str, Any] | None:
+    """Another machine's card as its collector served it, checked: a code that names the same fingerprint, or nothing."""
+    moment = time.time() if now is None else now
+    if not isinstance(value, Mapping):
+        return None
+    try:
+        code = read_pairing_code(str(value.get("code") or ""))
+    except GuardSyncError:
+        return None
+    if code["fingerprint"] != value.get("fingerprint"):
+        return None
+    asks = value.get("asks") if isinstance(value.get("asks"), Mapping) else {}
+    return {"fingerprint": code["fingerprint"], "name": str(value.get("name") or code["name"] or "")[:60],
+            "code": str(value["code"]), "paired": [str(fp) for fp in (value.get("paired") or []) if isinstance(fp, str)][:64],
+            "asks": {str(fp): float(at) for fp, at in asks.items()
+                     if isinstance(at, (int, float)) and moment - float(at) < ASK_SECONDS}}

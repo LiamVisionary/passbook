@@ -58,6 +58,14 @@ def test_an_envelope_opens_only_on_its_machine_from_a_paired_one_and_once():
         gs.open_bundle(text, b, [], now=1001.0)
     with pytest.raises(gs.AlreadyTaken):
         gs.open_bundle(text, b, [_paired(a_code, last=1000.0)], now=1001.0)
+    # Taken under older RULES (1.10.34 kept no lastRules): read once more under these, so a fix to how envelopes are
+    # taken reaches a machine that took the re-issued envelope before it updated.
+    old_row = {key: value for key, value in _paired(a_code, last=1000.0).items() if key != "lastRules"}
+    as_written_then = gs.read_peers(json.dumps([old_row]))
+    assert as_written_then[0]["lastRules"] == 0
+    peer, _body = gs.open_bundle(text, b, as_written_then, now=1001.0)
+    assert peer["issued"] == 1000.0
+    assert gs.read_peers(gs.write_peers([{**as_written_then[0], "lastRules": gs.RULES}]))[0]["lastRules"] == gs.RULES
     with pytest.raises(gs.GuardSyncError, match="older"):
         gs.open_bundle(text, b, [_paired(a_code, last=1500.0)], now=1001.0)
     with pytest.raises(gs.GuardSyncError, match="future"):
@@ -107,6 +115,23 @@ def test_the_rules_plain_sync_keeps():
     # A guard-sync key of its own is never taken from a peer.
     own = _plan({"items": {gs.DEVICE_KEY: ITEM}})
     assert own["values"] == {} and own["guard"] == {}
+
+
+def test_a_guard_older_than_guard_dates_still_arrives_where_nothing_was_decided():
+    # 2026-11-28: every guard on the NYC Mac predated guard dates, so each arrived stamped 0 and the M2 kept all 19
+    # as "unguarded here since", serving them in plaintext. Where nothing was decided, an undated guard is taken.
+    undated = {**ITEM, "guardAt": 0.0}
+    plan = _plan({"items": {"K": undated}}, local={"K": "the-secret"}, stamps={"K": 900.0})
+    assert plan["guard"] == {"K": ({"commands": ["wrangler *"]}, 0.0)} and plan["values"] == {}
+    # The same, with a differing copy that is older here: guarded, and the value taken.
+    older = _plan({"items": {"K": undated}}, local={"K": "old"}, stamps={"K": 900.0})
+    assert "K" in older["guard"] and older["values"] == {"K": ("the-secret", 2000.0)}
+    # Cleared here (a dated change): it stays cleared, whatever an undated guard says.
+    cleared = _plan({"items": {"K": undated}}, guard_changes={"K": 100.0})
+    assert cleared["guard"] == {} and cleared["kept"]["K"] == "unguarded here since"
+    # Guarded differently here, neither dated: this machine's rule is kept, so two machines never swap rules.
+    differs = _plan({"items": {"K": undated}}, guards={"K": {"commands": ["other *"]}})
+    assert differs["guard"] == {}
 
 
 def test_what_is_sent_is_each_guarded_key_that_may_leave_and_each_dated_clearing():
@@ -276,3 +301,86 @@ def test_the_sync_pass_takes_only_what_is_sealed_for_this_machine_and_seals_on_a
     asked.clear()
     assert cli._guardsync_pass(payloads, apply=False)["paired"] == 1
     assert [item["step"] for item in asked] == ["peers", "receive"] and asked[1]["dry_run"] is True, "a dry run seals nothing"
+
+
+@broker_marker()
+def test_one_press_pairing_from_each_devices_card_with_the_same_words_on_both(two):
+    import base64
+
+    import passbook_cli
+    import passbook_vault as vault
+
+    at, ask = two
+    assert ask("a", step="code", name="studio")["ok"] and ask("b", step="code", name="laptop")["ok"]
+    card = {}
+    for name in ("a", "b"):
+        raw = json.loads((at(name) / gs.PUBLIC_FILENAME).read_text())
+        # Public material only: a code is public keys, and nothing else is in it.
+        assert set(raw) == {"v", "fingerprint", "name", "code", "paired", "asks"}
+        card[name] = gs.read_card(raw)
+        assert card[name] and card[name]["paired"] == [] and card[name]["asks"] == {}
+    # A card whose code names another machine is not a card.
+    forged = {**json.loads((at("a") / gs.PUBLIC_FILENAME).read_text()), "fingerprint": card["b"]["fingerprint"]}
+    assert gs.read_card(forged) is None
+
+    def rows(machine, other):
+        served = json.loads((at(other) / gs.PUBLIC_FILENAME).read_text())  # what its collector serves
+        at(machine)
+        said = {"devices": [{"host": f"host-{other}", "reachable": True}]}
+        mine = passbook_cli._pairing_rows(said, [(f"host-{other}", {"guardSync": served})])
+        return mine, said["devices"][0].get("pairing")
+
+    # A presses Pair on B's row, with B's card as the window read it, and is asked for nothing else but the password.
+    mine, row = rows("a", "b")
+    assert mine["ready"] and mine["fingerprint"] == card["a"]["fingerprint"]
+    assert row["fingerprint"] == card["b"]["fingerprint"] and not row["pairedHere"] and not row["asksMe"]
+    paired = ask("a", step="pair", code=row["code"], fingerprint=row["fingerprint"], password=PASSWORD)
+    assert paired["ok"], paired
+    # B's window now sees A asking, with the same four words A's window showed.
+    _mine, asked = rows("b", "a")
+    assert asked["asksMe"] and asked["pairedThere"] and not asked["pairedHere"]
+    assert asked["words"] == row["words"] == gs.pair_words(card["a"]["fingerprint"], card["b"]["fingerprint"])
+    _mine, waiting = rows("a", "b")
+    assert waiting["pairedHere"] and not waiting["pairedThere"]
+
+    # B confirms with a passkey (a browser's Touch ID): its PRF output opens this vault, a wrong one does not.
+    home_b = at("b")
+    profile = vault.active_profile_id(root=home_b)
+    dek = vault.unlock_with_password(profile, PASSWORD, root=home_b)
+    prf = bytes(range(32))
+    vault.add_passkey_factor(profile, dek=dek, credential_id="cred-1", prf_secret=prf, root=home_b)
+    b64 = lambda raw: base64.urlsafe_b64encode(raw).decode().rstrip("=")  # noqa: E731
+    refused = ask("b", step="pair", code=asked["code"], fingerprint=asked["fingerprint"],
+                  credential_id="cred-1", prf_secret=b64(bytes(32)))
+    assert not refused.get("ok")
+    confirmed = ask("b", step="pair", code=asked["code"], fingerprint=asked["fingerprint"],
+                    credential_id="cred-1", prf_secret=b64(prf))
+    assert confirmed["ok"], confirmed
+    _mine, both = rows("a", "b")
+    assert both["pairedHere"] and both["pairedThere"]
+    # Unpairing takes it off the card, and the ask with it.
+    assert ask("a", step="unpair", fingerprint=card["b"]["fingerprint"])["ok"]
+    after = gs.read_card(json.loads((at("a") / gs.PUBLIC_FILENAME).read_text()))
+    assert after["paired"] == [] and after["asks"] == {}
+
+
+@broker_marker()
+def test_the_window_pairs_through_the_cli_with_the_password_on_stdin_and_reads_json(two, monkeypatch, capsys):
+    import io
+
+    import passbook_cli
+
+    at, ask = two
+    b = ask("b", step="code", name="laptop")
+    at("a")
+    monkeypatch.setattr("sys.stdin", io.StringIO("not the password\n"))
+    assert passbook_cli.main(["pair", "add", b["code"], "--fingerprint", b["fingerprint"], "--password-stdin", "--json"]) == 1
+    # A failure's reason goes to stderr, --json or not: that is where the window reads it (run_json_with_passphrase).
+    failed = capsys.readouterr()
+    assert failed.out == "" and "Not paired" in failed.err
+    monkeypatch.setattr("sys.stdin", io.StringIO(PASSWORD + "\n"))
+    assert passbook_cli.main(["pair", "add", b["code"], "--fingerprint", b["fingerprint"], "--password-stdin", "--json"]) == 0
+    said = json.loads(capsys.readouterr().out)
+    assert said["ok"] and said["fingerprint"] == b["fingerprint"] and said["name"] == "laptop"
+    assert passbook_cli.main(["pair", "remove", b["fingerprint"], "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == {"ok": True}

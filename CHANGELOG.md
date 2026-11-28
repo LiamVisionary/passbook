@@ -4,6 +4,8 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [1.10.34] — 2026-11-28
+
 ### Guarded keys travel between your paired machines, sealed to each and still guarded
 
 Liam, 2026-11-28: "i designed passbook to keep keys in sync", then "Yes, build it". A guarded key may not leave its

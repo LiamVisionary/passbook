@@ -2791,7 +2791,7 @@ dependencies = [
 
 [[package]]
 name = "passbook-app"
-version = "1.10.31"
+version = "1.10.32"
 dependencies = [
  "fontdue",
  "getrandom 0.3.4",

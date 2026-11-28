@@ -4,6 +4,8 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
+## [1.10.32] — 2026-11-28
+
 ### A guarded key never leaves its machine by sync
 
 Liam, 2026-11-28: "Yes, close it now". A key guarded only `--to` a host was let into the collector's grant, and

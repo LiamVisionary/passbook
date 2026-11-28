@@ -4,7 +4,11 @@ All notable changes to PassBook are recorded here. Dates are ISO-8601.
 
 ## [Unreleased]
 
-## [1.10.32] — 2026-11-28
+## [1.10.33] — 2026-11-28
+
+1.10.32 was tagged and never published: its build failed two GitHub-push tests because the release commit's
+parents had written `src/passbook_cli.py` without its executable bit, so the CLI could not run itself again from a
+checkout. The bit is back; everything below ships here.
 
 ### A guarded key never leaves its machine by sync
 
